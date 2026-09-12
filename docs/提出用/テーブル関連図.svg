@@ -1,0 +1,521 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2134" height="1282" viewBox="0 0 2134 1282" font-family="'Yu Gothic UI','Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#8C98A4"/>
+    </marker>
+    <marker id="arwOwn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#4A5765"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="2134" height="1282" fill="#FFFFFF"/>
+  <text x="48" y="52" font-size="23" font-weight="700" fill="#1A2430">株式会社コニー 販売管理システム  テーブル関連図</text>
+  <text x="48" y="76" font-size="13" fill="#6B7885">全69テーブル / 主要なつながり74本</text>
+  <line x1="48" y1="92" x2="2086" y2="92" stroke="#DCE0DE" stroke-width="1"/>
+  <g fill="none">
+    <path d="M 286 223 L 296 223 L 296 223 L 348 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 285 L 303 285 L 303 223 L 348 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 719 L 310 719 L 310 285 L 348 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 781 L 317 781 L 317 285 L 348 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 409 L 324 409 L 324 409 L 348 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 471 L 331 471 L 331 409 L 348 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 533 L 338 533 L 338 409 L 348 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 595 L 296 595 L 296 471 L 348 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 657 L 303 657 L 303 471 L 348 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 347 L 310 347 L 310 172 L 896 172 L 896 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 223 L 317 223 L 317 285 L 348 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 409 L 324 409 L 324 471 L 348 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 348 471 L 331 471 L 331 533 L 348 533" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 533 L 338 533 L 338 595 L 348 595" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 348 471 L 296 471 L 296 595 L 348 595" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 223 L 303 223 L 303 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 471 L 310 471 L 310 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 657 L 317 657 L 317 719 L 348 719" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 586 471 L 596 471 L 596 223 L 648 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 603 347 L 603 223 L 648 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 610 223 L 610 409 L 648 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 471 L 617 471 L 617 409 L 648 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 624 347 L 624 471 L 648 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 471 L 631 471 L 631 533 L 648 533" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 638 347 L 638 595 L 648 595" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 648 223 L 596 223 L 596 347 L 648 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 648 223 L 603 223 L 603 285 L 648 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 648 471 L 610 471 L 610 533 L 648 533" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 648 595 L 617 595 L 617 657 L 648 657" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 285 L 903 285 L 903 285 L 886 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 703 L 910 703 L 910 765 L 948 765" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 455 L 917 455 L 917 517 L 948 517" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 517 L 924 517 L 924 579 L 948 579" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 517 L 931 517 L 931 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 223 L 938 223 L 938 285 L 948 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 455 L 896 455 L 896 641 L 948 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 624 223 L 624 158 L 903 158 L 903 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 285 L 631 285 L 631 144 L 910 144 L 910 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 638 347 L 638 130 L 917 130 L 917 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 471 L 596 471 L 596 116 L 924 116 L 924 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 657 L 603 657 L 603 102 L 931 102 L 931 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1186 223 L 1196 223 L 1196 223 L 1248 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1186 285 L 1203 285 L 1203 285 L 1248 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 610 347 L 610 172 L 1210 172 L 1210 223 L 1248 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 617 223 L 617 158 L 1217 158 L 1217 409 L 1248 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1248 223 L 1224 223 L 1224 285 L 1248 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1248 223 L 1231 223 L 1231 347 L 1248 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1248 223 L 1238 223 L 1238 409 L 1248 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1248 409 L 1196 409 L 1196 471 L 1248 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1248 471 L 1203 471 L 1203 533 L 1248 533" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1486 223 L 1496 223 L 1496 285 L 1548 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1486 409 L 1503 409 L 1503 285 L 1548 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1548 223 L 1510 223 L 1510 285 L 1548 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1548 223 L 1517 223 L 1517 347 L 1548 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1548 223 L 1524 223 L 1524 471 L 1548 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1548 579 L 1531 579 L 1531 641 L 1548 641" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1548 703 L 1538 703 L 1538 641 L 1548 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1548 889 L 1496 889 L 1496 471 L 1548 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1548 889 L 1503 889 L 1503 827 L 1548 827" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1248 703 L 1210 703 L 1210 765 L 1248 765" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1248 641 L 1217 641 L 1217 765 L 1248 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 624 223 L 624 144 L 1224 144 L 1224 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 409 L 324 409 L 324 130 L 1231 130 L 1231 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 631 223 L 631 116 L 1238 116 L 1238 703 L 1248 703" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 638 223 L 638 102 L 1196 102 L 1196 765 L 1248 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 596 223 L 596 172 L 1510 172 L 1510 223 L 1548 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 603 223 L 603 158 L 1517 158 L 1517 409 L 1548 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 610 223 L 610 144 L 1524 144 L 1524 579 L 1548 579" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 617 223 L 617 130 L 1531 130 L 1531 765 L 1548 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1848 223 L 1796 223 L 1796 347 L 1848 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1848 285 L 1803 285 L 1803 347 L 1848 347" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1848 285 L 1810 285 L 1810 471 L 1848 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 1848 409 L 1817 409 L 1817 471 L 1848 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 1848 579 L 1824 579 L 1824 641 L 1848 641" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+  </g>
+  <text x="48" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3C6690">分類・区分マスタ</text>
+  <text x="348" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#2E4B6E">取引先・商品・倉庫</text>
+  <text x="648" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F7772">在庫</text>
+  <text x="948" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#B4503A">受注</text>
+  <text x="948" y="420" font-size="12" font-weight="700" letter-spacing="1.5" fill="#6A4E77">外部データ取込</text>
+  <text x="1248" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#B4503A">出荷・返品</text>
+  <text x="1248" y="606" font-size="12" font-weight="700" letter-spacing="1.5" fill="#8D6C34">ロイヤリティ</text>
+  <text x="1548" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#8D6C34">請求・売掛</text>
+  <text x="1548" y="544" font-size="12" font-weight="700" letter-spacing="1.5" fill="#8D6C34">仕入・買掛</text>
+  <text x="1848" y="188" font-size="12" font-weight="700" letter-spacing="1.5" fill="#2E4B6E">利用者・権限</text>
+  <text x="1848" y="544" font-size="12" font-weight="700" letter-spacing="1.5" fill="#2E4B6E">共通・設定</text>
+  <g>
+    <rect x="648" y="262" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="262" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="282" font-size="13.5" font-weight="700" fill="#1A2430">引当</text>
+    <text x="662" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">allocations</text>
+  </g>
+  <g>
+    <rect x="1548" y="742" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="742" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="762" font-size="13.5" font-weight="700" fill="#1A2430">買掛元帳</text>
+    <text x="1562" y="779" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">ap_ledgers</text>
+  </g>
+  <g>
+    <rect x="1548" y="386" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="386" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="406" font-size="13.5" font-weight="700" fill="#1A2430">売掛元帳</text>
+    <text x="1562" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">ar_ledgers</text>
+  </g>
+  <g>
+    <rect x="1848" y="866" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="866" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="886" font-size="13.5" font-weight="700" fill="#1A2430">添付ファイル</text>
+    <text x="1862" y="903" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">attachments</text>
+  </g>
+  <g>
+    <rect x="1848" y="804" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="804" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="824" font-size="13.5" font-weight="700" fill="#1A2430">監査ログ</text>
+    <text x="1862" y="841" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">audit_logs</text>
+  </g>
+  <g>
+    <rect x="48" y="386" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="386" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="406" font-size="13.5" font-weight="700" fill="#1A2430">ブランド</text>
+    <text x="62" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">brands</text>
+  </g>
+  <g>
+    <rect x="1548" y="804" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="804" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="824" font-size="13.5" font-weight="700" fill="#1A2430">支払</text>
+    <text x="1562" y="841" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">cash_payments</text>
+  </g>
+  <g>
+    <rect x="1548" y="448" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="448" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="468" font-size="13.5" font-weight="700" fill="#1A2430">入金</text>
+    <text x="1562" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">cash_receipts</text>
+  </g>
+  <g>
+    <rect x="1548" y="866" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="866" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="886" font-size="13.5" font-weight="700" fill="#1A2430">入出金</text>
+    <text x="1562" y="903" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">cash_transactions</text>
+  </g>
+  <g>
+    <rect x="48" y="448" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="448" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="468" font-size="13.5" font-weight="700" fill="#1A2430">カテゴリー</text>
+    <text x="62" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">categories</text>
+  </g>
+  <g>
+    <rect x="1848" y="556" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="556" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="576" font-size="13.5" font-weight="700" fill="#1A2430">区分カテゴリー</text>
+    <text x="1862" y="593" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">code_categories</text>
+  </g>
+  <g>
+    <rect x="1848" y="618" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="618" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="638" font-size="13.5" font-weight="700" fill="#1A2430">汎用区分</text>
+    <text x="1862" y="655" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">codes</text>
+  </g>
+  <g>
+    <rect x="48" y="572" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="572" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="592" font-size="13.5" font-weight="700" fill="#1A2430">カラー</text>
+    <text x="62" y="609" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">colors</text>
+  </g>
+  <g>
+    <rect x="348" y="262" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="262" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="282" font-size="13.5" font-weight="700" fill="#1A2430">納品先</text>
+    <text x="362" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">delivery_destinations</text>
+  </g>
+  <g>
+    <rect x="48" y="696" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="696" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="716" font-size="13.5" font-weight="700" fill="#1A2430">納品ルール</text>
+    <text x="62" y="733" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">delivery_rules</text>
+  </g>
+  <g>
+    <rect x="948" y="556" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="556" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="576" font-size="13.5" font-weight="700" fill="#1A2430">外部受注明細</text>
+    <text x="962" y="593" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">external_order_lines</text>
+  </g>
+  <g>
+    <rect x="948" y="494" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="494" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="514" font-size="13.5" font-weight="700" fill="#1A2430">外部受注</text>
+    <text x="962" y="531" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">external_orders</text>
+  </g>
+  <g>
+    <rect x="948" y="432" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="432" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="452" font-size="13.5" font-weight="700" fill="#1A2430">取込バッチ</text>
+    <text x="962" y="469" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">import_batches</text>
+  </g>
+  <g>
+    <rect x="948" y="742" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="742" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="762" font-size="13.5" font-weight="700" fill="#1A2430">取込テンプレート列定義</text>
+    <text x="962" y="779" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">import_template_columns</text>
+  </g>
+  <g>
+    <rect x="948" y="680" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="680" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="700" font-size="13.5" font-weight="700" fill="#1A2430">取込テンプレート</text>
+    <text x="962" y="717" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">import_templates</text>
+  </g>
+  <g>
+    <rect x="1548" y="262" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="262" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="282" font-size="13.5" font-weight="700" fill="#1A2430">請求明細</text>
+    <text x="1562" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">invoice_lines</text>
+  </g>
+  <g>
+    <rect x="1548" y="324" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="324" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="344" font-size="13.5" font-weight="700" fill="#1A2430">請求税率別内訳</text>
+    <text x="1562" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">invoice_tax_summaries</text>
+  </g>
+  <g>
+    <rect x="1548" y="200" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="200" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="220" font-size="13.5" font-weight="700" fill="#1A2430">請求</text>
+    <text x="1562" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">invoices</text>
+  </g>
+  <g>
+    <rect x="48" y="200" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="200" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="220" font-size="13.5" font-weight="700" fill="#1A2430">媒体</text>
+    <text x="62" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">media</text>
+  </g>
+  <g>
+    <rect x="1848" y="680" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="680" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="700" font-size="13.5" font-weight="700" fill="#1A2430">採番ルール</text>
+    <text x="1862" y="717" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">numbering_rules</text>
+  </g>
+  <g>
+    <rect x="48" y="262" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="262" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="282" font-size="13.5" font-weight="700" fill="#1A2430">取引先カテゴリー</text>
+    <text x="62" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">partner_categories</text>
+  </g>
+  <g>
+    <rect x="348" y="696" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="696" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="716" font-size="13.5" font-weight="700" fill="#1A2430">取引先別単価履歴</text>
+    <text x="362" y="733" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">partner_product_prices</text>
+  </g>
+  <g>
+    <rect x="348" y="634" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="634" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="654" font-size="13.5" font-weight="700" fill="#1A2430">取引先別商品</text>
+    <text x="362" y="671" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">partner_products</text>
+  </g>
+  <g>
+    <rect x="348" y="200" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="200" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="220" font-size="13.5" font-weight="700" fill="#1A2430">取引先</text>
+    <text x="362" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">partners</text>
+  </g>
+  <g>
+    <rect x="1848" y="386" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="386" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="406" font-size="13.5" font-weight="700" fill="#1A2430">権限</text>
+    <text x="1862" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">permissions</text>
+  </g>
+  <g>
+    <rect x="948" y="618" width="238" height="46" fill="#FFFFFF" stroke="#6A4E77" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="618" width="4" height="46" fill="#6A4E77"/>
+    <text x="962" y="638" font-size="13.5" font-weight="700" fill="#1A2430">プラットフォーム取引</text>
+    <text x="962" y="655" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">platform_transactions</text>
+  </g>
+  <g>
+    <rect x="1848" y="928" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="928" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="948" font-size="13.5" font-weight="700" fill="#1A2430">郵便番号</text>
+    <text x="1862" y="965" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">postal_codes</text>
+  </g>
+  <g>
+    <rect x="48" y="510" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="510" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="530" font-size="13.5" font-weight="700" fill="#1A2430">商品分類</text>
+    <text x="62" y="547" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">product_classes</text>
+  </g>
+  <g>
+    <rect x="348" y="386" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="386" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="406" font-size="13.5" font-weight="700" fill="#1A2430">商品</text>
+    <text x="362" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">products</text>
+  </g>
+  <g>
+    <rect x="1548" y="680" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="680" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="700" font-size="13.5" font-weight="700" fill="#1A2430">仕入品目</text>
+    <text x="1562" y="717" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">purchase_items</text>
+  </g>
+  <g>
+    <rect x="1548" y="618" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="618" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="638" font-size="13.5" font-weight="700" fill="#1A2430">仕入明細</text>
+    <text x="1562" y="655" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">purchase_lines</text>
+  </g>
+  <g>
+    <rect x="1548" y="556" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1548" y="556" width="4" height="46" fill="#8D6C34"/>
+    <text x="1562" y="576" font-size="13.5" font-weight="700" fill="#1A2430">仕入</text>
+    <text x="1562" y="593" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">purchases</text>
+  </g>
+  <g>
+    <rect x="648" y="510" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="510" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="530" font-size="13.5" font-weight="700" fill="#1A2430">入荷明細</text>
+    <text x="662" y="547" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">receipt_lines</text>
+  </g>
+  <g>
+    <rect x="648" y="448" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="448" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="468" font-size="13.5" font-weight="700" fill="#1A2430">入荷</text>
+    <text x="662" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">receipts</text>
+  </g>
+  <g>
+    <rect x="1248" y="510" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="510" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="530" font-size="13.5" font-weight="700" fill="#1A2430">再生</text>
+    <text x="1262" y="547" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">refurbishments</text>
+  </g>
+  <g>
+    <rect x="648" y="386" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="386" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="406" font-size="13.5" font-weight="700" fill="#1A2430">取引先別確保数</text>
+    <text x="662" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">reservations</text>
+  </g>
+  <g>
+    <rect x="1248" y="448" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="448" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="468" font-size="13.5" font-weight="700" fill="#1A2430">返品明細</text>
+    <text x="1262" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">return_lines</text>
+  </g>
+  <g>
+    <rect x="1248" y="386" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="386" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="406" font-size="13.5" font-weight="700" fill="#1A2430">返品</text>
+    <text x="1262" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">returns</text>
+  </g>
+  <g>
+    <rect x="1848" y="448" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="448" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="468" font-size="13.5" font-weight="700" fill="#1A2430">ロール権限</text>
+    <text x="1862" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">role_permissions</text>
+  </g>
+  <g>
+    <rect x="1848" y="262" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="262" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="282" font-size="13.5" font-weight="700" fill="#1A2430">ロール</text>
+    <text x="1862" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">roles</text>
+  </g>
+  <g>
+    <rect x="1248" y="742" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="742" width="4" height="46" fill="#8D6C34"/>
+    <text x="1262" y="762" font-size="13.5" font-weight="700" fill="#1A2430">ロイヤリティ計算明細</text>
+    <text x="1262" y="779" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">royalty_calculation_lines</text>
+  </g>
+  <g>
+    <rect x="1248" y="680" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="680" width="4" height="46" fill="#8D6C34"/>
+    <text x="1262" y="700" font-size="13.5" font-weight="700" fill="#1A2430">ロイヤリティ計算</text>
+    <text x="1262" y="717" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">royalty_calculations</text>
+  </g>
+  <g>
+    <rect x="1248" y="618" width="238" height="46" fill="#FFFFFF" stroke="#8D6C34" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="618" width="4" height="46" fill="#8D6C34"/>
+    <text x="1262" y="638" font-size="13.5" font-weight="700" fill="#1A2430">ロイヤリティ規定</text>
+    <text x="1262" y="655" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">royalty_rules</text>
+  </g>
+  <g>
+    <rect x="48" y="324" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="324" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="344" font-size="13.5" font-weight="700" fill="#1A2430">販売カテゴリー</text>
+    <text x="62" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_categories</text>
+  </g>
+  <g>
+    <rect x="948" y="262" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="262" width="4" height="46" fill="#B4503A"/>
+    <text x="962" y="282" font-size="13.5" font-weight="700" fill="#1A2430">受注明細</text>
+    <text x="962" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_order_lines</text>
+  </g>
+  <g>
+    <rect x="948" y="200" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="200" width="4" height="46" fill="#B4503A"/>
+    <text x="962" y="220" font-size="13.5" font-weight="700" fill="#1A2430">受注</text>
+    <text x="962" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_orders</text>
+  </g>
+  <g>
+    <rect x="948" y="324" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="948" y="324" width="4" height="46" fill="#B4503A"/>
+    <text x="962" y="344" font-size="13.5" font-weight="700" fill="#1A2430">販売予定</text>
+    <text x="962" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_schedules</text>
+  </g>
+  <g>
+    <rect x="1848" y="990" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="990" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="1010" font-size="13.5" font-weight="700" fill="#1A2430">保存クエリ</text>
+    <text x="1862" y="1027" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">saved_queries</text>
+  </g>
+  <g>
+    <rect x="348" y="572" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="572" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="592" font-size="13.5" font-weight="700" fill="#1A2430">セット構成</text>
+    <text x="362" y="609" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">set_components</text>
+  </g>
+  <g>
+    <rect x="348" y="510" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="510" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="530" font-size="13.5" font-weight="700" fill="#1A2430">セット登録</text>
+    <text x="362" y="547" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">set_headers</text>
+  </g>
+  <g>
+    <rect x="1248" y="324" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="324" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="344" font-size="13.5" font-weight="700" fill="#1A2430">帳票発行履歴</text>
+    <text x="1262" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">shipment_documents</text>
+  </g>
+  <g>
+    <rect x="1248" y="262" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="262" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="282" font-size="13.5" font-weight="700" fill="#1A2430">出荷明細</text>
+    <text x="1262" y="299" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">shipment_lines</text>
+  </g>
+  <g>
+    <rect x="1248" y="200" width="238" height="46" fill="#FFFFFF" stroke="#B4503A" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1248" y="200" width="4" height="46" fill="#B4503A"/>
+    <text x="1262" y="220" font-size="13.5" font-weight="700" fill="#1A2430">出荷</text>
+    <text x="1262" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">shipments</text>
+  </g>
+  <g>
+    <rect x="48" y="634" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="634" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="654" font-size="13.5" font-weight="700" fill="#1A2430">サイズ</text>
+    <text x="62" y="671" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sizes</text>
+  </g>
+  <g>
+    <rect x="348" y="448" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="448" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="468" font-size="13.5" font-weight="700" fill="#1A2430">SKU</text>
+    <text x="362" y="485" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">skus</text>
+  </g>
+  <g>
+    <rect x="648" y="634" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="634" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="654" font-size="13.5" font-weight="700" fill="#1A2430">在庫調整明細</text>
+    <text x="662" y="671" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">stock_adjustment_lines</text>
+  </g>
+  <g>
+    <rect x="648" y="572" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="572" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="592" font-size="13.5" font-weight="700" fill="#1A2430">在庫調整</text>
+    <text x="662" y="609" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">stock_adjustments</text>
+  </g>
+  <g>
+    <rect x="648" y="324" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="324" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="344" font-size="13.5" font-weight="700" fill="#1A2430">在庫移動履歴</text>
+    <text x="662" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">stock_movements</text>
+  </g>
+  <g>
+    <rect x="648" y="200" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="648" y="200" width="4" height="46" fill="#3F7772"/>
+    <text x="662" y="220" font-size="13.5" font-weight="700" fill="#1A2430">在庫</text>
+    <text x="662" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">stocks</text>
+  </g>
+  <g>
+    <rect x="1848" y="742" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="742" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="762" font-size="13.5" font-weight="700" fill="#1A2430">システム設定</text>
+    <text x="1862" y="779" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">system_settings</text>
+  </g>
+  <g>
+    <rect x="1848" y="324" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="324" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="344" font-size="13.5" font-weight="700" fill="#1A2430">ユーザーロール</text>
+    <text x="1862" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">user_roles</text>
+  </g>
+  <g>
+    <rect x="1848" y="200" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="1848" y="200" width="4" height="46" fill="#2E4B6E"/>
+    <text x="1862" y="220" font-size="13.5" font-weight="700" fill="#1A2430">ユーザー</text>
+    <text x="1862" y="237" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">users</text>
+  </g>
+  <g>
+    <rect x="348" y="324" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="348" y="324" width="4" height="46" fill="#2E4B6E"/>
+    <text x="362" y="344" font-size="13.5" font-weight="700" fill="#1A2430">倉庫</text>
+    <text x="362" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">warehouses</text>
+  </g>
+  <g>
+    <rect x="48" y="758" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="758" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="778" font-size="13.5" font-weight="700" fill="#1A2430">作業指示内容</text>
+    <text x="62" y="795" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">work_instructions</text>
+  </g>
+  <line x1="48" y1="1112" x2="2086" y2="1112" stroke="#DCE0DE" stroke-width="1"/>
+  <text x="48" y="1134" font-size="12.5" fill="#5C6874">実線は表と表のつながり（外部キー）。矢印は「1件に対して複数件」の向きを示す。</text>
+  <text x="48" y="1158" font-size="12.5" fill="#5C6874">太い線は親子関係（受注→受注明細のように、片方を消すともう片方も消える関係）。</text>
+  <text x="48" y="1182" font-size="12.5" fill="#5C6874">汎用区分 codes は取引先区分・商品区分など多数の表から参照されるため、線は省略している。</text>
+  <text x="48" y="1206" font-size="12.5" fill="#5C6874">ユーザー users も全表の登録者・更新者として参照されるため、線は省略している。</text>
+</svg>

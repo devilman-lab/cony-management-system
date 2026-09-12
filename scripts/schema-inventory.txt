@@ -1,0 +1,366 @@
+# distinct columns: 365
+acted_at	1	TIMESTAMPTZ	audit_logs	
+action	2	VARCHAR(20)	permissions,audit_logs	view/create/update/delete/print
+address1	3	VARCHAR(200)	partners,warehouses,delivery_destinations	
+address2	3	VARCHAR(200)	partners,warehouses,delivery_destinations	
+adjust_10	1	money_amt	invoices	調整10%
+adjust_8	1	money_amt	invoices	調整8%
+adjustment_date	1	DATE	stock_adjustments	
+adjustment_no	1	VARCHAR(30)	stock_adjustments	
+after_data	1	JSONB	audit_logs	
+allocated_qty	1	qty_num	sales_order_lines	
+allowed_values	1	TEXT	system_settings	選択肢（カンマ区切り）。NULL＝自由入力
+allowed_weekdays	1	VARCHAR(20)	delivery_rules	暫定（例：1,2,3,4,5）
+amount	6	money_amt	sales_order_lines,shipment_lines,invoice_lines,+3	
+applied_amount	2	money_amt	cash_receipts,cash_payments	
+base_amount	1	money_amt	royalty_calculation_lines	
+before_data	1	JSONB	audit_logs	
+bill_amount1	1	money_amt	cash_transactions	手形決済日①／手形①
+bill_amount2	1	money_amt	cash_transactions	手形決済日②／手形②
+bill_due_date1	1	DATE	cash_transactions	
+bill_due_date2	1	DATE	cash_transactions	
+brand_id	4	BIGINT	products,purchase_items,purchases,+1	
+byte_size	1	BIGINT	attachments	
+calc_base	1	VARCHAR(20)	royalty_rules	売上／出荷／入金
+calculated_at	1	TIMESTAMPTZ	royalty_calculations	
+carrier	1	VARCHAR(60)	shipments	
+carryover_balance	1	money_amt	invoices	繰越残高
+carton_qty	1	INTEGER	products	
+cash_amount	1	money_amt	cash_transactions	現金
+cash_transaction_id	2	BIGINT	cash_receipts,cash_payments	FK は cash_transactions 作成後に付与
+cash_transaction_no	1	VARCHAR(30)	cash_transactions	
+category_id	2	BIGINT	products,purchase_items	
+channel	2	VARCHAR(30)	sales_orders,external_orders	通販＝受注ルート／販社＝販社名
+charge_amount	2	money_amt	ar_ledgers,ap_ledgers	
+check_amount	1	money_amt	cash_transactions	小切手
+city	1	VARCHAR(60)	postal_codes	
+city_kana	1	VARCHAR(80)	postal_codes	
+closing_balance	2	money_amt	ar_ledgers,ap_ledgers	
+closing_date	1	DATE	invoices	
+closing_day	1	SMALLINT	partners	締め日（99＝月末）
+cod_amount	1	money_amt	shipments	
+code	13	VARCHAR(40)	roles,code_categories,codes,+10	例：PARTNER_DIVISION
+code_category_id	1	BIGINT	codes	
+collection_amount	1	money_amt	cash_transactions	集金
+color_id	1	BIGINT	skus	
+color_name	1	VARCHAR(40)	partner_products	
+column_index	1	SMALLINT	import_template_columns	CSVの左から何列目か（1始まり）
+commission_fee	1	money_amt	platform_transactions	
+component_sku_id	1	BIGINT	set_components	
+conditions	1	JSONB	saved_queries	
+confirmed_at	1	TIMESTAMPTZ	shipments	確定と印刷は分離
+consignee	1	VARCHAR(120)	delivery_destinations	荷受人
+consignment_product_code	1	VARCHAR(40)	stocks	
+consignment_qty	1	qty_num	stocks	
+consolidated_from	1	VARCHAR(60)	external_orders	同梱元の受注番号（実CSVはこちらに値が入る）
+consolidated_to	1	VARCHAR(60)	external_orders	同梱先の受注番号
+consolidated_to_shipment_id	1	BIGINT	shipments	同梱先（自己参照）
+consumed_qty	1	qty_num	reservations	
+cost_division_code_id	1	BIGINT	purchase_lines	費用区分
+cost_price	4	money_amt	products,partner_products,stocks,+1	閲覧者には非表示
+created_at	68	TIMESTAMPTZ	users,roles,user_roles,+65	
+created_by	58	BIGINT	users,roles,user_roles,+55	
+currency	2	VARCHAR(3)	purchases,cash_transactions	海外仕入に対応
+current_balance	1	money_amt	invoices	今回請求残高
+current_invoice_amount	1	money_amt	invoices	当月請求額
+current_receipt_amount	1	money_amt	invoices	今回入金額
+current_value	1	BIGINT	numbering_rules	
+data_version	1	VARCHAR(6)	postal_codes	取り込んだ版（YYYYMM）
+default_order_type	1	VARCHAR(20)	import_templates	
+default_trade_type	1	VARCHAR(10)	partners	既定の取引条件（委託／買取）。受注で自動表示し変更可
+default_warehouse_id	1	BIGINT	delivery_destinations	
+defective_class_id	1	BIGINT	stocks	
+defective_qty	1	qty_num	refurbishments	不良在庫へ
+delimiter	1	VARCHAR(4)	import_templates	
+delivery_code	2	VARCHAR(20)	delivery_destinations,external_orders	先方指定の納品先コード（販社CSV）
+delivery_date	2	DATE	sales_orders,purchases	納品日。受注フォームでは「納品日」として表示する（確認事項⑥）
+delivery_date_specified	1	DATE	shipments	
+delivery_destination_id	2	BIGINT	warehouses,sales_orders	FK は delivery_destinations 作成後に付与
+delivery_note_print1	1	TEXT	delivery_destinations	
+delivery_note_print2	1	TEXT	delivery_destinations	
+delivery_note_remarks	1	TEXT	sales_orders	納品書備考 → 納品書
+delivery_rule_id	1	BIGINT	delivery_destinations	
+delivery_time_slot	1	VARCHAR(20)	shipments	
+description	2	TEXT	platform_transactions,system_settings	
+digitized_code_id	1	BIGINT	partners	電子化
+direct_address1	1	VARCHAR(200)	sales_orders	
+direct_address2	1	VARCHAR(200)	sales_orders	
+direct_kana	1	VARCHAR(120)	sales_orders	
+direct_name	1	VARCHAR(120)	sales_orders	
+direct_postal_code	1	VARCHAR(8)	sales_orders	
+direct_tel	1	VARCHAR(20)	sales_orders	
+display_code_id	1	BIGINT	products	
+division	2	VARCHAR(10)	purchases,cash_transactions	仕入／経費
+division_code_id	4	BIGINT	partners,warehouses,delivery_destinations,+1	区分
+division2_code_id	1	BIGINT	partners	区分2
+document_type	1	VARCHAR(30)	shipment_documents	
+email	1	VARCHAR(255)	users	
+error_count	1	INTEGER	import_batches	
+error_message	1	TEXT	external_orders	
+exchange_rate	1	NUMERIC(12,6)	purchases	
+expense_code_id	1	BIGINT	purchases	
+expense_id	1	BIGINT	cash_transactions	
+expiry_date	2	DATE	stocks,receipt_lines	
+external_jan	1	VARCHAR(20)	external_order_lines	JANは販社側でExcel保存され指数表記に壊れていることがある。取込時に桁数を検査する
+external_order_id	2	BIGINT	sales_orders,external_order_lines	FK は external_orders 作成後に付与
+external_order_no	2	VARCHAR(60)	external_orders,platform_transactions	
+external_sku_code	2	VARCHAR(60)	external_order_lines,platform_transactions	自社商品コード（例：FT1196-0306-100）
+fax	3	VARCHAR(20)	partners,warehouses,delivery_destinations	
+fba_fee	1	money_amt	platform_transactions	
+fee_amount	2	money_amt	invoices,cash_transactions	手数料
+file_encoding	1	VARCHAR(20)	import_templates	CP932／UTF8
+file_name	2	VARCHAR(255)	attachments,import_batches	
+fixed_amount	1	money_amt	royalty_rules	
+from_quality_code_id	1	BIGINT	stock_adjustment_lines	良品→不良 の振替に使う
+function_id	1	VARCHAR(20)	permissions	機能ID（M-01, O-01 …）
+good_qty	1	qty_num	refurbishments	良品として在庫へ戻す
+gross_margin_adjust_code_id	1	BIGINT	partners	粗利調整対象
+has_header	1	BOOLEAN	import_templates	
+id	69	BIGINT	users,roles,user_roles,+66	
+import_batch_id	2	BIGINT	external_orders,platform_transactions	
+import_template_id	2	BIGINT	import_batches,import_template_columns	FK は import_templates 作成後に付与
+import_type	2	VARCHAR(30)	import_batches,import_templates	OMS_ORDER / AMAZON_TRANSACTION / PARTNER_ORDER
+imported_at	1	TIMESTAMPTZ	import_batches	
+imported_by	1	BIGINT	import_batches	
+inspected_at	1	TIMESTAMPTZ	refurbishments	
+instruction_body	1	TEXT	work_instructions	出荷指示書に印字し倉庫現場へ届ける
+invoice_id	3	BIGINT	invoice_lines,invoice_tax_summaries,cash_receipts	
+invoice_no	1	VARCHAR(30)	invoices	
+invoice_note	1	TEXT	partners	請求書事項
+invoice_registration_no	1	VARCHAR(20)	partners	適格請求書発行事業者番号
+is_active	25	BOOLEAN	users,roles,code_categories,+22	
+is_billable	1	BOOLEAN	sales_orders	サンプル出荷は false。出荷指示書は出て在庫も落ちるが、売上・請求には乗らない
+is_cancelled	1	BOOLEAN	sales_orders	
+is_consignment	1	BOOLEAN	warehouses	
+is_cost_undecided	1	BOOLEAN	products	
+is_customer	1	BOOLEAN	partners	
+is_multi_town	1	BOOLEAN	postal_codes	同一郵便番号に複数町域がある
+is_print_target	1	BOOLEAN	attachments	出荷指示時の印刷対象
+is_required	1	BOOLEAN	import_template_columns	
+is_royalty_excluded	1	BOOLEAN	partner_products	
+is_sensitive	1	BOOLEAN	permissions	原価・仕入単価・ロイヤリティ
+is_set	1	BOOLEAN	products	true は在庫を持たない
+is_stock_target	1	BOOLEAN	sales_order_lines	在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。 セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。
+is_supplier	1	BOOLEAN	partners	
+is_user_editable	1	BOOLEAN	system_settings	
+issued_at	1	TIMESTAMPTZ	invoices	請求書には印刷しない
+item_name	6	VARCHAR(200)	sales_order_lines,shipment_lines,invoice_lines,+3	
+jan	1	VARCHAR(20)	skus	
+jan_code	1	VARCHAR(20)	partner_products	
+jis_code	1	VARCHAR(5)	postal_codes	全国地方公共団体コード
+last_reset_key	1	VARCHAR(10)	numbering_rules	
+lead_time_days	1	SMALLINT	delivery_rules	暫定
+line_no	8	INTEGER	receipt_lines,sales_order_lines,shipment_lines,+5	
+line_type	2	VARCHAR(20)	sales_order_lines,external_order_lines	商品／セット商品／内訳商品／販促品／送料／値引／非商品。OMS の「商品種別」に対応
+login_id	1	VARCHAR(60)	users	
+lot_no	3	VARCHAR(40)	stocks,receipt_lines,stock_adjustment_lines	
+master_search_code_id	1	BIGINT	delivery_destinations	
+media_id	2	BIGINT	partners,warehouses	
+memo	1	TEXT	partner_products	
+mime_type	1	VARCHAR(120)	attachments	
+monthly_invoice_code_id	1	BIGINT	partners	毎月請求書発行
+moved_at	1	TIMESTAMPTZ	stock_movements	
+movement_type	1	VARCHAR(20)	stock_movements	
+name	19	VARCHAR(120)	users,roles,permissions,+16	
+name1	1	VARCHAR(120)	partners	
+name2	1	VARCHAR(120)	partners	
+new_tax_class_code_id	1	BIGINT	purchase_items	
+new_tax_rate	1	tax_rate	purchase_items	
+note	38	TEXT	roles,code_categories,codes,+35	
+offset_amount	1	money_amt	cash_transactions	相殺
+old_unit_price	1	money_amt	partner_products	
+opening_balance	2	money_amt	ar_ledgers,ap_ledgers	
+order_date	1	DATE	sales_orders	受注日（システム内部。締め・実績に使う）
+order_no	1	VARCHAR(30)	sales_orders	
+order_no_source	1	VARCHAR(10)	import_templates	csv＝CSVの番号／auto＝自社採番
+order_type	1	VARCHAR(20)	sales_orders	卸／直送／通販
+ordered_at	1	TIMESTAMPTZ	external_orders	
+original_shipment_id	1	BIGINT	returns	
+other	1	TEXT	partner_products	
+other_amount	1	money_amt	platform_transactions	
+other_fee	1	money_amt	platform_transactions	
+output_format	1	VARCHAR(10)	shipment_documents	
+overseas_cny	1	money_amt	cash_transactions	海外送金CNY
+overseas_usd	1	money_amt	cash_transactions	海外送金$
+pack_division	1	VARCHAR(10)	skus	100＝単品 / 200＝2枚組
+parent_line_no	1	INTEGER	sales_order_lines	セット商品行の line_no。内訳商品行がこれを指す（CSV は出現順で親子を表現するため取込時に補完）
+partner_category_id	1	BIGINT	partners	
+partner_code	1	VARCHAR(20)	partners	
+partner_color	1	VARCHAR(40)	partner_products	販社色
+partner_contact	1	VARCHAR(60)	cash_transactions	
+partner_delivery_no	1	VARCHAR(40)	delivery_destinations	得意先が発行している納品先No
+partner_id	18	BIGINT	warehouses,delivery_destinations,partner_products,+15	販社取込のとき解決した取引先
+partner_jan	1	VARCHAR(20)	partner_products	
+partner_product_code	2	VARCHAR(60)	partner_products,external_order_lines	取引先専用コード（例：Amazon TO-GXZN-60W8）
+partner_product_id	2	BIGINT	partner_product_prices,sales_order_lines	
+partner_size	1	VARCHAR(40)	partner_products	販社サイズ
+password_hash	1	TEXT	users	
+payment_amount	1	money_amt	ap_ledgers	
+payment_date	1	DATE	cash_payments	
+payment_date1	1	DATE	purchases	
+payment_date2	1	DATE	purchases	
+payment_day	1	SMALLINT	partners	
+payment_fee	1	money_amt	external_orders	
+payment_method	1	VARCHAR(60)	external_orders	
+payment_month_offset	1	SMALLINT	partners	
+period_from	4	DATE	reservations,invoices,ar_ledgers,+1	取引先別締め期間
+period_to	4	DATE	reservations,invoices,ar_ledgers,+1	
+permission_id	1	BIGINT	role_permissions	
+planned_arrival_month	2	DATE	stocks,sales_schedules	
+planned_date	1	DATE	receipts	
+planned_qty	1	qty_num	sales_schedules	
+planned_sales_month	2	DATE	stocks,sales_schedules	
+planned_ship_date	1	DATE	shipments	
+platform	1	VARCHAR(30)	platform_transactions	
+po_line_no	1	INTEGER	sales_orders	先方の発注行番号（販社CSVに含まれる）
+po_no	3	VARCHAR(40)	sales_orders,invoices,external_orders	先方の発注番号
+points_cost	1	money_amt	platform_transactions	
+postal_code	4	VARCHAR(8)	partners,warehouses,delivery_destinations,+1	ハイフンなし7桁
+prefecture	1	VARCHAR(20)	postal_codes	
+prefecture_kana	1	VARCHAR(40)	postal_codes	
+prefix	1	VARCHAR(10)	numbering_rules	
+prev_invoice_balance	1	money_amt	invoices	前回請求残高
+price_changed_date	1	DATE	partner_products	
+printed_at	1	TIMESTAMPTZ	shipment_documents	
+printed_by	1	BIGINT	shipment_documents	
+process_code_id	1	BIGINT	purchases	
+product_class_id	4	BIGINT	products,partner_products,purchase_items,+1	
+product_code	1	VARCHAR(40)	products	商品ID＝商品コード
+product_id	2	BIGINT	skus,royalty_rules	
+product_name	1	VARCHAR(200)	products	
+product_sales	1	money_amt	platform_transactions	
+product_sales_tax	1	money_amt	platform_transactions	
+promo_discount	1	money_amt	platform_transactions	
+promo_discount_tax	1	money_amt	platform_transactions	
+purchase_code	1	VARCHAR(60)	purchase_items	例：Z-SA-1216-100
+purchase_date	1	DATE	purchases	
+purchase_id	2	BIGINT	purchase_lines,cash_payments	
+purchase_item_id	1	BIGINT	purchase_lines	
+purchase_no	1	VARCHAR(30)	purchases	
+purchase_price_setting_code_id	1	BIGINT	purchase_items	
+qty	12	qty_num	set_components,stock_movements,receipt_lines,+9	負数を許容（販促品・値引）
+qty_after	1	qty_num	stock_movements	
+qty_allocated	1	qty_num	stocks	
+qty_available	1	qty_num	stocks	
+qty_before	1	qty_num	stock_movements	
+qty_on_hand	1	qty_num	stocks	
+quality_code_id	1	BIGINT	stocks	良品／不良／返品検品待ち
+rate	2	NUMERIC(7,4)	royalty_rules,royalty_calculation_lines	
+raw_data	3	JSONB	external_orders,external_order_lines,platform_transactions	取り込んだCSV行の原本
+reason_code_id	1	BIGINT	stock_adjustments	棚卸差異／破損／紛失／品質振替
+receipt_amount	1	money_amt	ar_ledgers	
+receipt_date	1	DATE	cash_receipts	
+receipt_id	1	BIGINT	receipt_lines	
+receipt_no	1	VARCHAR(30)	receipts	
+received_date	1	DATE	receipts	
+ref_id	3	BIGINT	attachments,audit_logs,stock_movements	
+ref_table	3	VARCHAR(40)	attachments,audit_logs,stock_movements	
+refurbish_cost	1	money_amt	refurbishments	暫定：保持のみ、会計連携なし
+released_at	1	TIMESTAMPTZ	allocations	
+requested_delivery_date	1	DATE	sales_orders	納品希望日
+reserved_qty	1	qty_num	reservations	
+reset_unit	1	VARCHAR(10)	numbering_rules	
+retail_price	1	money_amt	external_order_lines	上代（白鳩・ラベルヴィのCSVに含まれる）
+return_amount	2	money_amt	returns,invoices	返品額
+return_date	1	DATE	returns	
+return_id	2	BIGINT	return_lines,invoice_lines	
+return_line_id	1	BIGINT	refurbishments	
+return_no	1	VARCHAR(30)	returns	
+return_type	1	VARCHAR(20)	returns	
+role_id	2	BIGINT	user_roles,role_permissions	
+royalty_amount	1	money_amt	royalty_calculation_lines	
+royalty_calculation_id	1	BIGINT	royalty_calculation_lines	
+royalty_class_code_id	1	BIGINT	products	
+royalty_rate	1	NUMERIC(7,4)	partner_products	調整点6-④：ここで設定
+royalty_setting	1	VARCHAR(60)	partners	
+rule_body	1	TEXT	delivery_rules	自由記述。確定前でも運用可能
+sales_category_id	3	BIGINT	reservations,sales_orders,sales_schedules	
+sales_name	1	VARCHAR(200)	partner_products	販売名
+sales_name2	1	VARCHAR(200)	partner_products	販売名_2
+sales_order_id	3	BIGINT	sales_order_lines,shipments,external_orders	
+sales_order_line_id	2	BIGINT	shipment_lines,allocations	
+sales_price_setting_code_id	1	BIGINT	purchase_items	
+sales_staff_name	1	VARCHAR(60)	cash_transactions	
+scheduled_date	1	DATE	cash_transactions	
+seq_length	1	SMALLINT	numbering_rules	
+set_header_id	1	BIGINT	set_components	
+set_product_name	1	VARCHAR(200)	products	
+setting_group	1	VARCHAR(40)	system_settings	TAX／SHIPPING／IMPORT／ROYALTY／DOCUMENT／ORDER／REFERENCE
+setting_key	1	VARCHAR(60)	system_settings	
+settlement_no	1	VARCHAR(40)	platform_transactions	
+share_scope	1	VARCHAR(20)	saved_queries	
+ship_date	3	DATE	sales_orders,shipments,external_orders	出荷日。受注フォームでは「出荷日」として表示する（確認事項⑥）
+ship_from_warehouse_id	1	BIGINT	sales_orders	
+shipment_amount	1	money_amt	invoices	出荷
+shipment_id	3	BIGINT	shipment_lines,shipment_documents,invoice_lines	
+shipment_no	1	VARCHAR(30)	shipments	伝票管理番号（例：D0209475）
+shipping_fee	2	money_amt	shipments,platform_transactions	
+shipping_fee_adjustment	1	money_amt	sales_orders	送料調整。入力すると自動計算した送料を上書きする
+shipping_fee_amount	2	money_amt	partners,invoices	請求する送料額。NULL＝既定値
+shipping_fee_rule_code_id	1	BIGINT	partners	送料3万以下・直送
+shipping_fee_threshold	1	money_amt	partners	この金額以下の出荷に送料を請求。NULL＝既定値
+shipping_label_type	1	VARCHAR(30)	shipments	
+shipping_remarks	1	TEXT	sales_orders	出荷備考 → 出荷指示書
+shipping_tax	1	money_amt	platform_transactions	
+short_name	2	VARCHAR(60)	partners,warehouses	
+size_id	1	BIGINT	skus	
+size_name	1	VARCHAR(40)	partner_products	
+skip_rows	1	SMALLINT	import_templates	見出しの前に読み飛ばす行数
+sku_code	1	VARCHAR(40)	skus	例：FT1196-0306-100
+sku_id	14	BIGINT	set_headers,partner_products,stocks,+11	セット展開後の構成品
+sku_match_key	1	VARCHAR(20)	import_templates	sku_code／jan／partner_code
+slip_issue_class_code_id	1	BIGINT	delivery_destinations	
+slip_management_no	1	VARCHAR(30)	external_orders	伝票管理番号（D02094xx）
+sort_order	25	INTEGER	roles,code_categories,codes,+22	
+source	1	VARCHAR(10)	postal_codes	
+source_header	1	VARCHAR(120)	import_template_columns	CSVの見出し（照合用）
+staff_user_id	1	BIGINT	partners	
+status	12	VARCHAR(20)	receipts,sales_orders,shipments,+9	
+stock_adjustment_id	1	BIGINT	stock_adjustment_lines	
+stock_id	2	BIGINT	stock_movements,allocations	
+storage_path	1	TEXT	attachments	実体はDBに格納しない
+subtotal	1	money_amt	purchase_lines	
+success_count	1	INTEGER	import_batches	
+supplier_partner_id	2	BIGINT	receipts,purchases	
+target	2	VARCHAR(40)	numbering_rules,saved_queries	
+target_brand_id	1	BIGINT	purchase_lines	費用の配賦先
+target_field	1	VARCHAR(60)	import_template_columns	取込先の項目
+target_month	2	DATE	cash_transactions,royalty_calculations	
+target_product_class_id	1	BIGINT	purchase_lines	
+target_product_id	1	BIGINT	purchase_lines	
+tax_amount	1	money_amt	invoice_tax_summaries	
+tax_division_code_id	1	BIGINT	purchase_lines	
+tax_exempt_code_id	1	BIGINT	purchase_items	
+tax_rate	7	tax_rate	products,sales_order_lines,shipment_lines,+4	
+taxable_base	1	money_amt	invoice_tax_summaries	
+tel	3	VARCHAR(20)	partners,warehouses,delivery_destinations	
+template_code	1	VARCHAR(40)	import_templates	
+to_quality_code_id	1	BIGINT	stock_adjustment_lines	
+total_amount	4	money_amt	purchases,royalty_calculations,external_orders,+1	合計請求金額（検算用）
+total_count	1	INTEGER	import_batches	
+town	1	VARCHAR(120)	postal_codes	町域。以下に掲載がない場合は空
+town_kana	1	VARCHAR(160)	postal_codes	
+tracking_no	2	VARCHAR(40)	shipments,external_orders	
+trade_type	1	VARCHAR(10)	sales_orders	
+transaction_at	1	TIMESTAMPTZ	platform_transactions	
+transaction_date	1	DATE	cash_transactions	
+transaction_type	1	VARCHAR(40)	platform_transactions	
+transfer_amount	1	money_amt	cash_transactions	振込
+transform	1	VARCHAR(40)	import_template_columns	trim／date_slash／date_ymd／number／jan13
+type_code_id	1	BIGINT	cash_transactions	
+unit_cost	2	money_amt	purchase_items,purchase_lines	閲覧者・作業者に非表示
+unit_price	7	money_amt	partner_products,partner_product_prices,sales_order_lines,+4	
+unposted_10	1	money_amt	invoices	未計上10%
+unposted_8	1	money_amt	invoices	未計上8%
+updated_at	48	TIMESTAMPTZ	users,roles,code_categories,+45	二重取込による二重計上を防止
+updated_by	45	BIGINT	users,roles,code_categories,+42	
+use_yyyymm	1	BOOLEAN	numbering_rules	
+user_id	2	BIGINT	user_roles,audit_logs	
+valid_from	2	DATE	partner_product_prices,royalty_rules	
+valid_to	2	DATE	partner_product_prices,royalty_rules	
+value_text	1	TEXT	system_settings	
+value_type	1	VARCHAR(10)	system_settings	text／number／boolean／date
+warehouse_code	1	VARCHAR(20)	warehouses	
+warehouse_id	6	BIGINT	stocks,receipts,shipments,+3	
+warehouse_name	1	VARCHAR(60)	external_orders	
+work_instruction_id	1	BIGINT	delivery_destinations	

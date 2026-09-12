@@ -1,0 +1,205 @@
+{
+  "title": "株式会社コニー 販売管理システム  テーブル関連図",
+  "subtitle": "全69テーブル / 主要なつながり74本",
+  "output": "docs/提出用/テーブル関連図.svg",
+  "layout": {
+    "boxW": 238, "boxH": 46, "colGap": 62, "rowGap": 16,
+    "left": 48, "top": 200, "groupGap": 46,
+    "laneTop": 172, "laneStep": 14, "laneCount": 6
+  },
+  "groups": [
+    { "col": 0, "title": "分類・区分マスタ", "color": "#3C6690", "tables": [
+      ["media", "媒体"],
+      ["partner_categories", "取引先カテゴリー"],
+      ["sales_categories", "販売カテゴリー"],
+      ["brands", "ブランド"],
+      ["categories", "カテゴリー"],
+      ["product_classes", "商品分類"],
+      ["colors", "カラー"],
+      ["sizes", "サイズ"],
+      ["delivery_rules", "納品ルール"],
+      ["work_instructions", "作業指示内容"]
+    ]},
+
+    { "col": 1, "title": "取引先・商品・倉庫", "color": "#2E4B6E", "tables": [
+      ["partners", "取引先"],
+      ["delivery_destinations", "納品先"],
+      ["warehouses", "倉庫"],
+      ["products", "商品"],
+      ["skus", "SKU"],
+      ["set_headers", "セット登録"],
+      ["set_components", "セット構成"],
+      ["partner_products", "取引先別商品"],
+      ["partner_product_prices", "取引先別単価履歴"]
+    ]},
+
+    { "col": 2, "title": "在庫", "color": "#3F7772", "tables": [
+      ["stocks", "在庫"],
+      ["allocations", "引当"],
+      ["stock_movements", "在庫移動履歴"],
+      ["reservations", "取引先別確保数"],
+      ["receipts", "入荷"],
+      ["receipt_lines", "入荷明細"],
+      ["stock_adjustments", "在庫調整"],
+      ["stock_adjustment_lines", "在庫調整明細"]
+    ]},
+
+    { "col": 3, "title": "受注", "color": "#B4503A", "tables": [
+      ["sales_orders", "受注"],
+      ["sales_order_lines", "受注明細"],
+      ["sales_schedules", "販売予定"]
+    ]},
+    { "col": 3, "title": "外部データ取込", "color": "#6A4E77", "tables": [
+      ["import_batches", "取込バッチ"],
+      ["external_orders", "外部受注"],
+      ["external_order_lines", "外部受注明細"],
+      ["platform_transactions", "プラットフォーム取引"],
+      ["import_templates", "取込テンプレート"],
+      ["import_template_columns", "取込テンプレート列定義"]
+    ]},
+
+    { "col": 4, "title": "出荷・返品", "color": "#B4503A", "tables": [
+      ["shipments", "出荷"],
+      ["shipment_lines", "出荷明細"],
+      ["shipment_documents", "帳票発行履歴"],
+      ["returns", "返品"],
+      ["return_lines", "返品明細"],
+      ["refurbishments", "再生"]
+    ]},
+
+    { "col": 5, "title": "請求・売掛", "color": "#8D6C34", "tables": [
+      ["invoices", "請求"],
+      ["invoice_lines", "請求明細"],
+      ["invoice_tax_summaries", "請求税率別内訳"],
+      ["ar_ledgers", "売掛元帳"],
+      ["cash_receipts", "入金"]
+    ]},
+    { "col": 5, "title": "仕入・買掛", "color": "#8D6C34", "tables": [
+      ["purchases", "仕入"],
+      ["purchase_lines", "仕入明細"],
+      ["purchase_items", "仕入品目"],
+      ["ap_ledgers", "買掛元帳"],
+      ["cash_payments", "支払"],
+      ["cash_transactions", "入出金"]
+    ]},
+    { "col": 4, "title": "ロイヤリティ", "color": "#8D6C34", "tables": [
+      ["royalty_rules", "ロイヤリティ規定"],
+      ["royalty_calculations", "ロイヤリティ計算"],
+      ["royalty_calculation_lines", "ロイヤリティ計算明細"]
+    ]},
+
+    { "col": 6, "title": "利用者・権限", "color": "#2E4B6E", "tables": [
+      ["users", "ユーザー"],
+      ["roles", "ロール"],
+      ["user_roles", "ユーザーロール"],
+      ["permissions", "権限"],
+      ["role_permissions", "ロール権限"]
+    ]},
+    { "col": 6, "title": "共通・設定", "color": "#2E4B6E", "tables": [
+      ["code_categories", "区分カテゴリー"],
+      ["codes", "汎用区分"],
+      ["numbering_rules", "採番ルール"],
+      ["system_settings", "システム設定"],
+      ["audit_logs", "監査ログ"],
+      ["attachments", "添付ファイル"],
+      ["postal_codes", "郵便番号"],
+      ["saved_queries", "保存クエリ"]
+    ]}
+  ],
+
+  "edges": [
+    { "f": "media",                  "t": "partners" },
+    { "f": "partner_categories",     "t": "partners" },
+    { "f": "delivery_rules",         "t": "delivery_destinations" },
+    { "f": "work_instructions",      "t": "delivery_destinations" },
+    { "f": "brands",                 "t": "products" },
+    { "f": "categories",             "t": "products" },
+    { "f": "product_classes",        "t": "products" },
+    { "f": "colors",                 "t": "skus" },
+    { "f": "sizes",                  "t": "skus" },
+    { "f": "sales_categories",       "t": "sales_orders" },
+
+    { "f": "partners",               "t": "delivery_destinations" },
+    { "f": "products",               "t": "skus",                     "own": true },
+    { "f": "skus",                   "t": "set_headers" },
+    { "f": "set_headers",            "t": "set_components",           "own": true },
+    { "f": "skus",                   "t": "set_components" },
+    { "f": "partners",               "t": "partner_products" },
+    { "f": "skus",                   "t": "partner_products" },
+    { "f": "partner_products",       "t": "partner_product_prices",   "own": true },
+
+    { "f": "skus",                   "t": "stocks" },
+    { "f": "warehouses",             "t": "stocks" },
+    { "f": "partners",               "t": "reservations" },
+    { "f": "skus",                   "t": "reservations" },
+    { "f": "warehouses",             "t": "receipts" },
+    { "f": "skus",                   "t": "receipt_lines" },
+    { "f": "warehouses",             "t": "stock_adjustments" },
+
+    { "f": "stocks",                 "t": "stock_movements",          "own": true },
+    { "f": "stocks",                 "t": "allocations" },
+    { "f": "receipts",               "t": "receipt_lines",            "own": true },
+    { "f": "stock_adjustments",      "t": "stock_adjustment_lines",   "own": true },
+
+    { "f": "sales_order_lines",      "t": "allocations" },
+
+    { "f": "import_templates",       "t": "import_template_columns",  "own": true },
+    { "f": "import_batches",         "t": "external_orders" },
+    { "f": "external_orders",        "t": "external_order_lines",     "own": true },
+    { "f": "external_orders",        "t": "sales_orders" },
+    { "f": "sales_orders",           "t": "sales_order_lines",        "own": true },
+    { "f": "import_batches",         "t": "platform_transactions" },
+
+    { "f": "partners",               "t": "sales_orders" },
+    { "f": "delivery_destinations",  "t": "sales_orders" },
+    { "f": "warehouses",             "t": "sales_orders" },
+    { "f": "skus",                   "t": "sales_order_lines" },
+    { "f": "partner_products",       "t": "sales_order_lines" },
+
+    { "f": "sales_orders",           "t": "shipments" },
+    { "f": "sales_order_lines",      "t": "shipment_lines" },
+    { "f": "warehouses",             "t": "shipments" },
+    { "f": "partners",               "t": "returns" },
+
+    { "f": "shipments",              "t": "shipment_lines",           "own": true },
+    { "f": "shipments",              "t": "shipment_documents",       "own": true },
+    { "f": "shipments",              "t": "returns" },
+    { "f": "returns",                "t": "return_lines",             "own": true },
+    { "f": "return_lines",           "t": "refurbishments",           "own": true },
+
+    { "f": "shipments",              "t": "invoice_lines" },
+    { "f": "returns",                "t": "invoice_lines" },
+
+    { "f": "invoices",               "t": "invoice_lines",            "own": true },
+    { "f": "invoices",               "t": "invoice_tax_summaries",    "own": true },
+    { "f": "invoices",               "t": "cash_receipts" },
+    { "f": "purchases",              "t": "purchase_lines",           "own": true },
+    { "f": "purchase_items",         "t": "purchase_lines" },
+    { "f": "cash_transactions",      "t": "cash_receipts" },
+    { "f": "cash_transactions",      "t": "cash_payments" },
+    { "f": "royalty_calculations",   "t": "royalty_calculation_lines","own": true },
+    { "f": "royalty_rules",          "t": "royalty_calculation_lines" },
+    { "f": "partners",               "t": "royalty_rules" },
+    { "f": "brands",                 "t": "royalty_rules" },
+    { "f": "partners",               "t": "royalty_calculations" },
+    { "f": "partners",               "t": "royalty_calculation_lines" },
+
+    { "f": "partners",               "t": "invoices" },
+    { "f": "partners",               "t": "ar_ledgers" },
+    { "f": "partners",               "t": "purchases" },
+    { "f": "partners",               "t": "ap_ledgers" },
+
+    { "f": "users",                  "t": "user_roles",               "own": true },
+    { "f": "roles",                  "t": "user_roles" },
+    { "f": "roles",                  "t": "role_permissions",         "own": true },
+    { "f": "permissions",            "t": "role_permissions" },
+    { "f": "code_categories",        "t": "codes",                    "own": true }
+  ],
+
+  "notes": [
+    "実線は表と表のつながり（外部キー）。矢印は「1件に対して複数件」の向きを示す。",
+    "太い線は親子関係（受注→受注明細のように、片方を消すともう片方も消える関係）。",
+    "汎用区分 codes は取引先区分・商品区分など多数の表から参照されるため、線は省略している。",
+    "ユーザー users も全表の登録者・更新者として参照されるため、線は省略している。"
+  ]
+}

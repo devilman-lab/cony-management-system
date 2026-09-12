@@ -1,0 +1,10 @@
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 環境設定（接続情報と鍵が入る）
+.env
+.env.*
+!.env.example

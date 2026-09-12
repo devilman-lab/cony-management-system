@@ -1,0 +1,217 @@
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { sql } from 'kysely';
+
+import { KYSELY, type ConyDatabase } from '../db/database.module';
+import type { Paged } from '../masters/partners.service';
+
+export interface ShipmentListQuery {
+  status?: string;
+  warehouse_id?: number;
+  from?: string;
+  to?: string;
+  limit: number;
+  offset: number;
+}
+
+@Injectable()
+export class ShipmentsService {
+  constructor(@Inject(KYSELY) private readonly db: ConyDatabase) {}
+
+  async list(query: ShipmentListQuery): Promise<Paged<Record<string, unknown>>> {
+    let base = this.db
+      .selectFrom('shipments as sh')
+      .leftJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+      .leftJoin('partners as p', 'p.id', 'o.partner_id')
+      .innerJoin('warehouses as w', 'w.id', 'sh.warehouse_id')
+      .where('sh.status', '<>', '削除');
+
+    if (query.status) base = base.where('sh.status', '=', query.status);
+    if (query.warehouse_id !== undefined) base = base.where('sh.warehouse_id', '=', query.warehouse_id);
+    if (query.from) base = base.where('sh.planned_ship_date', '>=', query.from);
+    if (query.to) base = base.where('sh.planned_ship_date', '<=', query.to);
+
+    const [items, total] = await Promise.all([
+      base
+        .select([
+          'sh.id as id',
+          'sh.shipment_no as shipment_no',
+          'sh.status as status',
+          'sh.planned_ship_date as planned_ship_date',
+          'sh.ship_date as ship_date',
+          'sh.consolidated_to_shipment_id as consolidated_to_shipment_id',
+          'o.id as sales_order_id',
+          'o.order_no as order_no',
+          'o.order_type as order_type',
+          'o.is_billable as is_billable',
+          'p.name1 as partner_name',
+          'w.short_name as warehouse_name',
+        ])
+        .orderBy('sh.planned_ship_date', sql`asc nulls last`)
+        .orderBy('sh.shipment_no', 'asc')
+        .limit(query.limit)
+        .offset(query.offset)
+        .execute(),
+      base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
+    ]);
+
+    return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
+  }
+
+  /**
+   * 出荷確定。**ここで初めて実在庫が減る。**
+   *
+   * 引当済も同じ数だけ減らす。有効在庫（＝実在庫−引当済）は生成列なので、
+   * 両方を同じ数だけ減らせば有効在庫は変わらない。押さえていた分が
+   * そのまま棚から出ていく、という動きになる。
+   */
+  async confirm(shipmentId: number, shipDate: string | null, userId: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const shipment = await trx
+        .selectFrom('shipments')
+        .selectAll()
+        .where('id', '=', shipmentId)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!shipment) throw new NotFoundException(`出荷が見つかりません（ID: ${shipmentId}）`);
+      if (shipment.status === '出荷済') throw new ConflictException('すでに出荷済みです');
+      if (shipment.status === '削除') throw new ConflictException('取り消された出荷です');
+      if (!shipment.sales_order_id) throw new ConflictException('受注に紐づいていない出荷です');
+
+      const allocations = await trx
+        .selectFrom('allocations as a')
+        .innerJoin('sales_order_lines as l', 'l.id', 'a.sales_order_line_id')
+        .select([
+          'a.id as id',
+          'a.stock_id as stock_id',
+          'a.qty as qty',
+          'a.sku_id as sku_id',
+          'l.id as line_id',
+          'l.line_no as line_no',
+          'l.item_name as item_name',
+          'l.unit_price as unit_price',
+          'l.tax_rate as tax_rate',
+        ])
+        .where('l.sales_order_id', '=', shipment.sales_order_id)
+        .where('a.status', '=', '引当中')
+        .execute();
+
+      if (allocations.length === 0) {
+        throw new ConflictException('引当がありません。先に出荷指示を出してください');
+      }
+
+      let lineNo = 0;
+      for (const alloc of allocations) {
+        const before = await trx
+          .selectFrom('stocks')
+          .select('qty_on_hand')
+          .where('id', '=', alloc.stock_id)
+          .executeTakeFirstOrThrow();
+
+        // 実在庫と引当済を同じ数だけ減らす。有効在庫は動かない。
+        await trx
+          .updateTable('stocks')
+          .set({
+            qty_on_hand: sql<string>`qty_on_hand - ${alloc.qty}::numeric`,
+            qty_allocated: sql<string>`qty_allocated - ${alloc.qty}::numeric`,
+            updated_by: userId,
+            updated_at: new Date(),
+          })
+          .where('id', '=', alloc.stock_id)
+          .execute();
+
+        await trx
+          .updateTable('allocations')
+          .set({ status: '出荷済', updated_by: userId, updated_at: new Date() })
+          .where('id', '=', alloc.id)
+          .execute();
+
+        await trx
+          .insertInto('stock_movements')
+          .values({
+            stock_id: alloc.stock_id,
+            movement_type: '出荷',
+            ref_table: 'shipments',
+            ref_id: shipmentId,
+            qty: sql<string>`-${alloc.qty}::numeric`,
+            qty_before: before.qty_on_hand,
+            qty_after: sql<string>`${before.qty_on_hand}::numeric - ${alloc.qty}::numeric`,
+            created_by: userId,
+          })
+          .execute();
+
+        lineNo += 1;
+        await trx
+          .insertInto('shipment_lines')
+          .values({
+            shipment_id: shipmentId,
+            line_no: lineNo,
+            sales_order_line_id: alloc.line_id,
+            sku_id: alloc.sku_id,
+            item_name: alloc.item_name,
+            qty: alloc.qty,
+            unit_price: alloc.unit_price,
+            tax_rate: alloc.tax_rate,
+            amount: sql<string>`${alloc.qty}::numeric * ${alloc.unit_price}::numeric`,
+            created_by: userId,
+          })
+          .execute();
+      }
+
+      await trx
+        .updateTable('shipments')
+        .set({
+          status: '出荷済',
+          ship_date: shipDate ?? sql<string>`current_date`,
+          updated_by: userId,
+          updated_at: new Date(),
+        })
+        .where('id', '=', shipmentId)
+        .execute();
+
+      await trx
+        .updateTable('sales_orders')
+        .set({ status: '出荷済', updated_by: userId, updated_at: new Date() })
+        .where('id', '=', shipment.sales_order_id)
+        .execute();
+
+      return {
+        shipment_id: shipmentId,
+        shipment_no: shipment.shipment_no,
+        status: '出荷済',
+        lines: lineNo,
+      };
+    });
+  }
+
+  async findOne(id: number) {
+    const shipment = await this.db
+      .selectFrom('shipments as sh')
+      .leftJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+      .leftJoin('partners as p', 'p.id', 'o.partner_id')
+      .innerJoin('warehouses as w', 'w.id', 'sh.warehouse_id')
+      .selectAll('sh')
+      .select(['o.order_no as order_no', 'p.name1 as partner_name', 'w.short_name as warehouse_name'])
+      .where('sh.id', '=', id)
+      .executeTakeFirst();
+
+    if (!shipment) throw new NotFoundException(`出荷が見つかりません（ID: ${id}）`);
+
+    const lines = await this.db
+      .selectFrom('shipment_lines as l')
+      .leftJoin('skus as s', 's.id', 'l.sku_id')
+      .select([
+        'l.line_no as line_no',
+        's.sku_code as sku_code',
+        'l.item_name as item_name',
+        'l.qty as qty',
+        'l.unit_price as unit_price',
+        'l.amount as amount',
+      ])
+      .where('l.shipment_id', '=', id)
+      .orderBy('l.line_no', 'asc')
+      .execute();
+
+    return { ...shipment, lines };
+  }
+}

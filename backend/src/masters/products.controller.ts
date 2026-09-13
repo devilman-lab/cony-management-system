@@ -1,4 +1,5 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { z } from 'zod';
 
 import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
@@ -23,6 +24,14 @@ const SkuSearchSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 type SkuSearchQuery = z.infer<typeof SkuSearchSchema>;
+
+const JanExportSchema = z.object({
+  include_inactive: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+});
+type JanExportQuery = z.infer<typeof JanExportSchema>;
 
 /** 機能ID M-08 商品マスタ／M-09 SKUコードマスタ */
 @Controller('masters')
@@ -51,6 +60,23 @@ export class ProductsController {
   async findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
     const showCost = await this.auth.canSeeSensitive(user.id);
     return this.products.findOne(id, showCost);
+  }
+
+  /** JANコード出力。Excel で開ける CSV（BOM付き）で返す。`skus` より先に置く必要はない。 */
+  @Get('skus/jan-export')
+  @RequirePermission('M-09', 'print')
+  async janExport(
+    @Query(new ZodValidationPipe(JanExportSchema)) query: JanExportQuery,
+    @Res() res: Response,
+  ): Promise<void> {
+    const csv = await this.products.janExportCsv(query.include_inactive);
+    const name = `JANコード一覧_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="jan-codes.csv"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    );
+    res.end(csv);
   }
 
   /** 受注入力から呼ぶ SKU 検索。SKUコード・JAN・商品名・商品コードで引ける。 */

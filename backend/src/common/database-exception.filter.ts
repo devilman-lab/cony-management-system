@@ -40,6 +40,8 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   ck_imptpl_orderno: '受注番号の採り方は csv／auto のいずれかです',
   ck_imptplcol_field: '取込先の項目が定義されていない値です',
   ck_setting_number: '数値の設定に数値以外は入れられません',
+  ck_saved_scope: '共有範囲は private（本人のみ）／shared（全体）のいずれかです',
+  ck_ext_status: '取込の状態は 取込済／変換済／エラー／取消 のいずれかです',
 };
 
 const UNIQUE_MESSAGES: Record<string, string> = {
@@ -65,6 +67,21 @@ export class DatabaseExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       res.status(status).json(exception.getResponse());
+      return;
+    }
+
+    // body-parser などが投げる、HTTP の状態を持った例外
+    const withStatus = exception as { status?: number; statusCode?: number; type?: string };
+    const rawStatus = withStatus.status ?? withStatus.statusCode;
+    if (typeof rawStatus === 'number' && rawStatus >= 400 && rawStatus < 600) {
+      const message =
+        rawStatus === HttpStatus.PAYLOAD_TOO_LARGE
+          ? 'ファイルが大きすぎます。担当者に上限（MAX_UPLOAD_MB）の引き上げをご相談ください'
+          : exception instanceof Error
+            ? exception.message
+            : '要求を処理できませんでした';
+      this.logger.warn(` `);
+      res.status(rawStatus).json({ statusCode: rawStatus, message });
       return;
     }
 

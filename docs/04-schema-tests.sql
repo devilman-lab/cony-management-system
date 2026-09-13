@@ -530,8 +530,8 @@ DO $b15$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM system_settings;
-  IF n <> 20 THEN
-    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 20 件）', n USING ERRCODE='TF001';
+  IF n <> 24 THEN
+    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 24 件）', n USING ERRCODE='TF001';
   END IF;
 
   -- 貴社にご説明した項目が、いずれもコードではなく設定として存在すること

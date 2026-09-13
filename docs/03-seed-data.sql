@@ -376,6 +376,16 @@ VALUES
    '単価あり,単価あり2,上代あり,単価なし',
    '※ 納品先マスタの伝票発行分類が未設定のときに使う様式。使い分け一覧を頂戴後に見直す。', 30),
 
+  -- 帳票の差出人。納品書・請求書の上部に印刷する。画面から変更できる。
+  ('COMPANY_NAME',       'DOCUMENT', '帳票に印刷する自社名', '株式会社コニー', 'text', NULL,
+   '納品書・請求書の差出人。', 40),
+  ('COMPANY_ADDRESS',    'DOCUMENT', '帳票に印刷する自社住所', '', 'text', NULL,
+   '※ 帳票に印刷する住所を頂戴ください。', 50),
+  ('COMPANY_TEL',        'DOCUMENT', '帳票に印刷する電話番号', '', 'text', NULL,
+   '※ 帳票に印刷する電話番号を頂戴ください。', 60),
+  ('COMPANY_INVOICE_NO', 'DOCUMENT', '適格請求書発行事業者番号', '', 'text', NULL,
+   '※ T から始まる登録番号。空欄のときは請求書に印刷しない。', 70),
+
   -- 受注・在庫の運用（2026/09/08 確認事項）
   ('ALLOCATION_TIMING', 'ORDER', '在庫を引き当てるタイミング', 'shipping_instruction', 'text',
    'order_entry,shipping_instruction',

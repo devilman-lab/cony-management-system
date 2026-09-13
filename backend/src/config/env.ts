@@ -21,6 +21,20 @@ const schema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
+  /** 取込CSVの上限（MB）。base64 で送るため実ファイルの約1.4倍を見込む。 */
+  MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(200).default(20),
+
+  /** 添付ファイルの実体を置く場所。DB にはメタデータだけを持つ。 */
+  ATTACHMENT_DIR: z.string().default('./storage/attachments'),
+
+  /**
+   * 帳票PDFに埋め込む日本語フォントのファイル（.ttf / .otf / .ttc）。
+   * フォントは配布条件があるため同梱しない。未設定のときは稼働先にあるものを探す。
+   */
+  PDF_FONT_PATH: z.string().optional(),
+  /** .ttc のように複数書体を含むファイルで、使う書体の名前。 */
+  PDF_FONT_FAMILY: z.string().optional(),
+
   JWT_SECRET: z.string().min(32, 'JWT_SECRET は32文字以上にしてください'),
   /** ログインの有効時間（秒）。既定は8時間＝1営業日。 */
   JWT_EXPIRES_SECONDS: z.coerce.number().int().positive().default(28_800),

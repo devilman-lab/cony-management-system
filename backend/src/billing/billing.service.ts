@@ -300,6 +300,89 @@ export class BillingService {
     return totals;
   }
 
+  /**
+   * 請求の手入力欄を直す。
+   *
+   * 未計上10%/8%・調整10%/8%・手数料・送料は、現時点では定義が固まっておらず
+   * 手入力で運用いただく前提（要件定義書 第10章）。直したら当月請求額と
+   * 今回請求残高、売掛元帳を締め処理と同じ式で計算し直す。
+   */
+  async updateInvoice(
+    id: number,
+    values: {
+      unposted_10?: string;
+      unposted_8?: string;
+      adjust_10?: string;
+      adjust_8?: string;
+      fee_amount?: string;
+      shipping_fee_amount?: string;
+      po_no?: string | null;
+    },
+    userId: number,
+  ) {
+    const clean = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
+    if (Object.keys(clean).length === 0) {
+      throw new BadRequestException('更新する項目がありません');
+    }
+
+    return this.db.transaction().execute(async (trx) => {
+      const invoice = await trx
+        .selectFrom('invoices')
+        .select(['id', 'status'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!invoice) throw new NotFoundException(`請求が見つかりません（ID: ${id}）`);
+      if (invoice.status !== '未発行') {
+        throw new ConflictException(
+          `${invoice.status}の請求は直せません。取り消してから締め直してください`,
+        );
+      }
+
+      await trx
+        .updateTable('invoices')
+        .set({ ...clean, updated_by: userId, updated_at: new Date() } as never)
+        .where('id', '=', id)
+        .execute();
+
+      // 締め処理と同じ式。片方だけ直して食い違うことがないよう、ここでも同じものを使う。
+      await trx
+        .updateTable('invoices')
+        .set({
+          current_invoice_amount: sql<string>`
+            (select coalesce(sum(amount),0) from invoice_lines where invoice_id = ${id})
+            + (select coalesce(sum(tax_amount),0) from invoice_tax_summaries where invoice_id = ${id})
+            + shipping_fee_amount + fee_amount + adjust_10 + adjust_8 + unposted_10 + unposted_8`,
+        })
+        .where('id', '=', id)
+        .execute();
+
+      await trx
+        .updateTable('invoices')
+        .set({ current_balance: sql<string>`carryover_balance + current_invoice_amount` })
+        .where('id', '=', id)
+        .execute();
+
+      await sql`
+        update ar_ledgers a
+           set charge_amount   = i.current_invoice_amount,
+               closing_balance = i.current_balance,
+               updated_by      = ${userId},
+               updated_at      = now()
+          from invoices i
+         where i.id = ${id}
+           and a.partner_id = i.partner_id
+           and a.period_to  = i.period_to`.execute(trx);
+
+      return trx
+        .selectFrom('invoices')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+    });
+  }
+
   async listInvoices(query: {
     partner_id?: number;
     status?: string;

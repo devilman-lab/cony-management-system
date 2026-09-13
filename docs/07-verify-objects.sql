@@ -65,7 +65,7 @@ WITH expected(sort_key, category, item, actual, expect) AS (
   UNION ALL
   SELECT 370, '初期データ', '採番ルール',           (SELECT count(*) FROM numbering_rules), 11
   UNION ALL
-  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 20
+  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 24
   UNION ALL
   SELECT 390, '初期データ', '取込テンプレート（販社4社）',
                                                     (SELECT count(*) FROM import_templates), 4

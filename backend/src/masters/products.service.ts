@@ -176,4 +176,69 @@ export class ProductsService {
       .limit(query.limit)
       .execute();
   }
+
+  /**
+   * JANコードの一覧を CSV で出す。
+   *
+   * ラベル発行や販社への提出に使う。**先頭に BOM を付ける。**付けないと
+   * Excel で開いたときに日本語が化け、JANの先頭の 0 も落ちるため、
+   * JAN は `="..."` の形にして文字列として読ませる。
+   */
+  async janExportCsv(includeInactive: boolean): Promise<string> {
+    let q = this.db
+      .selectFrom('skus as s')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .leftJoin('brands as b', 'b.id', 'p.brand_id')
+      .leftJoin('colors as c', 'c.id', 's.color_id')
+      .leftJoin('sizes as z', 'z.id', 's.size_id');
+
+    if (!includeInactive) q = q.where('s.is_active', '=', true).where('p.is_active', '=', true);
+
+    const rows = await q
+      .select([
+        's.sku_code as sku_code',
+        's.jan as jan',
+        'p.product_code as product_code',
+        'p.product_name as product_name',
+        'b.name as brand_name',
+        'c.name as color_name',
+        'z.name as size_name',
+        's.pack_division as pack_division',
+        's.is_active as is_active',
+      ])
+      .orderBy('s.sku_code', 'asc')
+      .execute();
+
+    const header = [
+      'SKUコード',
+      'JANコード',
+      '商品コード',
+      '商品名',
+      'ブランド',
+      'カラー',
+      'サイズ',
+      '入数区分',
+      '有効',
+    ];
+    const esc = (v: string | null): string => `"${(v ?? '').replace(/"/g, '""')}"`;
+
+    const lines = [header.map((h) => esc(h)).join(',')];
+    for (const r of rows) {
+      lines.push(
+        [
+          esc(r.sku_code),
+          r.jan ? `"=""${r.jan}"""` : '""',
+          esc(r.product_code),
+          esc(r.product_name),
+          esc(r.brand_name),
+          esc(r.color_name),
+          esc(r.size_name),
+          esc(r.pack_division),
+          esc(r.is_active ? '有効' : '無効'),
+        ].join(','),
+      );
+    }
+
+    return '﻿' + lines.join('\r\n') + '\r\n';
+  }
 }

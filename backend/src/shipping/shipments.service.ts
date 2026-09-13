@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { sql } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
@@ -182,6 +188,106 @@ export class ShipmentsService {
         lines: lineNo,
       };
     });
+  }
+
+  /**
+   * 同梱。複数の出荷を1つの箱にまとめる。
+   *
+   * 通販では同じ住所あての受注が別々に立つことがあり、現行でも1箱で送っている。
+   * まとめ先の出荷はそのまま残し、まとめられた側から `consolidated_to_shipment_id` で
+   * まとめ先を指す。**受注も出荷も消さない。**あとから内訳をたどれる必要があるため。
+   * 出荷指示番号は受注番号と同じものを使う決まりなので、ここでは採り直さない。
+   */
+  async consolidate(shipmentIds: number[], intoShipmentId: number, userId: number) {
+    const targets = shipmentIds.filter((id) => id !== intoShipmentId);
+    if (targets.length === 0) {
+      throw new BadRequestException('まとめ先とは別の出荷を1件以上選んでください');
+    }
+
+    const ids = [...targets, intoShipmentId];
+
+    return this.db.transaction().execute(async (trx) => {
+      // 先に出荷の行だけを押さえる。外部結合を含んだまま FOR UPDATE を付けると、
+      // 結合の外側（受注がない出荷）を掴めず PostgreSQL が断るため、2段に分ける。
+      await trx.selectFrom('shipments').select('id').where('id', 'in', ids).forUpdate().execute();
+
+      const rows = await trx
+        .selectFrom('shipments as sh')
+        .leftJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+        .select([
+          'sh.id as id',
+          'sh.shipment_no as shipment_no',
+          'sh.status as status',
+          'sh.warehouse_id as warehouse_id',
+          'sh.consolidated_to_shipment_id as consolidated_to_shipment_id',
+          'o.partner_id as partner_id',
+          'o.delivery_destination_id as delivery_destination_id',
+        ])
+        .where('sh.id', 'in', ids)
+        .execute();
+
+      const into = rows.find((r) => r.id === intoShipmentId);
+      if (!into) throw new NotFoundException(`まとめ先の出荷が見つかりません（ID: ${intoShipmentId}）`);
+      if (rows.length !== targets.length + 1) {
+        throw new NotFoundException('選んだ出荷の中に見つからないものがあります');
+      }
+
+      for (const r of rows) {
+        if (r.status === '出荷済') {
+          throw new ConflictException(`${r.shipment_no} はすでに出荷済みです`);
+        }
+        if (r.status === '削除') {
+          throw new ConflictException(`${r.shipment_no} は取り消された出荷です`);
+        }
+        if (r.warehouse_id !== into.warehouse_id) {
+          throw new ConflictException(`${r.shipment_no} は出荷倉庫が違うため同梱できません`);
+        }
+        if (r.partner_id !== into.partner_id) {
+          throw new ConflictException(`${r.shipment_no} は得意先が違うため同梱できません`);
+        }
+        if (r.delivery_destination_id !== into.delivery_destination_id) {
+          throw new ConflictException(`${r.shipment_no} は納品先が違うため同梱できません`);
+        }
+      }
+      if (into.consolidated_to_shipment_id !== null) {
+        throw new ConflictException('まとめ先がすでに別の出荷に同梱されています');
+      }
+
+      await trx
+        .updateTable('shipments')
+        .set({
+          consolidated_to_shipment_id: intoShipmentId,
+          updated_by: userId,
+          updated_at: new Date(),
+        })
+        .where('id', 'in', targets)
+        .execute();
+
+      return {
+        into_shipment_id: intoShipmentId,
+        into_shipment_no: into.shipment_no,
+        consolidated: rows.filter((r) => r.id !== intoShipmentId).map((r) => ({
+          shipment_id: r.id,
+          shipment_no: r.shipment_no,
+        })),
+      };
+    });
+  }
+
+  /** 同梱を解く。1件ずつ元に戻す。 */
+  async unconsolidate(shipmentId: number, userId: number) {
+    const row = await this.db
+      .updateTable('shipments')
+      .set({ consolidated_to_shipment_id: null, updated_by: userId, updated_at: new Date() })
+      .where('id', '=', shipmentId)
+      .where('status', '<>', '出荷済')
+      .returning(['id', 'shipment_no'])
+      .executeTakeFirst();
+
+    if (!row) {
+      throw new NotFoundException('出荷が見つからないか、すでに出荷済みのため解けません');
+    }
+    return { shipment_id: row.id, shipment_no: row.shipment_no, consolidated_to_shipment_id: null };
   }
 
   async findOne(id: number) {

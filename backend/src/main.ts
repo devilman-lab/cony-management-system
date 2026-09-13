@@ -2,6 +2,7 @@ import 'reflect-metadata';
 
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
@@ -9,7 +10,11 @@ import { DatabaseExceptionFilter } from './common/database-exception.filter';
 import { env } from './config/env';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+
+  // CSV は base64 で送るため、既定の 100KB では通販CSV（95KB）もAmazonレポート
+  // （480KB）も入らない。上限を設定で持たせる。
+  app.useBodyParser('json', { limit: `${env.MAX_UPLOAD_MB}mb` });
 
   app.use(helmet());
   app.enableCors({ origin: env.CORS_ORIGINS, credentials: true });

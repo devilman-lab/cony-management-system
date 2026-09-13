@@ -150,18 +150,23 @@ export class OrdersService {
   }
 
   private validate(input: CreateOrderInput): void {
-    if (input.lines.length === 0) {
-      throw new BadRequestException('明細を1行以上入力してください');
-    }
     if (input.order_type === '卸' && !input.delivery_destination_id) {
       throw new BadRequestException('卸の受注では納品先を選んでください');
     }
     if (input.order_type === '直送' && !input.direct_name) {
       throw new BadRequestException('直送の受注ではお届け先のお名前を入力してください');
     }
+    this.validateLines(input.lines, input.order_type);
+  }
+
+  /** 明細の決まり。登録と修正の両方から使う。 */
+  private validateLines(lines: OrderLineInput[], _orderType: OrderType): void {
+    if (lines.length === 0) {
+      throw new BadRequestException('明細を1行以上入力してください');
+    }
 
     const seen = new Set<number>();
-    for (const line of input.lines) {
+    for (const line of lines) {
       if (seen.has(line.line_no)) {
         throw new BadRequestException(`行番号 ${line.line_no} が重複しています`);
       }
@@ -175,7 +180,7 @@ export class OrdersService {
       }
     }
 
-    for (const line of input.lines) {
+    for (const line of lines) {
       if (line.parent_line_no && !seen.has(line.parent_line_no)) {
         throw new BadRequestException(`${line.line_no}行目：親の行 ${line.parent_line_no} がありません`);
       }
@@ -275,6 +280,57 @@ export class OrdersService {
       .execute();
 
     return { ...order, lines };
+  }
+
+  /**
+   * 受注の修正（ご要望⑨⑩「受注一覧のまま編集」）。
+   *
+   * 出荷指示を出したあとは修正できない。在庫を押さえたあとで数量を変えると
+   * 引当と受注が食い違うため、先に出荷指示を取り消していただく。
+   * 明細を渡した場合は入れ替えになる（渡さなければヘッダだけ直す）。
+   */
+  async update(
+    id: number,
+    input: Partial<CreateOrderInput>,
+    userId: number,
+  ): Promise<{ id: number; order_no: string }> {
+    return this.db.transaction().execute(async (trx) => {
+      const order = await trx
+        .selectFrom('sales_orders')
+        .select(['id', 'order_no', 'status', 'is_cancelled', 'order_type'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!order) throw new NotFoundException(`受注が見つかりません（ID: ${id}）`);
+      if (order.is_cancelled) throw new ConflictException('取り消された受注は修正できません');
+      if (order.status !== '未確定') {
+        throw new ConflictException(
+          `この受注は「${order.status}」です。先に出荷指示を取り消してから修正してください`,
+        );
+      }
+
+      const { lines, ...header } = input;
+      const values = Object.fromEntries(
+        Object.entries(header).filter(([, v]) => v !== undefined),
+      ) as Record<string, unknown>;
+
+      if (Object.keys(values).length > 0) {
+        await trx
+          .updateTable('sales_orders')
+          .set({ ...values, updated_by: userId, updated_at: new Date() } as never)
+          .where('id', '=', id)
+          .execute();
+      }
+
+      if (lines) {
+        this.validateLines(lines, (input.order_type ?? order.order_type) as OrderType);
+        await trx.deleteFrom('sales_order_lines').where('sales_order_id', '=', id).execute();
+        await this.insertLines(trx, id, lines, userId);
+      }
+
+      return { id, order_no: order.order_no };
+    });
   }
 
   /**

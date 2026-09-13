@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
@@ -21,6 +31,12 @@ type ListQuery = z.infer<typeof ListQuerySchema>;
 const ConfirmSchema = z.object({ ship_date: ymd.nullish() }).default({});
 type ConfirmBody = z.infer<typeof ConfirmSchema>;
 
+const ConsolidateSchema = z.object({
+  shipment_ids: z.array(z.number().int().positive()).min(1, '同梱する出荷を選んでください'),
+  into_shipment_id: z.number().int().positive(),
+});
+type ConsolidateBody = z.infer<typeof ConsolidateSchema>;
+
 /** 機能ID D-01 出荷指示（出荷依頼一覧・出荷確定） */
 @Controller('shipments')
 export class ShipmentsController {
@@ -36,6 +52,24 @@ export class ShipmentsController {
   @RequirePermission('D-01', 'view')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.shipments.findOne(id);
+  }
+
+  /** 同梱。同じ得意先・納品先・倉庫の出荷を1つにまとめる。 */
+  @Post('consolidate')
+  @HttpCode(200)
+  @RequirePermission('D-01', 'update')
+  consolidate(
+    @Body(new ZodValidationPipe(ConsolidateSchema)) body: ConsolidateBody,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.shipments.consolidate(body.shipment_ids, body.into_shipment_id, user.id);
+  }
+
+  /** 同梱を解く。 */
+  @Delete(':id/consolidation')
+  @RequirePermission('D-01', 'update')
+  unconsolidate(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.shipments.unconsolidate(id, user.id);
   }
 
   /** 出荷確定。ここで初めて実在庫が減る。 */

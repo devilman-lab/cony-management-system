@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
@@ -91,6 +91,17 @@ export class OrdersController {
   @RequirePermission('O-03', 'view')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.orders.findOne(id);
+  }
+
+  /** 受注の修正。出荷指示を出す前だけ直せる（ご要望⑨⑩）。 */
+  @Patch(':id')
+  @RequirePermission('O-01', 'update')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body(new ZodValidationPipe(CreateOrderSchema.partial())) body: Partial<CreateOrderBody>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.orders.update(id, body, user.id);
   }
 
   @Post(':id/cancel')

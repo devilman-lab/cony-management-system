@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
@@ -10,6 +10,8 @@ import { RoyaltyService } from './royalty.service';
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const ym = z.string().regex(/^\d{4}-\d{2}$/, '対象年月は YYYY-MM の形式で入力してください');
 const positive = z.string().regex(/^\d+(\.\d+)?$/, '0 以上の数値で入力してください');
+/** 調整欄は値引きも入れるため負数を許す。 */
+const amount = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
 
 const ClosingSchema = z.object({
   target_month: ym,
@@ -44,6 +46,18 @@ const CashReceiptListSchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 type CashReceiptListQuery = z.infer<typeof CashReceiptListSchema>;
+
+/** 請求の手入力欄。定義が固まるまで手で入れていただく項目（要件定義書 第10章）。 */
+const InvoiceUpdateSchema = z.object({
+  unposted_10: amount.optional(),
+  unposted_8: amount.optional(),
+  adjust_10: amount.optional(),
+  adjust_8: amount.optional(),
+  fee_amount: amount.optional(),
+  shipping_fee_amount: amount.optional(),
+  po_no: z.string().trim().max(40).nullish(),
+});
+type InvoiceUpdateBody = z.infer<typeof InvoiceUpdateSchema>;
 
 const RoyaltyCalcSchema = z.object({ target_month: ym });
 type RoyaltyCalcBody = z.infer<typeof RoyaltyCalcSchema>;
@@ -83,6 +97,17 @@ export class BillingController {
   @RequirePermission('B-02', 'view')
   findInvoice(@Param('id', ParseIntPipe) id: number) {
     return this.billing.findInvoice(id);
+  }
+
+  /** 未計上・調整・手数料・送料の手入力。直すと当月請求額と残高を計算し直す。 */
+  @Patch('invoices/:id')
+  @RequirePermission('B-02', 'update')
+  updateInvoice(
+    @Param('id', ParseIntPipe) id: number,
+    @Body(new ZodValidationPipe(InvoiceUpdateSchema)) body: InvoiceUpdateBody,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.billing.updateInvoice(id, body, user.id);
   }
 
   @Post('invoices/:id/issue')

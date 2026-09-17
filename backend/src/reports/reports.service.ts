@@ -1,9 +1,12 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { sql } from 'kysely';
 
+import { AttachmentsService } from '../attachments/attachments.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
+import { ShipmentsService } from '../shipping/shipments.service';
 import { CONTENT_WIDTH, ReportDoc, money, qty, ymd, type Column } from './pdf-builder';
+import { mergeToPdf, type MergeInput } from './pdf-merge';
 
 /** 納品書の様式。設定 DELIVERY_NOTE_DEFAULT_FORM の選択肢と一致させる。 */
 export const DELIVERY_NOTE_FORMS = ['単価あり', '単価あり2', '上代あり', '単価なし'] as const;
@@ -12,14 +15,114 @@ export type DeliveryNoteForm = (typeof DELIVERY_NOTE_FORMS)[number];
 export interface PrintResult {
   pdf: Buffer;
   filename: string;
+  /** 一緒に印刷できなかった添付（Excel・Word など）。応答ヘッダで知らせる。 */
+  skipped?: string[];
 }
+
+/** 出荷確定と同時に印刷する帳票の種類。 */
+export const PRINT_DOCUMENTS = ['出荷指示書', 'ピッキングリスト', '納品書'] as const;
+export type PrintDocument = (typeof PRINT_DOCUMENTS)[number];
 
 @Injectable()
 export class ReportsService {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly settings: SettingsService,
+    private readonly shipments: ShipmentsService,
+    private readonly attachments: AttachmentsService,
   ) {}
+
+  // ==========================================================================
+  // 出荷確定と印刷を同時に行う（9/15 ご確認②）
+  // ==========================================================================
+
+  /**
+   * 物流PCの「出荷確定」ボタン。選んだ出荷をまとめて確定し（実在庫が減る）、
+   * 帳票と添付ファイルを1つの PDF にして返す。確定は全件まとめて1つのトランザクションで
+   * 行うので、途中で1件でも通らなければ何も確定しない。
+   */
+  async confirmAndPrint(
+    input: {
+      shipment_ids: number[];
+      documents: PrintDocument[];
+      form?: DeliveryNoteForm;
+      ship_date?: string | null;
+      include_attachments: boolean;
+    },
+    userId: number,
+  ): Promise<PrintResult & { confirmed: { shipment_id: number; shipment_no: string }[] }> {
+    if (input.shipment_ids.length === 0) throw new BadRequestException('出荷を選んでください');
+    const ids = [...new Set(input.shipment_ids)];
+
+    const confirmed = await this.db.transaction().execute(async (trx) => {
+      const done: { shipment_id: number; shipment_no: string }[] = [];
+      for (const id of ids) {
+        const r = await this.shipments.confirmInTrx(trx, id, input.ship_date ?? null, userId);
+        done.push({ shipment_id: r.shipment_id, shipment_no: r.shipment_no });
+      }
+      return done;
+    });
+
+    // 帳票は出荷ごとにまとめず、種類ごとに全件分を1本ずつ作って並べる（頂いた運用どおり）
+    const parts: MergeInput[] = [];
+    for (const kind of input.documents) {
+      const r =
+        kind === '出荷指示書'
+          ? await this.shippingInstructions(ids, userId)
+          : kind === 'ピッキングリスト'
+            ? await this.pickingList(ids, userId)
+            : await this.deliveryNotes(ids, input.form, userId);
+      parts.push({ name: r.filename, mime: 'application/pdf', content: r.pdf });
+    }
+
+    if (input.include_attachments) {
+      for (const id of ids) {
+        for (const att of await this.printableAttachments(id)) parts.push(att);
+      }
+    }
+
+    const merged = await mergeToPdf(parts);
+    return {
+      pdf: merged.pdf,
+      filename: this.filename('出荷確定', ids.length),
+      skipped: merged.skipped,
+      confirmed,
+    };
+  }
+
+  /** 出荷指示のときに一緒に印刷する添付。出荷に付いたものと、その受注に付いたもの。 */
+  private async printableAttachments(shipmentId: number): Promise<MergeInput[]> {
+    const sh = await this.db
+      .selectFrom('shipments')
+      .select('sales_order_id')
+      .where('id', '=', shipmentId)
+      .executeTakeFirst();
+
+    let q = this.db
+      .selectFrom('attachments')
+      .select(['id', 'file_name', 'mime_type'])
+      .where('is_print_target', '=', true);
+    q = sh?.sales_order_id
+      ? q.where((eb) =>
+          eb.or([
+            eb.and([eb('ref_table', '=', 'shipments'), eb('ref_id', '=', shipmentId)]),
+            eb.and([eb('ref_table', '=', 'sales_orders'), eb('ref_id', '=', sh.sales_order_id as number)]),
+          ]),
+        )
+      : q.where('ref_table', '=', 'shipments').where('ref_id', '=', shipmentId);
+
+    const rows = await q.orderBy('id').execute();
+    const out: MergeInput[] = [];
+    for (const row of rows) {
+      try {
+        const file = await this.attachments.read(row.id);
+        out.push({ name: file.file_name, mime: file.mime_type, content: file.content });
+      } catch {
+        out.push({ name: `${row.file_name}（実体なし）`, mime: '', content: Buffer.alloc(0) });
+      }
+    }
+    return out;
+  }
 
   // ==========================================================================
   // 出荷指示書
@@ -194,7 +297,7 @@ export class ReportsService {
         ['納品先No', sh.partner_delivery_no ?? ''],
       ]);
       doc.line(`納品先住所　${this.addressOf(sh)}`);
-      doc.line(`${company.name}　${company.address}　TEL ${company.tel}`);
+      doc.line(company.line);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       if (sh.delivery_note_print1) doc.line(sh.delivery_note_print1);
       if (sh.delivery_note_print2) doc.line(sh.delivery_note_print2);
@@ -292,7 +395,7 @@ export class ReportsService {
       doc.line(
         `〒${iv.partner_postal_code ?? ''}　${iv.partner_address1 ?? ''}${iv.partner_address2 ?? ''}`,
       );
-      doc.line(`${company.name}　${company.address}　TEL ${company.tel}`);
+      doc.line(company.line);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       doc.y += 4;
 
@@ -418,9 +521,22 @@ export class ReportsService {
     return rows;
   }
 
+  /**
+   * 上代（9/15 ご回答：得意先別商品マスタに置く）。
+   * 明細が得意先別商品を指していればそれを、指していなければ取引先×SKU で引く。
+   */
+  private retailPriceExpr(lineAlias: string, orderAlias: string) {
+    return sql<string | null>`coalesce(
+      (select pp.retail_price from partner_products pp where pp.id = ${sql.ref(`${lineAlias}.partner_product_id`)}),
+      (select pp2.retail_price from partner_products pp2
+        where pp2.partner_id = ${sql.ref(`${orderAlias}.partner_id`)} and pp2.sku_id = ${sql.ref(`${lineAlias}.sku_id`)}
+        order by pp2.id limit 1))`;
+  }
+
   private orderLines(orderId: number) {
     return this.db
       .selectFrom('sales_order_lines as l')
+      .innerJoin('sales_orders as o', 'o.id', 'l.sales_order_id')
       .leftJoin('skus as s', 's.id', 'l.sku_id')
       .select([
         'l.line_no as line_no',
@@ -433,6 +549,7 @@ export class ReportsService {
         'l.is_stock_target as is_stock_target',
         's.sku_code as sku_code',
         's.jan as jan',
+        this.retailPriceExpr('l', 'o').as('retail_price'),
       ])
       .where('l.sales_order_id', '=', orderId)
       .orderBy('l.line_no')
@@ -443,6 +560,9 @@ export class ReportsService {
   private async deliveryLines(sh: { id: number; sales_order_id: number }) {
     const shipped = await this.db
       .selectFrom('shipment_lines as l')
+      .innerJoin('shipments as sh', 'sh.id', 'l.shipment_id')
+      .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+      .leftJoin('sales_order_lines as sol', 'sol.id', 'l.sales_order_line_id')
       .leftJoin('skus as s', 's.id', 'l.sku_id')
       .select([
         'l.line_no as line_no',
@@ -455,6 +575,7 @@ export class ReportsService {
         sql<boolean>`true`.as('is_stock_target'),
         's.sku_code as sku_code',
         's.jan as jan',
+        this.retailPriceExpr('sol', 'o').as('retail_price'),
       ])
       .where('l.shipment_id', '=', sh.id)
       .orderBy('l.line_no')
@@ -514,6 +635,7 @@ export class ReportsService {
       amount: string;
       sku_code: string | null;
       jan: string | null;
+      retail_price: string | null;
     },
   ) {
     switch (form) {
@@ -529,7 +651,16 @@ export class ReportsService {
           money(l.unit_price),
           money(l.amount),
         ];
-      // 上代あり：上代の保持先は貴社ご確認中のため、いまは卸単価と同じ欄を使う。
+      case '上代あり':
+        // 上代は得意先別商品マスタ。未登録なら空欄にし、金額欄も上代×数量で出す。
+        return [
+          l.line_no,
+          l.sku_code ?? '',
+          l.item_name,
+          qty(l.qty),
+          money(l.retail_price),
+          l.retail_price === null ? '' : money(Number(l.retail_price) * Number(l.qty)),
+        ];
       default:
         return [
           l.line_no,
@@ -569,17 +700,16 @@ export class ReportsService {
     return total;
   }
 
-  private async company(): Promise<{
-    name: string;
-    address: string;
-    tel: string;
-    invoiceNo: string;
-  }> {
+  /** 差出人。9/15 ご回答では会社名のみ印刷。住所・電話が空なら「TEL」の見出しごと出さない。 */
+  private async company(): Promise<{ name: string; line: string; invoiceNo: string }> {
+    const name = await this.settings.text('COMPANY_NAME', '株式会社コニー');
+    const address = (await this.settings.text('COMPANY_ADDRESS', '')).trim();
+    const tel = (await this.settings.text('COMPANY_TEL', '')).trim();
+    const parts = [name, address, tel ? `TEL ` : ''].filter((p) => p !== '');
     return {
-      name: await this.settings.text('COMPANY_NAME', '株式会社コニー'),
-      address: await this.settings.text('COMPANY_ADDRESS', ''),
-      tel: await this.settings.text('COMPANY_TEL', ''),
-      invoiceNo: await this.settings.text('COMPANY_INVOICE_NO', ''),
+      name,
+      line: parts.join('　'),
+      invoiceNo: (await this.settings.text('COMPANY_INVOICE_NO', '')).trim(),
     };
   }
 

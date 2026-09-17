@@ -75,6 +75,24 @@ function GetFileBytes($url, $headers = $H) {
   ,$bytes
 }
 
+function PatchJson($url, $body) {
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6))
+  Invoke-RestMethod $url -Method Patch -Headers $H -ContentType 'application/json; charset=utf-8' -Body $bytes
+}
+# 本文つきの POST で PDF を受け取る（出荷確定と印刷を同時に行う経路）
+function PostPdf($url, $body, $headers = $H) {
+  $tmp = Join-Path $env:TEMP ('cony-dl-' + [guid]::NewGuid().ToString('N'))
+  $json = [System.Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6))
+  $r = Invoke-WebRequest $url -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $json -UseBasicParsing -OutFile $tmp -PassThru
+  $b = [System.IO.File]::ReadAllBytes($tmp)
+  Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+  [pscustomobject]@{
+    size    = $b.Length
+    magic   = [System.Text.Encoding]::ASCII.GetString($b[0..3])
+    skipped = [string]$r.Headers['X-Skipped-Attachments']
+  }
+}
+
 function Cleanup {
   $pidFile = Join-Path $work 'api.pid'
   if (Test-Path $pidFile) {
@@ -147,8 +165,8 @@ try {
 $B = "http://localhost:$ApiPort/api"
 
 Write-Host '=== 4. 認証まわり ===' -ForegroundColor Cyan
-Check '生存確認'                       { (Invoke-RestMethod "$B/health").status -eq 'ok' }
-Check '接続先の照合（テーブル69）'      { $h = Invoke-RestMethod "$B/health/db"; $h.status -eq 'ok' -and $h.tables -eq 69 }
+Check '生存確認はログイン不要'         { (Invoke-RestMethod "$B/health").status -eq 'ok' }
+Check '接続先の照合はログインが要る'   { (StatusOf { Invoke-RestMethod "$B/health/db" }) -eq 401 }
 Check '未ログインは 401'               { (StatusOf { Invoke-RestMethod "$B/masters/partners" }) -eq 401 }
 Check 'パスワード相違は 401'           { (StatusOf { Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'application/json' -Body '{"login_id":"admin","password":"wrong"}' }) -eq 401 }
 Check '入力不備は 400'                 { (StatusOf { Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'application/json' -Body '{"login_id":""}' }) -eq 400 }
@@ -157,6 +175,14 @@ $login = Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'applicatio
            -Body (@{ login_id = 'admin'; password = $pass } | ConvertTo-Json)
 $H = @{ Authorization = "Bearer $($login.access_token)" }
 Check '管理者は権限151件（機能30×操作5＋機微項目1）' { @($login.user.permissions).Count -eq 151 }
+Check '接続先の照合（テーブル70）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 70 }
+
+Check '既定の引当タイミングは受注登録時（9/15 ご確認）' {
+  ((GetList "$B/masters/settings") | Where-Object { $_.setting_key -eq 'ALLOCATION_TIMING' }).value_text -eq 'order_entry'
+}
+# 5〜27章は従来の3段階（出荷指示で引当）のまま確かめる。設定を切り替えれば同じ経路で動くことの確認でもある。
+# 9/15 に確定した2段階（受注登録時に引当）は 28章で確かめる。
+PatchJson "$B/masters/settings/ALLOCATION_TIMING" @{ value_text='shipping_instruction' } | Out-Null
 
 Invoke-Psql -Command "insert into cony.users (login_id, name, password_hash, is_active) values ('norole','no-role user','x',true) on conflict (login_id) do nothing" | Out-Null
 Push-Location (Join-Path $root 'backend')
@@ -317,18 +343,33 @@ Check 'セットは構成品から引き落とす（3セット×2＝6）' {
   $s.allocated -eq ($compBefore.allocated + 6) -and $s.on_hand -eq $compBefore.on_hand
 }
 
+Check '実在庫を超える数量の受注は登録できない（400。9/15 ご確認①）' {
+  (StatusOf { NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$category.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='大量'; qty='99999'; unit_price='1' }) } }) -eq 400
+}
+# 1個だけ押さえておき、実在庫ちょうどの受注を作る → 有効在庫は1つ足りない
+$hold = NewOrder @{
+  order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+  sales_category_id=$category.id; order_date=$today
+  lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='押さえ'; qty='1'; unit_price='1' })
+}
+Invoke-RestMethod "$B/orders/$($hold.id)/shipping-instruction" -Method Post -Headers $H | Out-Null
+$holdAllocated = (StockOf 'FT1196-0306-100').allocated
 $bigOrder = NewOrder @{
   order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
   sales_category_id=$category.id; order_date=$today
-  lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='大量'; qty='99999'; unit_price='1' })
+  lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='大量'; qty=[string](StockOf 'FT1196-0306-100').on_hand; unit_price='1' })
 }
-Check '在庫不足の出荷指示は 409' {
+Check '有効在庫を超える受注は登録でき、出荷指示で在庫不足（409）になる' {
   (StatusOf { Invoke-RestMethod "$B/orders/$($bigOrder.id)/shipping-instruction" -Method Post -Headers $H }) -eq 409
 }
 Check '在庫不足でも在庫は動かない（途中で押さえたまま残らない）' {
-  $s = StockOf 'FT1196-0306-100'
-  $s.allocated -eq $before.allocated
+  (StockOf 'FT1196-0306-100').allocated -eq $holdAllocated
 }
+Invoke-RestMethod "$B/orders/$($hold.id)/shipping-instruction" -Method Delete -Headers $H | Out-Null
+Invoke-RestMethod "$B/orders/$($hold.id)/cancel" -Method Post -Headers $H | Out-Null
 
 $sample = NewOrder @{
   order_type='サンプル'; partner_id=$partner.id; sales_category_id=$category.id; order_date=$today
@@ -460,18 +501,19 @@ Check '調整一覧に出る' { (Invoke-RestMethod "$B/inventory/adjustments" -H
 Write-Host '=== 12. 取引先別確保数 ===' -ForegroundColor Cyan
 $resv = PostJson "$B/inventory/reservations" @{
   partner_id=$partner.id; sales_category_id=$category.id; sku_id=$sku.sku_id
-  period_from=$today; period_to=$today; reserved_qty='40'
+  # 以降の章の受注がこの枠から減る（受注登録時の消費）ため、止まらない大きさにしておく
+  period_from=$today; period_to=$today; reserved_qty='9999'
 }
-Check '確保数を登録できる' { [decimal]$resv.reserved_qty -eq 40 }
+Check '確保数を登録できる' { [decimal]$resv.reserved_qty -eq 9999 }
 Check '残数が計算される' {
   $r = Invoke-RestMethod "$B/inventory/reservations?on=$today" -Headers $H
-  [decimal]$r.items[0].remaining_qty -eq 40
+  [decimal]$r.items[0].remaining_qty -eq 9999
 }
-Check '同じ取引先・カテゴリー・商品・期間の重複は 500 で弾かれる' {
+Check '同じ取引先・カテゴリー・商品・期間の重複は 409 で弾かれる' {
   (StatusOf {
     PostJson "$B/inventory/reservations" @{ partner_id=$partner.id; sales_category_id=$category.id; sku_id=$sku.sku_id
       period_from=$today; period_to=$today; reserved_qty='10' }
-  }) -ge 400
+  }) -eq 409
 }
 Check '期間が逆転していると 400 と日本語で返る' {
   try {
@@ -506,10 +548,10 @@ Check '消費税が税率別に切り捨てで計算される' {
   $expected = [Math]::Floor([decimal]$t.taxable_base * 0.10)
   [decimal]$t.tax_amount -eq $expected
 }
-Check '請求額＝明細合計＋消費税' {
+Check '請求額＝明細合計＋消費税＋送料' {
   $lineSum = ($invDetail.lines | ForEach-Object { [decimal]$_.amount } | Measure-Object -Sum).Sum
   $taxSum  = ($invDetail.tax_summaries | ForEach-Object { [decimal]$_.tax_amount } | Measure-Object -Sum).Sum
-  [decimal]$invDetail.current_invoice_amount -eq ($lineSum + $taxSum)
+  [decimal]$invDetail.current_invoice_amount -eq ($lineSum + $taxSum + [decimal]$invDetail.shipping_fee_amount)
 }
 Check 'サンプル出荷は請求に入らない' {
   # サンプルは出荷確定していないうえ is_billable=false。出荷明細の合計と一致すること
@@ -866,10 +908,6 @@ Check '集計条件を保存して呼び戻せる' {
 
 # ---------------------------------------------------------------------------
 Write-Host '=== 22. マスタの登録・更新 ===' -ForegroundColor Cyan
-function PatchJson($url, $body) {
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6))
-  Invoke-RestMethod $url -Method Patch -Headers $H -ContentType 'application/json; charset=utf-8' -Body $bytes
-}
 
 # 分類マスタ（10種を同じ経路で扱う）
 $brand = PostJson "$B/masters/simple/brands" @{ code='NEWBRAND'; name='新ブランド'; sort_order=90 }
@@ -1367,6 +1405,280 @@ Check 'ない伝票には添付できない' {
 Check '添付を消せる' {
   (Invoke-RestMethod "$B/attachments/$($att.id)" -Method Delete -Headers $H).deleted -eq $true
 }
+
+Write-Host '=== 28. 受注登録時の引当・出荷確定と印刷・確定の取消（9/15 ご確認①②③） ===' -ForegroundColor Cyan
+PatchJson "$B/masters/settings/ALLOCATION_TIMING" @{ value_text='order_entry' } | Out-Null
+$s0 = StockOf 'FT1196-0306-100'
+
+Check '受注登録で引き当てる（引当済が増え、実在庫は動かない）' {
+  $script:o28 = NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$category.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='登録時引当'; qty='2'; unit_price='1000' })
+  }
+  $s = StockOf 'FT1196-0306-100'
+  $o28.status -eq '引当済' -and $o28.shipment_id -gt 0 -and
+    $s.allocated -eq ($s0.allocated + 2) -and $s.on_hand -eq $s0.on_hand
+}
+Check '出荷指示番号は受注番号と同じ' { $o28.shipment_no -eq $o28.order_no }
+Check '実在庫を超える数量は登録できない（400）' {
+  $over = [string]((StockOf 'FT1196-0306-100').on_hand + 1)
+  (StatusOf { NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$category.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='実在庫超え'; qty=$over; unit_price='1000' }) } }) -eq 400
+}
+Check '有効在庫は超えるが実在庫の範囲内なら登録でき、引当待ちになる' {
+  $s = StockOf 'FT1196-0306-100'
+  $script:wait28 = NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$category.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='引当待ち'; qty=[string]($s.available + 1); unit_price='1000' })
+  }
+  $wait28.status -eq '引当待ち' -and @($wait28.shortages).Count -ge 1 -and $null -eq $wait28.shipment_id
+}
+Check '引当待ちは受注一覧の状態で絞れる' {
+  $r = Invoke-RestMethod "$B/orders?status=引当待ち" -Headers $H
+  @($r.items | Where-Object { $_.id -eq $wait28.id }).Count -eq 1
+}
+Check '他の受注を取り消して在庫が空けば、引き当て直せる' {
+  Invoke-RestMethod "$B/orders/$($o28.id)/cancel" -Method Post -Headers $H | Out-Null
+  $r = Invoke-RestMethod "$B/orders/$($wait28.id)/allocate" -Method Post -Headers $H
+  $r.status -eq '引当済' -and $r.shipment_id -gt 0
+}
+Check '取り消した受注は取消になり、実在庫は動いていない' {
+  (Invoke-RestMethod "$B/orders/$($o28.id)" -Headers $H).status -eq '取消' -and
+    (StockOf 'FT1196-0306-100').on_hand -eq $s0.on_hand
+}
+Check '受注を修正すると引当が組み直される' {
+  $r = PatchJson "$B/orders/$($wait28.id)" @{
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='修正後'; qty='1'; unit_price='1000' })
+  }
+  $s = StockOf 'FT1196-0306-100'
+  $r.status -eq '引当済' -and $s.allocated -eq ($s0.allocated + 1)
+}
+Check '添付ファイルを受注に付けておく（印刷の同梱用）' {
+  $a = PostJson "$B/attachments" @{
+    ref_table='sales_orders'; ref_id=$wait28.id; file_name='指示.txt'
+    content_base64=[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('こわれもの'))
+    mime_type='text/plain'
+  }
+  $a.id -gt 0
+}
+$ship28 = (Invoke-RestMethod "$B/orders/$($wait28.id)" -Headers $H).shipment_id
+Check '出荷確定と印刷を同時に行える（PDFが返り、実在庫が減る）' {
+  $script:p28 = PostPdf "$B/reports/confirm-and-print" @{ shipment_ids=@($ship28); documents=@('出荷指示書','納品書') }
+  $s = StockOf 'FT1196-0306-100'
+  $p28.magic -eq '%PDF' -and $p28.size -gt 1000 -and $s.on_hand -eq ($s0.on_hand - 1) -and
+    (Invoke-RestMethod "$B/orders/$($wait28.id)" -Headers $H).status -eq '出荷済'
+}
+Check 'PDF・画像でない添付は同梱されず、名前で知らされる' {
+  [uri]::UnescapeDataString($p28.skipped) -match '指示\.txt'
+}
+Check '出荷済みの受注は直接は直せない（409）' {
+  (StatusOf { PatchJson "$B/orders/$($wait28.id)" @{ shipping_remarks='後から' } }) -eq 409
+}
+Check '出荷確定を取り消すと実在庫が戻り、受注は引当済に戻る' {
+  $r = PostJson "$B/shipments/$ship28/unconfirm" @{}
+  $s = StockOf 'FT1196-0306-100'
+  $r.status -eq '確定済' -and $r.order_status -eq '引当済' -and
+    $s.on_hand -eq $s0.on_hand -and $s.allocated -eq ($s0.allocated + 1)
+}
+Check '取り消したあとは受注を直せる' {
+  (PatchJson "$B/orders/$($wait28.id)" @{ shipping_remarks='確定後に直した' }).status -eq '引当済'
+}
+Check '直したあと、もう一度出荷確定できる' {
+  (PostJson "$B/shipments/$ship28/confirm" @{ ship_date=$today }).status -eq '出荷済'
+}
+Check '入出荷履歴に「出荷取消」が残る' {
+  (Invoke-RestMethod "$B/inventory/stocks/movements?movement_type=出荷取消" -Headers $H).total -ge 1
+}
+
+# --- 送料（30,000円未満は750円）と、請求に含めた出荷の確定取消 ---
+Check '30,000円未満の出荷には送料750円が付く' {
+  # 22章で設定を 800 に変えているので、ご回答の 750 に戻してから確かめる
+  PatchJson "$B/masters/settings/SHIPPING_FEE_AMOUNT" @{ value_text='750' } | Out-Null
+  $o = NewOrder @{
+    order_type='卸'; partner_id=$newPartner.id; delivery_destination_id=$newDest.id
+    sales_category_id=$category.id; order_date="$month-10"
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='送料テスト'; qty='1'; unit_price='2000' })
+  }
+  $script:feeShip = $o.shipment_id
+  PostJson "$B/shipments/$feeShip/confirm" @{ ship_date="$month-10" } | Out-Null
+  $script:feeInv = (PostJson "$B/billing/closings" @{ target_month=$month; partner_id=$newPartner.id }).invoices[0]
+  [decimal]$feeInv.shipping_fee_amount -eq 750
+}
+Check '請求に含めた出荷は確定を取り消せない（409）' {
+  (StatusOf { PostJson "$B/shipments/$feeShip/unconfirm" @{} }) -eq 409
+}
+
+# --- 経理3点：カード欄・販売担当軸・利益集計 ---
+Check '入出金に「カード」欄があり合計に入る' {
+  $c = PostJson "$B/cash-transactions" @{
+    division='入金'; target_month=$month; transaction_date=$today; partner_id=$partner.id
+    transfer_amount='10000'; card_amount='5000'
+  }
+  [decimal]$c.amount -eq 15000 -and [decimal]$c.card_amount -eq 5000
+}
+Check '取引先マスタの既定担当（販売担当マスタ）が受注に引き継がれる' {
+  $staff = PostJson "$B/masters/simple/sales_staff" @{ code='ST01'; name='山田 花子'; sort_order=10 }
+  PatchJson "$B/masters/partners/$($partner.id)" @{ sales_staff_id=$staff.id } | Out-Null
+  $o = NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$category.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='送料'; item_name='送料のみ'; qty='1'; unit_price='500' })
+  }
+  (Invoke-RestMethod "$B/orders/$($o.id)" -Headers $H).staff_name -eq '山田 花子'
+}
+Check '集計に「販売担当」軸がある' {
+  $r = PostJson "$B/analytics/sales" @{ from='2020-01-01'; to='2030-12-31'; dimensions=@('販売担当'); measures=@('金額') }
+  @($r.rows).Count -ge 1
+}
+Check '管理者は利益（売上−原価−ロイヤリティ）を集計できる' {
+  $r = PostJson "$B/analytics/sales" @{ from='2020-01-01'; to='2030-12-31'; dimensions=@('月'); measures=@('金額','原価','ロイヤリティ','利益') }
+  $row = @($r.rows)[0]
+  $null -ne $row.'利益' -and ([decimal]$row.'利益' -eq ([decimal]$row.'金額' - [decimal]$row.'原価' - [decimal]$row.'ロイヤリティ'))
+}
+Check '機微項目の権限がない利用者は利益を集計できない（403）' {
+  # 閲覧者ロールに「参照」を戻す（25章で M-01 だけにしてある）。機微項目の参照は付けない
+  $ids = @($allPerms | Where-Object { $_.action -eq 'view' -and -not $_.is_sensitive } | ForEach-Object { $_.id })
+  PutJson "$B/admin/roles/$($roleViewer.id)/permissions" @{ permission_ids=$ids } | Out-Null
+  $plain  = '{"from":"2020-01-01","to":"2030-12-31","dimensions":["月"],"measures":["金額"]}'
+  $profit = '{"from":"2020-01-01","to":"2030-12-31","dimensions":["月"],"measures":["利益"]}'
+  $okPlain  = (StatusOf { Invoke-RestMethod "$B/analytics/sales" -Method Post -Headers $HV -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($plain)) }) -eq 200
+  $ngProfit = (StatusOf { Invoke-RestMethod "$B/analytics/sales" -Method Post -Headers $HV -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($profit)) }) -eq 403
+  $okPlain -and $ngProfit
+}
+Check '閲覧者の選択肢に利益・原価は出ない' {
+  $o = Invoke-RestMethod "$B/analytics/options" -Headers $HV
+  -not ($o.measures -contains '利益') -and ($o.measures -contains '金額')
+}
+
+# --- 確認事項の回答：伝票発行分類・上代 ---
+Check '伝票発行分類に納品書4様式が登録されている' {
+  @((Invoke-RestMethod "$B/masters/codes/SLIP_ISSUE_CLASS" -Headers $H).values).Count -eq 4
+}
+Check '得意先別商品マスタに上代を持てる' {
+  [decimal](PatchJson "$B/masters/partner-products/$($pp.id)" @{ retail_price='4800' }).retail_price -eq 4800
+}
+Check '納品書「上代あり」が出る' {
+  (GetPdf ("$B/reports/delivery-notes?shipment_ids=$ship28&form=" + [uri]::EscapeDataString('上代あり'))).magic -eq '%PDF'
+}
+
+
+Write-Host '=== 29. 引当在庫（販売カテゴリー別の確保数を受注登録時に消費。9/17 ご確認②） ===' -ForegroundColor Cyan
+$cat2 = (GetList "$B/masters/sales-categories") | Where-Object { $_.id -ne $category.id } | Select-Object -First 1
+$cat3 = (GetList "$B/masters/sales-categories") | Where-Object { $_.id -ne $category.id -and $_.id -ne $cat2.id } | Select-Object -First 1
+$monthEnd = (Get-Date -Day 1).AddMonths(1).AddDays(-1).ToString('yyyy-MM-dd')
+$nextMonth = (Get-Date -Day 1).AddMonths(1).ToString('yyyy-MM')
+
+function NewCat2Order($qty) {
+  NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$cat2.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='枠テスト'; qty=[string]$qty; unit_price='1000' })
+  }
+}
+function FrameRemaining($id) {
+  $r = Invoke-RestMethod "$B/inventory/reservations?sales_category_id=$($cat2.id)&on=$today" -Headers $H
+  [decimal](@($r.items | Where-Object { $_.id -eq $id })[0].remaining_qty)
+}
+
+$frame = PostJson "$B/inventory/reservations" @{
+  sales_category_id=$cat2.id; sku_id=$sku.sku_id
+  period_from="$month-01"; period_to=$monthEnd; reserved_qty='3'
+}
+Check '取引先を指定せず、販売カテゴリー×商品×期間で引当在庫を登録できる' { $frame.id -gt 0 -and [decimal]$frame.reserved_qty -eq 3 }
+Check '受注登録で引当在庫の枠から減る（3 → 1）' {
+  $script:frOrder1 = NewCat2Order 2
+  (FrameRemaining $frame.id) -eq 1
+}
+Check '枠を超える受注は登録できない（400）' {
+  (StatusOf { NewCat2Order 2 }) -eq 400
+}
+Check '枠に収まる受注は登録できる（1 → 0）' {
+  $script:frOrder2 = NewCat2Order 1
+  (FrameRemaining $frame.id) -eq 0
+}
+Check '受注を取り消すと枠に戻る（0 → 2）' {
+  Invoke-RestMethod "$B/orders/$($frOrder1.id)/cancel" -Method Post -Headers $H | Out-Null
+  (FrameRemaining $frame.id) -eq 2
+}
+Check '受注を修正すると枠が引き直される（数量 1 → 2 で残り 1）' {
+  PatchJson "$B/orders/$($frOrder2.id)" @{
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='枠テスト'; qty='2'; unit_price='1000' })
+  } | Out-Null
+  (FrameRemaining $frame.id) -eq 1
+}
+Check '使った分より少ない数量には減らせない（400）' {
+  (StatusOf { PatchJson "$B/inventory/reservations/$($frame.id)" @{ reserved_qty='1' } }) -eq 400
+}
+Check '枠を増やせる（3 → 5）' {
+  [decimal](PatchJson "$B/inventory/reservations/$($frame.id)" @{ reserved_qty='5' }).reserved_qty -eq 5
+}
+Check '使われている枠は消せない（400）' {
+  (StatusOf { Invoke-RestMethod "$B/inventory/reservations/$($frame.id)" -Method Delete -Headers $H }) -eq 400
+}
+Check '前月分を翌月に複写できる' {
+  $r = PostJson "$B/inventory/reservations/copy" @{ from_month=$month; to_month=$nextMonth }
+  $r.copied -ge 1
+}
+Check '複写先は 1日〜末日の期間で、使用数は 0 から始まる' {
+  $r = Invoke-RestMethod "$B/inventory/reservations?sales_category_id=$($cat2.id)&on=$nextMonth-15" -Headers $H
+  $row = @($r.items | Where-Object { $_.sku_id -eq $sku.sku_id })[0]
+  $script:copiedFrame = $row
+  $row.period_from -eq "$nextMonth-01" -and [decimal]$row.consumed_qty -eq 0 -and [decimal]$row.reserved_qty -eq 5
+}
+Check '同じ月にもう一度複写しても二重にならない' {
+  (PostJson "$B/inventory/reservations/copy" @{ from_month=$month; to_month=$nextMonth }).copied -eq 0
+}
+Check '使われていない枠は消せる' {
+  (Invoke-RestMethod "$B/inventory/reservations/$($copiedFrame.id)" -Method Delete -Headers $H).deleted -eq $true
+}
+Check '枠のない商品・カテゴリーの受注はそのまま通る' {
+  $o = NewOrder @{
+    order_type='卸'; partner_id=$partner.id; delivery_destination_id=$dest.id
+    sales_category_id=$cat3.id; order_date=$today
+    lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='枠なし'; qty='1'; unit_price='100' })
+  }
+  $o.id -gt 0
+}
+Check '販売担当マスタは分類マスタと同じ経路で扱える' {
+  (GetList "$B/masters/simple/sales_staff").Count -ge 1
+}
+
+Write-Host '=== 30. 画面（第3段階）向けの参照経路 ===' -ForegroundColor Cyan
+Check '納品先一覧を取引先で絞れ、取引先名も返る' {
+  $r = Invoke-RestMethod "$B/masters/delivery-destinations?partner_id=$($partner.id)" -Headers $H
+  $r.total -ge 1 -and (@($r.items | Where-Object { $_.partner_id -ne $partner.id })).Count -eq 0 -and $r.items[0].partner_name.Length -gt 0
+}
+Check '倉庫の一覧は全列を返し、include_inactive で無効も含む' {
+  $w = GetList "$B/masters/warehouses?include_inactive=true"
+  $w.Count -ge 1 -and ($w[0].PSObject.Properties.Name -contains 'address1')
+}
+Check '区分カテゴリーの一覧が取れる' {
+  $cats = GetList "$B/masters/code-categories"
+  @($cats | Where-Object { $_.code -eq 'ADJUSTMENT_REASON' }).Count -eq 1
+}
+Check '取込テンプレートの一覧が取れる（販社4社）' {
+  $tpls = GetList "$B/imports/templates"
+  @($tpls | Where-Object { $_.import_type -eq 'PARTNER_ORDER' }).Count -ge 4
+}
+Check '商品の詳細はブランド等の ID と SKU の色・サイズ ID を返す（画面の編集用）' {
+  $d = Invoke-RestMethod "$B/masters/products/$($sku.product_id)" -Headers $H
+  ($d.PSObject.Properties.Name -contains 'brand_id') -and ($d.skus[0].PSObject.Properties.Name -contains 'color_id')
+}
+Check 'ロイヤリティ規定の一覧は支払先・ブランド・販売先の ID を返す' {
+  $rules = Invoke-RestMethod "$B/masters/royalty-rules" -Headers $H
+  $rules.items.Count -ge 1 -and ($rules.items[0].PSObject.Properties.Name -contains 'payee_partner_id')
+}
+Check '無効にしたマスタを PATCH is_active=true で有効に戻せる' {
+  # $B（基底URL）と大文字小文字で同名にならないよう $rev にする
+  $rev = PostJson "$B/masters/simple/brands" @{ code='REVIVE'; name='復活テスト' }
+  $null = Invoke-RestMethod "$B/masters/simple/brands/$($rev.id)/deactivate" -Method Post -Headers $H
+  (PatchJson "$B/masters/simple/brands/$($rev.id)" @{ is_active=$true }).is_active -eq $true
+}
+
 
 Write-Host ''
 if ($script:ng -eq 0) {

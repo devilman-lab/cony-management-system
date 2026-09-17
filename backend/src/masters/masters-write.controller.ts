@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { MastersCrudService, SIMPLE_MASTERS, type SimpleMaster } from './masters-crud.service';
 
@@ -26,6 +27,9 @@ const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
 const tax = z.enum(['0.00', '8.00', '10.00']);
 const code = z.string().trim().min(1).max(40);
+
+/** 更新時だけ受ける「有効に戻す」用。無効化は専用の経路、復活は PATCH で行う。 */
+const Active = { is_active: z.boolean().optional() };
 
 const ListSchema = z.object({
   q: z.string().trim().min(1).max(60).optional(),
@@ -37,6 +41,23 @@ const ListSchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 type ListQuery = z.infer<typeof ListSchema>;
+
+const PartnerProductListSchema = ListSchema.extend({
+  partner_id: z.coerce.number().int().positive().optional(),
+  sku_id: z.coerce.number().int().positive().optional(),
+});
+type PartnerProductListQuery = z.infer<typeof PartnerProductListSchema>;
+
+const DestinationListSchema = ListSchema.extend({
+  partner_id: z.coerce.number().int().positive().optional(),
+});
+type DestinationListQuery = z.infer<typeof DestinationListSchema>;
+
+const PartnerProductLookupSchema = z.object({
+  partner_id: z.coerce.number().int().positive(),
+  sku_id: z.coerce.number().int().positive(),
+});
+type PartnerProductLookupQuery = z.infer<typeof PartnerProductLookupSchema>;
 
 // ---- 分類マスタ（10種。同じ形なので1つの経路でまとめて扱う） -----------------
 const SimpleSchema = z.object({
@@ -52,7 +73,7 @@ const SimpleSchema = z.object({
   instruction_body: z.string().nullish(),
 });
 type SimpleBody = z.infer<typeof SimpleSchema>;
-const SimplePatchSchema = SimpleSchema.partial();
+const SimplePatchSchema = SimpleSchema.partial().extend(Active);
 type SimplePatchBody = z.infer<typeof SimplePatchSchema>;
 
 // ---- 取引先 -----------------------------------------------------------------
@@ -64,6 +85,8 @@ const PartnerSchema = z.object({
   is_customer: z.boolean().default(false),
   is_supplier: z.boolean().default(false),
   staff_user_id: z.number().int().positive().nullish(),
+  /** 既定の販売担当（販売担当マスタ）。受注に引き継ぐ。 */
+  sales_staff_id: z.number().int().positive().nullish(),
   media_id: z.number().int().positive().nullish(),
   partner_category_id: z.number().int().positive().nullish(),
   invoice_registration_no: z.string().trim().max(20).nullish(),
@@ -168,6 +191,8 @@ const PartnerProductSchema = z.object({
   sales_name: z.string().trim().max(200).nullish(),
   sales_name2: z.string().trim().max(200).nullish(),
   unit_price: decimal.default('0'),
+  /** 上代。納品書「上代あり」に印字する（9/15 ご回答で得意先別商品マスタに置くと確定）。 */
+  retail_price: decimal.nullish(),
   cost_price: decimal.nullish(),
   partner_color: z.string().trim().max(40).nullish(),
   partner_size: z.string().trim().max(40).nullish(),
@@ -252,6 +277,7 @@ export class MastersWriteController {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly crud: MastersCrudService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ---- 分類マスタ -----------------------------------------------------------
@@ -315,12 +341,13 @@ export class MastersWriteController {
   }
 
   /** 分類マスタごとに存在する列だけを残す。 */
-  private simpleValues(table: SimpleMaster, body: Partial<SimpleBody>): Record<string, unknown> {
+  private simpleValues(table: SimpleMaster, body: Partial<SimpleBody> & { is_active?: boolean }): Record<string, unknown> {
     const base: Record<string, unknown> = {
       code: body.code,
       name: body.name,
       sort_order: body.sort_order,
       note: body.note,
+      is_active: body.is_active,
     };
     if (table === 'delivery_rules') {
       base.lead_time_days = body.lead_time_days;
@@ -347,7 +374,7 @@ export class MastersWriteController {
   @RequirePermission('M-01', 'update')
   updatePartner(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(PartnerSchema.partial())) body: Partial<PartnerBody>,
+    @Body(new ZodValidationPipe(PartnerSchema.partial().extend(Active))) body: Partial<PartnerBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('partners', id, body, '取引先', user.id);
@@ -361,14 +388,39 @@ export class MastersWriteController {
   }
 
   // ---- 納品先 ---------------------------------------------------------------
+  /** 納品先の一覧。取引先で絞れ、取引先名も一緒に返す。 */
   @Get('delivery-destinations')
   @RequirePermission('M-05', 'view')
-  listDestinations(@Query(new ZodValidationPipe(ListSchema)) query: ListQuery) {
-    return this.crud.list('delivery_destinations', {
-      ...query,
-      searchColumns: ['delivery_code', 'name', 'consignee'],
-      orderBy: ['sort_order', 'delivery_code'],
-    });
+  async listDestinations(@Query(new ZodValidationPipe(DestinationListSchema)) query: DestinationListQuery) {
+    let base = this.db
+      .selectFrom('delivery_destinations as d')
+      .innerJoin('partners as p', 'p.id', 'd.partner_id');
+    if (!query.include_inactive) base = base.where('d.is_active', '=', true);
+    if (query.partner_id !== undefined) base = base.where('d.partner_id', '=', query.partner_id);
+    if (query.q) {
+      const like = `%${query.q}%`;
+      base = base.where((eb) =>
+        eb.or([
+          eb('d.delivery_code', 'ilike', like),
+          eb('d.name', 'ilike', like),
+          eb('d.consignee', 'ilike', like),
+          eb('p.name1', 'ilike', like),
+        ]),
+      );
+    }
+    const [items, total] = await Promise.all([
+      base
+        .selectAll('d')
+        .select(['p.partner_code as partner_code', 'p.name1 as partner_name'])
+        .orderBy('p.partner_code')
+        .orderBy('d.sort_order', sql`asc nulls last`)
+        .orderBy('d.delivery_code')
+        .limit(query.limit)
+        .offset(query.offset)
+        .execute(),
+      base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
+    ]);
+    return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
   }
 
   @Post('delivery-destinations')
@@ -384,7 +436,7 @@ export class MastersWriteController {
   @RequirePermission('M-05', 'update')
   updateDestination(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(DestinationSchema.partial())) body: Partial<DestinationBody>,
+    @Body(new ZodValidationPipe(DestinationSchema.partial().extend(Active))) body: Partial<DestinationBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('delivery_destinations', id, body, '納品先', user.id);
@@ -411,7 +463,7 @@ export class MastersWriteController {
   @RequirePermission('M-08', 'update')
   updateProduct(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(ProductSchema.partial())) body: Partial<ProductBody>,
+    @Body(new ZodValidationPipe(ProductSchema.partial().extend(Active))) body: Partial<ProductBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('products', id, body, '商品', user.id);
@@ -438,7 +490,7 @@ export class MastersWriteController {
   @RequirePermission('M-09', 'update')
   updateSku(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(SkuSchema.partial())) body: Partial<SkuBody>,
+    @Body(new ZodValidationPipe(SkuSchema.partial().extend(Active))) body: Partial<SkuBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('skus', id, body, 'SKU', user.id);
@@ -515,7 +567,13 @@ export class MastersWriteController {
       .selectFrom('set_components as c')
       .innerJoin('skus as s', 's.id', 'c.component_sku_id')
       .innerJoin('products as p', 'p.id', 's.product_id')
-      .select(['c.id as id', 's.sku_code as sku_code', 'p.product_name as product_name', 'c.qty as qty'])
+      .select([
+        'c.id as id',
+        'c.component_sku_id as component_sku_id',
+        's.sku_code as sku_code',
+        'p.product_name as product_name',
+        'c.qty as qty',
+      ])
       .where('c.set_header_id', '=', id)
       .orderBy('c.sort_order', sql`asc nulls last`)
       .execute();
@@ -523,14 +581,60 @@ export class MastersWriteController {
   }
 
   // ---- 得意先別商品 ---------------------------------------------------------
+  /** 得意先別商品の一覧。取引先・SKU で絞れ、名称も一緒に返す（画面で ID だけ見せない）。 */
   @Get('partner-products')
   @RequirePermission('M-11', 'view')
-  listPartnerProducts(@Query(new ZodValidationPipe(ListSchema)) query: ListQuery) {
-    return this.crud.list('partner_products', {
-      ...query,
-      searchColumns: ['partner_product_code', 'sales_name', 'partner_jan'],
-      orderBy: ['sort_order', 'id'],
-    });
+  async listPartnerProducts(@Query(new ZodValidationPipe(PartnerProductListSchema)) query: PartnerProductListQuery) {
+    let base = this.db
+      .selectFrom('partner_products as pp')
+      .innerJoin('partners as p', 'p.id', 'pp.partner_id')
+      .innerJoin('skus as s', 's.id', 'pp.sku_id')
+      .innerJoin('products as pr', 'pr.id', 's.product_id');
+    if (!query.include_inactive) base = base.where('pp.is_active', '=', true);
+    if (query.partner_id !== undefined) base = base.where('pp.partner_id', '=', query.partner_id);
+    if (query.sku_id !== undefined) base = base.where('pp.sku_id', '=', query.sku_id);
+    if (query.q) {
+      const like = `%${query.q}%`;
+      base = base.where((eb) =>
+        eb.or([
+          eb('pp.partner_product_code', 'ilike', like),
+          eb('pp.sales_name', 'ilike', like),
+          eb('pp.partner_jan', 'ilike', like),
+          eb('s.sku_code', 'ilike', like),
+          eb('p.name1', 'ilike', like),
+        ]),
+      );
+    }
+    const [items, total] = await Promise.all([
+      base
+        .selectAll('pp')
+        .select(['p.partner_code as partner_code', 'p.name1 as partner_name', 's.sku_code as sku_code', 'pr.product_name as product_name'])
+        .orderBy('p.partner_code')
+        .orderBy('s.sku_code')
+        .limit(query.limit)
+        .offset(query.offset)
+        .execute(),
+      base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
+    ]);
+    return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
+  }
+
+  /**
+   * 受注入力で使う。取引先×SKU の得意先別商品（専用コード・卸単価・上代）を1件返す。
+   * 無ければ null。受注入力の権限だけで呼べるようにしてある。
+   */
+  @Get('partner-products/lookup')
+  @RequirePermission('O-01', 'view')
+  async lookupPartnerProduct(@Query(new ZodValidationPipe(PartnerProductLookupSchema)) query: PartnerProductLookupQuery) {
+    const row = await this.db
+      .selectFrom('partner_products')
+      .select(['id', 'partner_product_code', 'sales_name', 'unit_price', 'retail_price'])
+      .where('partner_id', '=', query.partner_id)
+      .where('sku_id', '=', query.sku_id)
+      .where('is_active', '=', true)
+      .orderBy('id')
+      .executeTakeFirst();
+    return row ?? null;
   }
 
   @Post('partner-products')
@@ -546,7 +650,7 @@ export class MastersWriteController {
   @RequirePermission('M-11', 'update')
   updatePartnerProduct(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(PartnerProductSchema.partial())) body: Partial<PartnerProductBody>,
+    @Body(new ZodValidationPipe(PartnerProductSchema.partial().extend(Active))) body: Partial<PartnerProductBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('partner_products', id, body, '得意先別商品', user.id);
@@ -566,7 +670,7 @@ export class MastersWriteController {
   @RequirePermission('M-14', 'update')
   updateWarehouse(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(WarehouseSchema.partial())) body: Partial<WarehouseBody>,
+    @Body(new ZodValidationPipe(WarehouseSchema.partial().extend(Active))) body: Partial<WarehouseBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('warehouses', id, body, '倉庫', user.id);
@@ -596,7 +700,7 @@ export class MastersWriteController {
   @RequirePermission('M-15', 'update')
   updatePurchaseItem(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(PurchaseItemSchema.partial())) body: Partial<PurchaseItemBody>,
+    @Body(new ZodValidationPipe(PurchaseItemSchema.partial().extend(Active))) body: Partial<PurchaseItemBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('purchase_items', id, body, '仕入品目', user.id);
@@ -668,6 +772,8 @@ export class MastersWriteController {
       .where('setting_key', '=', key)
       .returning(['setting_key', 'name', 'value_text', 'value_type'])
       .executeTakeFirstOrThrow();
+    // 設定は短時間覚えているので、変えたその場で捨てて即座に効かせる。
+    this.settings.invalidate();
     return row;
   }
 
@@ -688,10 +794,15 @@ export class MastersWriteController {
       .leftJoin('partners as cust', 'cust.id', 'r.customer_partner_id')
       .select([
         'r.id as id',
+        'r.payee_partner_id as payee_partner_id',
         'payee.name1 as payee_name',
+        'r.brand_id as brand_id',
         'b.name as brand_name',
+        'r.product_id as product_id',
         'p.product_name as product_name',
+        'r.customer_partner_id as customer_partner_id',
         'cust.name1 as customer_name',
+        'r.note as note',
         'r.is_excluded as is_excluded',
         'r.calc_base as calc_base',
         'r.rate as rate',
@@ -723,8 +834,8 @@ export class MastersWriteController {
   @RequirePermission('Y-02', 'update')
   updateRoyaltyRule(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(RoyaltyRuleSchema.innerType().partial()))
-    body: Partial<RoyaltyRuleBody>,
+    @Body(new ZodValidationPipe(RoyaltyRuleSchema.innerType().partial().extend(Active)))
+    body: Partial<RoyaltyRuleBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('royalty_rules', id, body, 'ロイヤリティ規定', user.id);

@@ -1,6 +1,7 @@
 -- ============================================================================
 --  株式会社コニー 販売管理システム  初期データ
---  v1.3  2026-09-09
+--  v1.6  2026-09-16
+--  v1.6：伝票発行分類に納品書4様式を登録、送料 750 円、引当は受注登録時（9/15 ご回答）
 --  要件定義書 付録A「区分値マスタ初期データ」／付録B「権限マトリクス」に対応
 --  ※印の値は貴社確認事項。画面から追加・変更できるため開発に支障はない。
 --
@@ -168,10 +169,19 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
   ('OTHER',     'その他',     90)
 ) AS v(code, name, so) WHERE code_categories.code = 'ADJUSTMENT_REASON';
 
+-- 伝票発行分類（9/15 ご回答：納品書の様式は納品先マスタのこの分類で選ぶ）
+--   名称は納品書の様式名と一致させる。帳票はこの名称で様式を決める。
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('WITH_PRICE',   '単価あり',  10),
+  ('WITH_PRICE2',  '単価あり2', 20),
+  ('WITH_RETAIL',  '上代あり',  30),
+  ('NO_PRICE',     '単価なし',  40)
+) AS v(code, name, so) WHERE code_categories.code = 'SLIP_ISSUE_CLASS';
+
 -- ※以下は貴社確認後に登録する（Q5）
 --   PARTNER_DIVISION2 / DELIVERY_DIVISION / MASTER_SEARCH_DISPLAY /
---   SLIP_ISSUE_CLASS / COST_DIVISION / SALES_PRICE_SETTING /
---   PURCHASE_PRICE_SETTING / NEW_TAX_CLASS
+--   COST_DIVISION / SALES_PRICE_SETTING / PURCHASE_PRICE_SETTING / NEW_TAX_CLASS
 
 
 -- ----------------------------------------------------------------------------
@@ -336,11 +346,11 @@ VALUES
   ('TAX_BY_RATE',        'TAX', '税率別に集計する', 'true', 'boolean', NULL,
    '10%と8%を分けて計算し、請求書の税率別内訳へ出力する。', 30),
 
-  -- 送料（貴社ルール：1回の出荷が30,000円以下のとき請求）
+  -- 送料（貴社ルール：1回の出荷が30,000円未満のとき一律750円を請求。9/15 ご回答で確定）
   ('SHIPPING_FEE_THRESHOLD', 'SHIPPING', '送料を請求する金額の上限', '30000', 'number', NULL,
-   'この金額以下の出荷に送料を請求する。取引先マスタで個別に上書きできる。', 10),
-  ('SHIPPING_FEE_AMOUNT',    'SHIPPING', '請求する送料額', '0', 'number', NULL,
-   '※ 金額を伺えておりません。暫定 0 円。取引先マスタで個別に上書きできる。', 20),
+   'この金額未満の出荷に送料を請求する（ちょうどは請求しない）。取引先マスタで個別に上書きできる。', 10),
+  ('SHIPPING_FEE_AMOUNT',    'SHIPPING', '請求する送料額', '750', 'number', NULL,
+   '9/15 ご回答により一律 750 円。直送は受注の送料調整欄に直接入力する。取引先マスタで個別に上書きできる。', 20),
   ('SHIPPING_FEE_BASE',      'SHIPPING', '送料判定の基準額', 'excluded_tax', 'text',
    'excluded_tax,included_tax',
    '※ 30,000円の判定を税抜と税込のどちらで行うか。暫定は税抜。', 30),
@@ -386,11 +396,11 @@ VALUES
   ('COMPANY_INVOICE_NO', 'DOCUMENT', '適格請求書発行事業者番号', '', 'text', NULL,
    '※ T から始まる登録番号。空欄のときは請求書に印刷しない。', 70),
 
-  -- 受注・在庫の運用（2026/09/08 確認事項）
-  ('ALLOCATION_TIMING', 'ORDER', '在庫を引き当てるタイミング', 'shipping_instruction', 'text',
+  -- 受注・在庫の運用（2026/09/08 確認事項、2026/09/15 に見直し）
+  ('ALLOCATION_TIMING', 'ORDER', '在庫を引き当てるタイミング', 'order_entry', 'text',
    'order_entry,shipping_instruction',
-   'order_entry＝受注入力時／shipping_instruction＝出荷指示ボタンを押した時。'
-   || '確認事項⑧により shipping_instruction で確定。', 10),
+   'order_entry＝受注登録時に引き当て、足りない分は引当待ちにする／shipping_instruction＝出荷指示ボタンを押した時。'
+   || '9/15 のご確認により order_entry で確定（実在庫は出荷確定で減る）。', 10),
   ('SHIPMENT_NO_SOURCE', 'ORDER', '出荷指示番号の採り方', 'sales_order', 'text',
    'sales_order,independent',
    'sales_order＝受注番号をそのまま使う／independent＝独自に採番する。'

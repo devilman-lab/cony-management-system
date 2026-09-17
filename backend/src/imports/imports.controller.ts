@@ -1,9 +1,10 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { AmazonImportService } from './amazon-import.service';
 import { OmsImportService } from './oms-import.service';
 import { PartnerOrderImportService } from './partner-order-import.service';
@@ -36,6 +37,7 @@ type OmsBody = z.infer<typeof OmsSchema>;
 @Controller('imports')
 export class ImportsController {
   constructor(
+    @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly partnerOrders: PartnerOrderImportService,
     private readonly oms: OmsImportService,
     private readonly amazon: AmazonImportService,
@@ -82,6 +84,19 @@ export class ImportsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.amazon.import(body, user.id);
+  }
+
+  /** 取込テンプレートの一覧。画面で「どの販社の書式か」を選ばせる。 */
+  @Get('templates')
+  @RequirePermission('I-01', 'view')
+  listTemplates() {
+    return this.db
+      .selectFrom('import_templates')
+      .select(['id', 'template_code', 'name', 'import_type', 'file_encoding', 'note'])
+      .where('is_active', '=', true)
+      .orderBy('sort_order', 'asc')
+      .orderBy('template_code', 'asc')
+      .execute();
   }
 
   @Get('batches')

@@ -17,9 +17,35 @@ export const DIMENSIONS = {
   SKU: sql`s.sku_code`,
   倉庫: sql`w.short_name`,
   取引条件: sql`o.trade_type`,
+  // 受注の販売担当（販売担当マスタ。取引先の既定担当を初期値に受注ごとに変更できる。9/15・9/17 ご要望）
+  販売担当: sql`coalesce(su.name, '(未設定)')`,
 } as const;
 
 export type Dimension = keyof typeof DIMENSIONS;
+
+/**
+ * 出荷明細1行あたりのロイヤリティ。支払先ごとに最も細かい規定（scope_priority）を当て、合算する。
+ * 月次のロイヤリティ計算（royalty.service）と同じ当て方。
+ */
+const ROYALTY_PER_LINE = sql`(
+  select coalesce(sum(case when rule.is_excluded then 0
+                           when rule.rate is not null then sl.amount * rule.rate
+                           else coalesce(rule.fixed_amount, 0) * sl.qty end), 0)
+    from (select distinct rr0.payee_partner_id from royalty_rules rr0 where rr0.is_active) py
+    join lateral (
+      select rr.rate, rr.fixed_amount, rr.is_excluded
+        from royalty_rules rr
+       where rr.payee_partner_id = py.payee_partner_id
+         and rr.is_active
+         and rr.valid_from <= sh.ship_date
+         and (rr.valid_to is null or rr.valid_to >= sh.ship_date)
+         and (rr.brand_id is null or rr.brand_id = pr.brand_id)
+         and (rr.product_id is null or rr.product_id = pr.id)
+         and (rr.customer_partner_id is null or rr.customer_partner_id = o.partner_id)
+       order by rr.scope_priority desc, rr.valid_from desc
+       limit 1
+    ) rule on true
+)`;
 
 /** 集計する数値。 */
 export const MEASURES = {
@@ -27,7 +53,16 @@ export const MEASURES = {
   金額: sql`coalesce(sum(sl.amount), 0)`,
   件数: sql`count(distinct o.id)`,
   明細数: sql`count(*)`,
+  // ここから下は機微項目（SENSITIVE:view が要る）。9/15 ご要望「利益＝売上−（原価＋ロイヤリティ）」。
+  // 原価は得意先別商品 → 商品マスタの順。ロイヤリティは規定を出荷明細ごとに当てて概算する
+  // （確定値は月次のロイヤリティ計算表）。
+  原価: sql`coalesce(sum(coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty), 0)`,
+  ロイヤリティ: sql`floor(coalesce(sum(${ROYALTY_PER_LINE}), 0))`,
+  利益: sql`coalesce(sum(sl.amount), 0) - coalesce(sum(coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty), 0) - floor(coalesce(sum(${ROYALTY_PER_LINE}), 0))`,
 } as const;
+
+/** 機微な指標。持っていない利用者には返さない。 */
+export const SENSITIVE_MEASURES: readonly string[] = ['原価', 'ロイヤリティ', '利益'];
 
 export type Measure = keyof typeof MEASURES;
 
@@ -81,6 +116,9 @@ export class AnalyticsService {
       .leftJoin('skus as s', 's.id', 'sl.sku_id')
       .leftJoin('products as pr', 'pr.id', 's.product_id')
       .leftJoin('brands as b', 'b.id', 'pr.brand_id')
+      .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
+      .leftJoin('sales_order_lines as sol', 'sol.id', 'sl.sales_order_line_id')
+      .leftJoin('partner_products as pp', 'pp.id', 'sol.partner_product_id')
       .where('sh.status', '=', '出荷済')
       // サンプル出荷は実績に含めない
       .where('o.is_billable', '=', true)

@@ -32,8 +32,10 @@ export class HealthController {
   /**
    * アプリが見ているデータベースが、SQL で構築したものと同じかを確かめる。
    * 接続先を間違えたまま開発を進めるのが一番やっかいなので、数で照合する。
+   *
+   * 中身の件数を返すため、こちらはログインを必要とする。
+   * 監視から叩く生存確認は上の `/api/health`（ログイン不要）を使う。
    */
-  @Public()
   @Get('db')
   async database(): Promise<DbHealth> {
     // information_schema は生成した型に含めていないため、素の SQL で数える
@@ -53,14 +55,14 @@ export class HealthController {
 
     const tables = Number(tableCount.rows[0]?.n ?? 0);
     const notes: string[] = [];
-    if (tables !== 69) notes.push(`テーブル数が ${tables} 件です（期待 69 件）。02-schema.sql を適用してください。`);
+    if (tables !== 70) notes.push(`テーブル数が ${tables} 件です（期待 70 件）。02-schema.sql を適用してください。`);
     if (settings === 0) notes.push('システム設定が空です。03-seed-data.sql を適用してください。');
 
     return {
-      status: tables === 69 && settings > 0 ? 'ok' : 'ng',
+      status: tables === 70 && settings > 0 ? 'ok' : 'ng',
       schema: env.DB_SCHEMA,
       tables,
-      expected_tables: 69,
+      expected_tables: 70,
       seed: {
         code_categories: codeCategories,
         system_settings: settings,

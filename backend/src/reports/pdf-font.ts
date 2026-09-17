@@ -22,6 +22,8 @@ const CANDIDATES: JapaneseFont[] = [
   { path: 'C:\\Windows\\Fonts\\msgothic.ttc', family: 'MS Gothic' },
   // Linux（Noto CJK / IPAex）
   { path: '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', family: 'Noto Sans CJK JP' },
+  // Alpine（Docker イメージ。apk add font-noto-cjk）
+  { path: '/usr/share/fonts/noto/NotoSansCJK-Regular.ttc', family: 'Noto Sans CJK JP' },
   { path: '/usr/share/fonts/truetype/fonts-japanese-gothic.ttf' },
   { path: '/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf' },
   { path: '/usr/share/fonts/truetype/ipafont-gothic/ipagp.ttf' },

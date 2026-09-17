@@ -1,6 +1,6 @@
 {
   "title": "株式会社コニー 販売管理システム  テーブル関連図",
-  "subtitle": "全69テーブル / 主要なつながり74本",
+  "subtitle": "全70テーブル / 主要なつながり76本",
   "output": "docs/提出用/テーブル関連図.svg",
   "layout": {
     "boxW": 238, "boxH": 46, "colGap": 62, "rowGap": 16,
@@ -18,7 +18,8 @@
       ["colors", "カラー"],
       ["sizes", "サイズ"],
       ["delivery_rules", "納品ルール"],
-      ["work_instructions", "作業指示内容"]
+      ["work_instructions", "作業指示内容"],
+      ["sales_staff", "販売担当"]
     ]},
 
     { "col": 1, "title": "取引先・商品・倉庫", "color": "#2E4B6E", "tables": [
@@ -37,7 +38,7 @@
       ["stocks", "在庫"],
       ["allocations", "引当"],
       ["stock_movements", "在庫移動履歴"],
-      ["reservations", "取引先別確保数"],
+      ["reservations", "引当在庫（確保数）"],
       ["receipts", "入荷"],
       ["receipt_lines", "入荷明細"],
       ["stock_adjustments", "在庫調整"],
@@ -118,6 +119,8 @@
     { "f": "colors",                 "t": "skus" },
     { "f": "sizes",                  "t": "skus" },
     { "f": "sales_categories",       "t": "sales_orders" },
+    { "f": "sales_staff",            "t": "sales_orders" },
+    { "f": "sales_staff",            "t": "partners" },
 
     { "f": "partners",               "t": "delivery_destinations" },
     { "f": "products",               "t": "skus",                     "own": true },

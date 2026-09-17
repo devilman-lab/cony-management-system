@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
 import { sql } from 'kysely';
 import { z } from 'zod';
 
@@ -8,6 +8,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { AdjustmentsService } from './adjustments.service';
 import { ReceiptsService } from './receipts.service';
+import { ReservationsService } from './reservations.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
@@ -77,8 +78,11 @@ const AdjustmentListSchema = z.object({
 });
 type AdjustmentListQuery = z.infer<typeof AdjustmentListSchema>;
 
+const ym = z.string().regex(/^\d{4}-\d{2}$/, '年月は YYYY-MM の形式で入力してください');
+
 const CreateReservationSchema = z.object({
-  partner_id: z.number().int().positive(),
+  /** 任意。空なら販売カテゴリー全体の枠（9/17 ご確認②） */
+  partner_id: z.number().int().positive().nullish(),
   sales_category_id: z.number().int().positive(),
   sku_id: z.number().int().positive(),
   period_from: ymd,
@@ -88,10 +92,21 @@ const CreateReservationSchema = z.object({
 });
 type CreateReservationBody = z.infer<typeof CreateReservationSchema>;
 
+const UpdateReservationSchema = z.object({
+  reserved_qty: positive.optional(),
+  period_to: ymd.optional(),
+  note: z.string().nullish(),
+});
+type UpdateReservationBody = z.infer<typeof UpdateReservationSchema>;
+
+const CopyReservationSchema = z.object({ from_month: ym, to_month: ym });
+type CopyReservationBody = z.infer<typeof CopyReservationSchema>;
+
 const ReservationListSchema = z.object({
   partner_id: z.coerce.number().int().positive().optional(),
   sku_id: z.coerce.number().int().positive().optional(),
   on: ymd.optional(),
+  sales_category_id: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -104,6 +119,7 @@ export class InventoryController {
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly receipts: ReceiptsService,
     private readonly adjustments: AdjustmentsService,
+    private readonly reservations: ReservationsService,
   ) {}
 
   // ---- 入荷 ---------------------------------------------------------------
@@ -170,7 +186,7 @@ export class InventoryController {
     return this.db
       .insertInto('reservations')
       .values({
-        partner_id: body.partner_id,
+        partner_id: body.partner_id ?? null,
         sales_category_id: body.sales_category_id,
         sku_id: body.sku_id,
         period_from: body.period_from,
@@ -189,13 +205,14 @@ export class InventoryController {
   async listReservations(@Query(new ZodValidationPipe(ReservationListSchema)) query: ReservationListQuery) {
     let base = this.db
       .selectFrom('reservations as r')
-      .innerJoin('partners as p', 'p.id', 'r.partner_id')
+      .leftJoin('partners as p', 'p.id', 'r.partner_id')
       .innerJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
       .innerJoin('skus as s', 's.id', 'r.sku_id')
       .innerJoin('products as pr', 'pr.id', 's.product_id');
 
     if (query.partner_id !== undefined) base = base.where('r.partner_id', '=', query.partner_id);
     if (query.sku_id !== undefined) base = base.where('r.sku_id', '=', query.sku_id);
+    if (query.sales_category_id !== undefined) base = base.where('r.sales_category_id', '=', query.sales_category_id);
     if (query.on) {
       base = base.where('r.period_from', '<=', query.on).where('r.period_to', '>=', query.on);
     }
@@ -204,7 +221,10 @@ export class InventoryController {
       base
         .select([
           'r.id as id',
+          'r.partner_id as partner_id',
           'p.name1 as partner_name',
+          'r.sales_category_id as sales_category_id',
+          'r.sku_id as sku_id',
           'sc.name as sales_category_name',
           's.sku_code as sku_code',
           'pr.product_name as product_name',
@@ -223,5 +243,33 @@ export class InventoryController {
     ]);
 
     return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
+  }
+
+  /** 枠の数量・期間の変更。すでに使われた数より減らすことはできない。 */
+  @Patch('reservations/:id')
+  @RequirePermission('S-08', 'update')
+  updateReservation(
+    @Param('id', ParseIntPipe) id: number,
+    @Body(new ZodValidationPipe(UpdateReservationSchema)) body: UpdateReservationBody,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.reservations.update(id, body, user.id);
+  }
+
+  @Delete('reservations/:id')
+  @RequirePermission('S-08', 'delete')
+  removeReservation(@Param('id', ParseIntPipe) id: number) {
+    return this.reservations.remove(id);
+  }
+
+  /** 前月の枠を翌月分として複写する。毎月の登録を数量の見直しだけで済ませるため。 */
+  @Post('reservations/copy')
+  @HttpCode(200)
+  @RequirePermission('S-08', 'create')
+  copyReservations(
+    @Body(new ZodValidationPipe(CopyReservationSchema)) body: CopyReservationBody,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.reservations.copyMonth(body, user.id);
   }
 }

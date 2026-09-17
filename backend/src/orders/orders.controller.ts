@@ -28,6 +28,8 @@ const CreateOrderSchema = z.object({
   delivery_destination_id: z.number().int().positive().nullish(),
   sales_category_id: z.number().int().positive(),
   trade_type: z.enum(['委託', '買取']).optional(),
+  /** 販売担当。省略時は取引先マスタの担当者。 */
+  sales_staff_id: z.number().int().positive().nullish(),
   po_no: z.string().trim().max(40).nullish(),
   po_line_no: z.number().int().nullish(),
   order_date: ymd,
@@ -50,7 +52,7 @@ const CreateOrderSchema = z.object({
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
 
 const ListQuerySchema = z.object({
-  status: z.enum(['未確定', '引当済', '出荷指示済', '出荷済', '取消']).optional(),
+  status: z.enum(['未確定', '引当待ち', '引当済', '出荷指示済', '出荷済', '取消']).optional(),
   order_type: z.enum(['卸', '直送', '通販', 'サンプル']).optional(),
   partner_id: z.coerce.number().int().positive().optional(),
   from: ymd.optional(),
@@ -111,7 +113,21 @@ export class OrdersController {
     return this.orders.cancel(id, user.id);
   }
 
-  /** 出荷指示。ここで初めて在庫を押さえる。 */
+  /**
+   * 引当のやり直し（引当待ちの受注に在庫が空いたとき）。
+   * 押さえている分をいったん戻し、全量を引き当て直す。
+   */
+  @Post(':id/allocate')
+  @HttpCode(200)
+  @RequirePermission('D-01', 'create')
+  allocate(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.allocation.reallocate(id, user.id);
+  }
+
+  /**
+   * 出荷指示（設定 ALLOCATION_TIMING=shipping_instruction のとき、ここで初めて在庫を押さえる）。
+   * 受注登録時に引き当てる設定（既定）では、引当のやり直しと同じ動きになる。
+   */
   @Post(':id/shipping-instruction')
   @HttpCode(200)
   @RequirePermission('D-01', 'create')

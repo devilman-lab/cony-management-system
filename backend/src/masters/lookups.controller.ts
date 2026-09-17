@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, Inject, NotFoundException, Param, Query } from '@nestjs/common';
 import { sql } from 'kysely';
 
 import { RequirePermission } from '../auth/guards';
@@ -24,15 +24,23 @@ export class LookupsController {
       .execute();
   }
 
+  /** 倉庫。選択肢にもマスタ画面にも使うため全列を返す。無効も含めるときは include_inactive=true。 */
   @Get('warehouses')
   @RequirePermission('M-14', 'view')
-  warehouses() {
+  warehouses(@Query('include_inactive') includeInactive?: string) {
+    let q = this.db.selectFrom('warehouses').selectAll();
+    if (includeInactive !== 'true') q = q.where('is_active', '=', true);
+    return q.orderBy('sort_order', sql`asc nulls last`).orderBy('warehouse_code', 'asc').execute();
+  }
+
+  /** 区分カテゴリーの一覧。区分値マスタ画面でカテゴリーを選ぶために使う。 */
+  @Get('code-categories')
+  @RequirePermission('M-16', 'view')
+  codeCategories() {
     return this.db
-      .selectFrom('warehouses')
-      .select(['id', 'warehouse_code', 'short_name', 'is_consignment'])
-      .where('is_active', '=', true)
-      .orderBy('sort_order', sql`asc nulls last`)
-      .orderBy('warehouse_code', 'asc')
+      .selectFrom('code_categories')
+      .select(['id', 'code', 'name'])
+      .orderBy('code', 'asc')
       .execute();
   }
 

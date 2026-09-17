@@ -78,6 +78,8 @@ const CashTransactionSchema = z.object({
   /** 手段ごとの内訳。合計は入力された内訳から求める。 */
   cash_amount: decimal.nullish(),
   transfer_amount: decimal.nullish(),
+  /** カード（9/15 ご要望）。振込・現金と並ぶ入金手段。 */
+  card_amount: decimal.nullish(),
   bill_amount1: decimal.nullish(),
   bill_due_date1: ymd.nullish(),
   bill_amount2: decimal.nullish(),
@@ -171,6 +173,7 @@ export class PurchasingController {
           currency: body.currency ?? undefined,
           cash_amount: body.cash_amount ?? null,
           transfer_amount: body.transfer_amount ?? null,
+          card_amount: body.card_amount ?? null,
           bill_amount1: body.bill_amount1 ?? null,
           bill_due_date1: body.bill_due_date1 ?? null,
           bill_amount2: body.bill_amount2 ?? null,
@@ -192,7 +195,7 @@ export class PurchasingController {
       await trx
         .updateTable('cash_transactions')
         .set({
-          amount: sql<string>`coalesce(cash_amount,0) + coalesce(transfer_amount,0) + coalesce(bill_amount1,0)
+          amount: sql<string>`coalesce(cash_amount,0) + coalesce(transfer_amount,0) + coalesce(card_amount,0) + coalesce(bill_amount1,0)
                             + coalesce(bill_amount2,0) + coalesce(offset_amount,0) + coalesce(check_amount,0)
                             + coalesce(collection_amount,0) + coalesce(overseas_usd,0) + coalesce(overseas_cny,0)`,
         })
@@ -201,7 +204,7 @@ export class PurchasingController {
 
       return trx
         .selectFrom('cash_transactions')
-        .select(['id', 'cash_transaction_no', 'amount'])
+        .selectAll()
         .where('id', '=', created.id)
         .executeTakeFirstOrThrow();
     });
@@ -230,6 +233,7 @@ export class PurchasingController {
         'c.amount as amount',
         'c.cash_amount as cash_amount',
         'c.transfer_amount as transfer_amount',
+        'c.card_amount as card_amount',
         'c.bill_amount1 as bill_amount1',
         'c.bill_amount2 as bill_amount2',
         'c.offset_amount as offset_amount',

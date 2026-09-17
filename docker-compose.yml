@@ -1,0 +1,61 @@
+# 販売管理システム テスト版（4名でお試しいただく構成）
+#
+#   db   PostgreSQL 17（データ）
+#   api  NestJS（業務処理・帳票PDF）
+#   web  Next.js（画面。/api を api へ中継するので、公開するポートは web の 1 つだけ）
+#
+# 使い方は docs/テスト版セットアップ手順.md を参照。
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cony
+      POSTGRES_USER: cony
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD を .env に設定してください}
+      TZ: Asia/Tokyo
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # 初回起動時だけ、空のデータベースへスキーマと初期データを流し込む（番号順）
+      - ./docs/02-schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+      - ./docs/03-seed-data.sql:/docker-entrypoint-initdb.d/03-seed-data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cony -d cony"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://cony:${DB_PASSWORD}@db:5432/cony
+      DB_SCHEMA: cony
+      DB_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET を .env に設定してください（32文字以上）}
+      JWT_EXPIRES_SECONDS: 28800
+      # 画面は同じオリジンから中継されるので通常は不要。別のURLから直接叩くときだけ足す
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ATTACHMENT_DIR: /app/storage/attachments
+      MAX_UPLOAD_MB: 20
+    volumes:
+      # 添付ファイルの実体（個人情報を含みうるため、バックアップ対象・共有禁止）
+      - attachments:/app/storage/attachments
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  db-data:
+  attachments:

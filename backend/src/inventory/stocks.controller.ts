@@ -22,7 +22,7 @@ const MovementQuerySchema = z.object({
   sku_id: z.coerce.number().int().positive().optional(),
   warehouse_id: z.coerce.number().int().positive().optional(),
   movement_type: z
-    .enum(['入荷', '出荷', '引当', '引当解除', '返品入庫', '再生', '不良振替', '倉庫間移動', '棚卸調整', '廃棄'])
+    .enum(['入荷', '出荷', '出荷取消', '引当', '引当解除', '返品入庫', '再生', '不良振替', '倉庫間移動', '棚卸調整', '廃棄'])
     .optional(),
   from: ymd.optional(),
   to: ymd.optional(),

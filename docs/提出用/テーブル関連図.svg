@@ -10,7 +10,7 @@
   </defs>
   <rect x="0" y="0" width="2134" height="1282" fill="#FFFFFF"/>
   <text x="48" y="52" font-size="23" font-weight="700" fill="#1A2430">株式会社コニー 販売管理システム  テーブル関連図</text>
-  <text x="48" y="76" font-size="13" fill="#6B7885">全69テーブル / 主要なつながり74本</text>
+  <text x="48" y="76" font-size="13" fill="#6B7885">全70テーブル / 主要なつながり76本</text>
   <line x1="48" y1="92" x2="2086" y2="92" stroke="#DCE0DE" stroke-width="1"/>
   <g fill="none">
     <path d="M 286 223 L 296 223 L 296 223 L 348 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
@@ -23,14 +23,16 @@
     <path d="M 286 595 L 296 595 L 296 471 L 348 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 286 657 L 303 657 L 303 471 L 348 471" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 286 347 L 310 347 L 310 172 L 896 172 L 896 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 223 L 317 223 L 317 285 L 348 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 409 L 324 409 L 324 471 L 348 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 348 471 L 331 471 L 331 533 L 348 533" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 533 L 338 533 L 338 595 L 348 595" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 348 471 L 296 471 L 296 595 L 348 595" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 223 L 303 223 L 303 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 471 L 310 471 L 310 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 348 657 L 317 657 L 317 719 L 348 719" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 286 843 L 317 843 L 317 158 L 903 158 L 903 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 843 L 324 843 L 324 223 L 348 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 223 L 331 223 L 331 285 L 348 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 409 L 338 409 L 338 471 L 348 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 348 471 L 296 471 L 296 533 L 348 533" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 533 L 303 533 L 303 595 L 348 595" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 348 471 L 310 471 L 310 595 L 348 595" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 223 L 317 223 L 317 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 471 L 324 471 L 324 657 L 348 657" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 348 657 L 331 657 L 331 719 L 348 719" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 586 471 L 596 471 L 596 223 L 648 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 586 347 L 603 347 L 603 223 L 648 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 586 223 L 610 223 L 610 409 L 648 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
@@ -42,22 +44,22 @@
     <path d="M 648 223 L 603 223 L 603 285 L 648 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 648 471 L 610 471 L 610 533 L 648 533" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 648 595 L 617 595 L 617 657 L 648 657" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 948 285 L 903 285 L 903 285 L 886 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 948 703 L 910 703 L 910 765 L 948 765" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 948 455 L 917 455 L 917 517 L 948 517" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 948 517 L 924 517 L 924 579 L 948 579" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 948 517 L 931 517 L 931 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 948 223 L 938 223 L 938 285 L 948 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
-    <path d="M 948 455 L 896 455 L 896 641 L 948 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 624 223 L 624 158 L 903 158 L 903 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 285 L 631 285 L 631 144 L 910 144 L 910 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 347 L 638 347 L 638 130 L 917 130 L 917 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 471 L 596 471 L 596 116 L 924 116 L 924 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 657 L 603 657 L 603 102 L 931 102 L 931 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 285 L 910 285 L 910 285 L 886 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 703 L 917 703 L 917 765 L 948 765" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 455 L 924 455 L 924 517 L 948 517" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 517 L 931 517 L 931 579 L 948 579" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 517 L 938 517 L 938 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 948 223 L 896 223 L 896 285 L 948 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
+    <path d="M 948 455 L 903 455 L 903 641 L 948 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 624 223 L 624 144 L 910 144 L 910 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 285 L 631 285 L 631 130 L 917 130 L 917 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 638 347 L 638 116 L 924 116 L 924 223 L 948 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 471 L 596 471 L 596 102 L 931 102 L 931 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 657 L 603 657 L 603 172 L 938 172 L 938 285 L 948 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1186 223 L 1196 223 L 1196 223 L 1248 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1186 285 L 1203 285 L 1203 285 L 1248 285" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 347 L 610 347 L 610 172 L 1210 172 L 1210 223 L 1248 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 617 223 L 617 158 L 1217 158 L 1217 409 L 1248 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 347 L 610 347 L 610 158 L 1210 158 L 1210 223 L 1248 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 617 223 L 617 144 L 1217 144 L 1217 409 L 1248 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1248 223 L 1224 223 L 1224 285 L 1248 285" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 1248 223 L 1231 223 L 1231 347 L 1248 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 1248 223 L 1238 223 L 1238 409 L 1248 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
@@ -74,14 +76,14 @@
     <path d="M 1548 889 L 1503 889 L 1503 827 L 1548 827" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1248 703 L 1210 703 L 1210 765 L 1248 765" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 1248 641 L 1217 641 L 1217 765 L 1248 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 624 223 L 624 144 L 1224 144 L 1224 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 286 409 L 324 409 L 324 130 L 1231 130 L 1231 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 631 223 L 631 116 L 1238 116 L 1238 703 L 1248 703" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 638 223 L 638 102 L 1196 102 L 1196 765 L 1248 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 596 223 L 596 172 L 1510 172 L 1510 223 L 1548 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 603 223 L 603 158 L 1517 158 L 1517 409 L 1548 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 610 223 L 610 144 L 1524 144 L 1524 579 L 1548 579" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
-    <path d="M 586 223 L 617 223 L 617 130 L 1531 130 L 1531 765 L 1548 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 624 223 L 624 130 L 1224 130 L 1224 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 286 409 L 338 409 L 338 116 L 1231 116 L 1231 641 L 1248 641" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 631 223 L 631 102 L 1238 102 L 1238 703 L 1248 703" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 638 223 L 638 172 L 1196 172 L 1196 765 L 1248 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 596 223 L 596 158 L 1510 158 L 1510 223 L 1548 223" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 603 223 L 603 144 L 1517 144 L 1517 409 L 1548 409" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 610 223 L 610 130 L 1524 130 L 1524 579 L 1548 579" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
+    <path d="M 586 223 L 617 223 L 617 116 L 1531 116 L 1531 765 L 1548 765" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1848 223 L 1796 223 L 1796 347 L 1848 347" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
     <path d="M 1848 285 L 1803 285 L 1803 347 L 1848 347" stroke="#B6BEC6" stroke-width="1" marker-end="url(#arw)"/>
     <path d="M 1848 285 L 1810 285 L 1810 471 L 1848 471" stroke="#4A5765" stroke-width="1.6" marker-end="url(#arwOwn)"/>
@@ -342,7 +344,7 @@
   <g>
     <rect x="648" y="386" width="238" height="46" fill="#FFFFFF" stroke="#3F7772" stroke-opacity="0.45" stroke-width="1"/>
     <rect x="648" y="386" width="4" height="46" fill="#3F7772"/>
-    <text x="662" y="406" font-size="13.5" font-weight="700" fill="#1A2430">取引先別確保数</text>
+    <text x="662" y="406" font-size="13.5" font-weight="700" fill="#1A2430">引当在庫（確保数）</text>
     <text x="662" y="423" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">reservations</text>
   </g>
   <g>
@@ -410,6 +412,12 @@
     <rect x="948" y="324" width="4" height="46" fill="#B4503A"/>
     <text x="962" y="344" font-size="13.5" font-weight="700" fill="#1A2430">販売予定</text>
     <text x="962" y="361" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_schedules</text>
+  </g>
+  <g>
+    <rect x="48" y="820" width="238" height="46" fill="#FFFFFF" stroke="#3C6690" stroke-opacity="0.45" stroke-width="1"/>
+    <rect x="48" y="820" width="4" height="46" fill="#3C6690"/>
+    <text x="62" y="840" font-size="13.5" font-weight="700" fill="#1A2430">販売担当</text>
+    <text x="62" y="857" font-size="10.5" font-family="'Consolas','Courier New',monospace" fill="#78848F">sales_staff</text>
   </g>
   <g>
     <rect x="1848" y="990" width="238" height="46" fill="#FFFFFF" stroke="#2E4B6E" stroke-opacity="0.45" stroke-width="1"/>

@@ -7,6 +7,7 @@ export type QualityCode = 'GOOD' | 'DEFECTIVE' | 'PENDING';
 export type MovementType =
   | '入荷'
   | '出荷'
+  | '出荷取消'
   | '引当'
   | '引当解除'
   | '返品入庫'

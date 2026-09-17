@@ -1,13 +1,29 @@
 -- ============================================================================
 --  株式会社コニー 販売管理システム  PostgreSQL スキーマ定義
---  v1.3  2026-09-08
---  要件定義書 第6章「データベース設計」に対応（全69テーブル）
+--  v1.7  2026-09-17
+--  要件定義書 第6章「データベース設計」に対応（全70テーブル）
 --  未確定事項に依存する箇所は -- TODO(Qn) を付す。すべて暫定仕様で実装可能。
 --
 --  動作要件： PostgreSQL 12 以上（生成列 GENERATED ... STORED を使用するため）
 --    ・16／17 でしか使えない構文（MERGE・ANY_VALUE・JSON_TABLE・NULLS NOT DISTINCT 等）は不使用
 --    ・専用スキーマ cony に全て作るため、15 での public スキーマ権限変更の影響を受けない
 --    ・検証は 15 でも可。本番はサポート期限の長い 17 を推奨（15 は 2027年11月まで）
+--
+--  v1.7 の変更（9/17 のご確認2点を受けて）
+--   1. sales_staff（販売担当マスタ）を新設。ログイン利用者とは別のマスタ。
+--      partners.sales_staff_id（既定の担当）を追加し、sales_orders は staff_user_id を sales_staff_id に改める。
+--   2. reservations（確保数＝「引当在庫」）の partner_id を任意にし、販売カテゴリー×商品×期間だけでも登録できるようにする。
+--      一意性は COALESCE(partner_id,0) を含む一意インデックスで守る。
+--   3. sales_order_lines.reservation_id を追加。受注登録時にどの引当在庫の枠から減らしたかを持ち、取消・修正で戻せるようにする。
+--
+--  v1.6 の変更（9/15 の社内確認へのご回答を受けて確定）
+--   1. sales_orders.staff_user_id（販売担当）を追加。取引先マスタの担当者を初期値に受注ごとに変更できる。
+--      集計の「販売担当」軸に使う。
+--   2. partner_products.retail_price（上代）を追加。納品書「上代あり」に印字する。
+--   3. cash_transactions.card_amount（カード）を追加。振込・現金と並ぶ入金手段。
+--   4. 受注の状態に「引当待ち」を追加。受注登録時に引き当て、有効在庫が足りない分は待ちにする。
+--   5. 在庫移動の種類に「出荷取消」を追加。出荷確定後の変更は、確定を取り消して実在庫を戻す。
+--   6. fn_shipping_fee を「閾値未満」に改める（30,000円未満は750円。30,000円ちょうどは請求しない）。
 --
 --  v1.5 の変更（ロイヤリティの登録方法についてのご回答を受けて確定）
 --   1. ロイヤリティをマスタ1か所に一本化。products.royalty_class_code_id、
@@ -224,8 +240,24 @@ CREATE INDEX ix_audit_logs_ref ON audit_logs (ref_table, ref_id, acted_at DESC);
 
 
 -- ============================================================================
--- B. 取引先（7）
+-- B. 取引先（8）
 -- ============================================================================
+
+-- (10a) sales_staff 販売担当（v1.7）
+--   ログインする利用者とは別のマスタ。取引先の既定担当を持ち、受注ごとに変更できる。集計の「販売担当」軸に使う。
+CREATE TABLE sales_staff (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code       VARCHAR(40)  NOT NULL UNIQUE,
+  name       VARCHAR(120) NOT NULL,
+  sort_order INTEGER,
+  is_active  BOOLEAN      NOT NULL DEFAULT true,
+  note       TEXT,
+  created_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  created_by BIGINT REFERENCES users(id),
+  updated_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_by BIGINT REFERENCES users(id)
+);
+COMMENT ON TABLE sales_staff IS '販売担当（ログイン利用者とは別のマスタ）';
 
 -- (11) media 媒体
 CREATE TABLE media (
@@ -282,6 +314,7 @@ CREATE TABLE partners (
   is_customer                 BOOLEAN      NOT NULL DEFAULT false,
   is_supplier                 BOOLEAN      NOT NULL DEFAULT false,
   staff_user_id               BIGINT REFERENCES users(id),
+  sales_staff_id              BIGINT REFERENCES sales_staff(id),   -- 既定の販売担当。受注に引き継ぐ（v1.7）
   media_id                    BIGINT REFERENCES media(id),
   partner_category_id         BIGINT REFERENCES partner_categories(id),
   gross_margin_adjust_code_id BIGINT REFERENCES codes(id),   -- 粗利調整対象
@@ -541,6 +574,7 @@ CREATE TABLE partner_products (
   sales_name2          VARCHAR(200),  -- 販売名_2
   unit_price           money_amt   NOT NULL DEFAULT 0,
   old_unit_price       money_amt,
+  retail_price         money_amt,     -- 上代。納品書「上代あり」に印字（v1.6）
   price_changed_date   DATE,
   cost_price           money_amt,     -- 閲覧者には非表示
   partner_color        VARCHAR(40),   -- 販社色
@@ -625,7 +659,7 @@ CREATE TABLE stock_movements (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by    BIGINT REFERENCES users(id),
   CONSTRAINT ck_stock_mov_type CHECK (movement_type IN
-    ('入荷','出荷','引当','引当解除','返品入庫','再生','不良振替','倉庫間移動','棚卸調整','廃棄'))
+    ('入荷','出荷','出荷取消','引当','引当解除','返品入庫','再生','不良振替','倉庫間移動','棚卸調整','廃棄'))
 );
 COMMENT ON TABLE stock_movements IS '在庫移動履歴。追記専用（UPDATE/DELETE を行わない）';
 CREATE INDEX ix_stock_mov_stock ON stock_movements (stock_id, moved_at DESC);
@@ -634,7 +668,7 @@ CREATE INDEX ix_stock_mov_ref   ON stock_movements (ref_table, ref_id);
 -- (33) reservations 確保数
 CREATE TABLE reservations (
   id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  partner_id        BIGINT  NOT NULL REFERENCES partners(id),
+  partner_id        BIGINT  REFERENCES partners(id),     -- 任意。空なら販売カテゴリー全体の枠（v1.7）
   sales_category_id BIGINT  NOT NULL REFERENCES sales_categories(id),
   sku_id            BIGINT  NOT NULL REFERENCES skus(id),
   period_from       DATE    NOT NULL,
@@ -644,10 +678,12 @@ CREATE TABLE reservations (
   note              TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
-  UNIQUE (partner_id, sales_category_id, sku_id, period_from),
   CONSTRAINT ck_reservations_period CHECK (period_to >= period_from)
 );
-COMMENT ON TABLE reservations IS '取引先別確保数（取引先×販売カテゴリー×SKU×期間）';
+COMMENT ON TABLE reservations IS '確保数（引当在庫）。販売カテゴリー×SKU×期間、任意で取引先。受注登録時にここから減る';
+-- 取引先が空の枠も含めて一意にする（NULL 同士は UNIQUE 制約では重複扱いにならないため）
+CREATE UNIQUE INDEX ux_reservations_scope ON reservations
+  (COALESCE(partner_id, 0), sales_category_id, sku_id, period_from);
 -- TODO(Q12) 運用単位（放送日／月／期間）。期間保持のためいずれも表現可能
 
 -- (34) receipts 入荷
@@ -695,6 +731,7 @@ CREATE TABLE sales_orders (
   delivery_destination_id BIGINT REFERENCES delivery_destinations(id),
   sales_category_id       BIGINT      NOT NULL REFERENCES sales_categories(id),
   trade_type              VARCHAR(10) NOT NULL DEFAULT '買取',
+  sales_staff_id          BIGINT REFERENCES sales_staff(id),  -- 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）
   po_no                   VARCHAR(40),                        -- 先方の発注番号
   po_line_no              INTEGER,                            -- 先方の発注行番号（販社CSVに含まれる）
   order_date              DATE        NOT NULL,                -- 受注日（システム内部。締め・実績に使う）
@@ -720,7 +757,7 @@ CREATE TABLE sales_orders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
   CONSTRAINT ck_so_type   CHECK (order_type IN ('卸','直送','通販','サンプル')),
   CONSTRAINT ck_so_trade  CHECK (trade_type IN ('委託','買取')),
-  CONSTRAINT ck_so_status CHECK (status IN ('未確定','引当済','出荷指示済','出荷済','取消')),
+  CONSTRAINT ck_so_status CHECK (status IN ('未確定','引当待ち','引当済','出荷指示済','出荷済','取消')),
   CONSTRAINT ck_so_dest   CHECK (order_type NOT IN ('卸') OR delivery_destination_id IS NOT NULL),
   -- サンプル出荷は在庫を落とすが売上には計上しない（確認事項④）
   CONSTRAINT ck_so_sample CHECK (order_type <> 'サンプル' OR is_billable = false)
@@ -747,6 +784,7 @@ CREATE TABLE sales_order_lines (
   tax_rate           tax_rate  NOT NULL DEFAULT 10.00,
   amount             money_amt NOT NULL DEFAULT 0,
   allocated_qty      qty_num   NOT NULL DEFAULT 0,
+  reservation_id     BIGINT REFERENCES reservations(id),   -- どの引当在庫の枠から減らしたか（v1.7）
   -- 在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。
   -- セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。
   is_stock_target    BOOLEAN GENERATED ALWAYS AS
@@ -1110,6 +1148,7 @@ CREATE TABLE cash_transactions (
   transaction_date    DATE,
   transfer_amount     money_amt,  -- 振込
   cash_amount         money_amt,  -- 現金
+  card_amount         money_amt,  -- カード（v1.6）
   fee_amount          money_amt,  -- 手数料
   collection_amount   money_amt,  -- 集金
   offset_amount       money_amt,  -- 相殺
@@ -1564,7 +1603,8 @@ BEGIN
 END; $$ LANGUAGE plpgsql STABLE;   -- 既定値を system_settings から読むため STABLE
 
 -- 送料の判定。取引先の設定を優先し、未設定なら system_settings の既定値を使う。
---   貴社ルール：1回の出荷が閾値（既定 30,000円）以下のとき送料を請求する。
+--   貴社ルール：1回の出荷が閾値（既定 30,000円）未満のとき送料（既定 750円）を請求する。
+--   30,000円ちょうどは請求しない（9/15 ご回答「30,000円未満」）。
 CREATE OR REPLACE FUNCTION fn_shipping_fee(
   p_partner_id bigint, p_shipment_amount numeric
 ) RETURNS numeric AS $$
@@ -1577,7 +1617,7 @@ BEGIN
   IF v_threshold IS NULL OR v_fee IS NULL OR p_shipment_amount IS NULL THEN
     RETURN 0;
   END IF;
-  RETURN CASE WHEN p_shipment_amount <= v_threshold THEN v_fee ELSE 0 END;
+  RETURN CASE WHEN p_shipment_amount < v_threshold THEN v_fee ELSE 0 END;
 END; $$ LANGUAGE plpgsql STABLE;
 -- TODO(Q6) 適用可否の判定に取引先マスタの区分「送料3万以下・直送」を加える（Q5 確定後）
 

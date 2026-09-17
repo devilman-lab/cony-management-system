@@ -9,8 +9,10 @@
     | a | b |         表（2行目が |---| の区切り行。1行目を見出し行として扱う）
     ```               等幅の枠（図やコード。改行をそのまま保つ）
     **太字**          太字
+    `等幅`            等幅（経路・項目名など）
     ---               無視する
     <PAGEBREAK>       改ページ
+    <COLW a b c>      直後の表の列幅（twip、合計 9628）
 
   使い方
     powershell -ExecutionPolicy Bypass -File scripts\build-docx.ps1 `
@@ -41,13 +43,18 @@ function Esc([string]$s) {
   $s.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;')
 }
 
-# **太字** を含む1行を、複数の run に分解する
+# **太字** と `等幅` を含む1行を、複数の run に分解する。
+# 経路や項目名は等幅にしないと読みにくいため、バッククォートを書式として扱う。
 function Runs([string]$text, [string]$extraRpr = '') {
+  $mono = '<w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/>'
   $sb = New-Object System.Text.StringBuilder
-  foreach ($part in ([regex]::Split($text, '(\*\*[^*]+\*\*)'))) {
+  foreach ($part in ([regex]::Split($text, '(\*\*[^*]+\*\*|`[^`]+`)'))) {
     if ($part -eq '') { continue }
     if ($part -match '^\*\*(.+)\*\*$') {
       [void]$sb.Append('<w:r><w:rPr><w:b/>' + $extraRpr + '</w:rPr><w:t xml:space="preserve">' + (Esc $Matches[1]) + '</w:t></w:r>')
+    } elseif ($part -match '^`(.+)`$') {
+      # w:rPr の中は並び順が決まっているため、rFonts を先に置く
+      [void]$sb.Append('<w:r><w:rPr>' + $mono + $extraRpr + '</w:rPr><w:t xml:space="preserve">' + (Esc $Matches[1]) + '</w:t></w:r>')
     } else {
       $rpr = if ($extraRpr) { '<w:rPr>' + $extraRpr + '</w:rPr>' } else { '' }
       [void]$sb.Append('<w:r>' + $rpr + '<w:t xml:space="preserve">' + (Esc $part) + '</w:t></w:r>')
@@ -89,11 +96,12 @@ function MonoBlock([string[]]$lines) {
   $sb.ToString()
 }
 
-function Table([string[][]]$rows) {
+function Table([string[][]]$rows, [int[]]$widthsOverride = $null) {
   $total   = 9628
   $colCnt  = $rows[0].Count
   $widths  = @()
-  if     ($colCnt -eq 2) { $widths = @(3274, 6354) }
+  if     ($widthsOverride -and $widthsOverride.Count -eq $colCnt) { $widths = $widthsOverride }
+  elseif ($colCnt -eq 2) { $widths = @(3274, 6354) }
   elseif ($colCnt -eq 5) { $widths = @(1950, 2050, 1100, 700, 3828) }   # テーブル定義書：項目／列名／型／必須／説明
   else {
     $w = [int][Math]::Floor($total / $colCnt)
@@ -134,8 +142,9 @@ function Table([string[][]]$rows) {
 # --- Markdown を読む -------------------------------------------------------
 $mdLines = [System.IO.File]::ReadAllText((Resolve-Path $Markdown), [System.Text.Encoding]::UTF8) -split "`r?`n"
 
-$body    = New-Object System.Text.StringBuilder
-$tocList = New-Object System.Collections.ArrayList
+$body       = New-Object System.Text.StringBuilder
+$tocList    = New-Object System.Collections.ArrayList
+$nextWidths = $null
 $i = 0
 while ($i -lt $mdLines.Count) {
   $line = $mdLines[$i]
@@ -145,6 +154,13 @@ while ($i -lt $mdLines.Count) {
 
   if ($line -eq '<PAGEBREAK>') {
     [void]$body.Append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>'); $i++; continue
+  }
+
+  # 直後の表の列幅を指定する（単位は twip、合計 9628）。
+  # 経路一覧のように列ごとの長さの差が大きい表で、等分だと読みにくいため。
+  if ($line -match '^<COLW\s+([\d\s]+)>\s*$') {
+    $nextWidths = @($Matches[1] -split '\s+' | Where-Object { $_ } | ForEach-Object { [int]$_ })
+    $i++; continue
   }
 
   if ($line -match '^(#{1,3})\s+(.*)$') {
@@ -174,7 +190,8 @@ while ($i -lt $mdLines.Count) {
       }
       $i++
     }
-    if ($rows.Count -gt 0) { [void]$body.Append((Table $rows)) }
+    if ($rows.Count -gt 0) { [void]$body.Append((Table $rows $nextWidths)) }
+    $nextWidths = $null
     continue
   }
 
@@ -190,8 +207,10 @@ $cover = '<w:p><w:pPr><w:spacing w:before="3600" w:after="240"/><w:jc w:val="cen
          '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">' + (Esc $Client) + '</w:t></w:r></w:p>' +
          '<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="center"/></w:pPr>' +
          '<w:r><w:t xml:space="preserve">' + (Esc $Version) + '</w:t></w:r></w:p>' +
-         '<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="center"/></w:pPr>' +
-         '<w:r><w:t xml:space="preserve">' + (Esc $Author) + '</w:t></w:r></w:p>'
+         $(if ($Author.Trim() -ne '') {
+           '<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="center"/></w:pPr>' +
+           '<w:r><w:t xml:space="preserve">' + (Esc $Author) + '</w:t></w:r></w:p>'
+         } else { '' })
 
 # 目次は表紙と同じページに置く（v1.1 と同じ体裁）。
 # TOC フィールドに dirty="true" を付けておくと、Word で開いたときにページ番号つきで

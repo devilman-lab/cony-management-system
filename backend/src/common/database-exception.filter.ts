@@ -52,7 +52,7 @@ const UNIQUE_MESSAGES: Record<string, string> = {
   royalty_calculations_target_month_payee_partner_id_key:
     'この支払先・対象月のロイヤリティ計算はすでにあります',
   postal_codes_postal_code_town_key: 'この郵便番号と町域の組み合わせはすでに登録されています',
-  reservations_partner_id_sales_category_id_sku_id_period_from_key:
+  ux_reservations_scope:
     'この取引先・販売カテゴリー・商品・期間の確保数はすでに登録されています',
 };
 
@@ -80,7 +80,7 @@ export class DatabaseExceptionFilter implements ExceptionFilter {
           : exception instanceof Error
             ? exception.message
             : '要求を処理できませんでした';
-      this.logger.warn(` `);
+      this.logger.warn(`${rawStatus} ${withStatus.type ?? ''} ${message}`.trim());
       res.status(rawStatus).json({ statusCode: rawStatus, message });
       return;
     }

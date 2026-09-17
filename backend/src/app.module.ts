@@ -23,6 +23,7 @@ import { HealthController } from './health/health.controller';
 import { AdjustmentsService } from './inventory/adjustments.service';
 import { InventoryController } from './inventory/inventory.controller';
 import { ReceiptsService } from './inventory/receipts.service';
+import { ReservationsService } from './inventory/reservations.service';
 import { StockLedgerService } from './inventory/stock-ledger.service';
 import { StocksController } from './inventory/stocks.controller';
 import { ImportsController } from './imports/imports.controller';
@@ -91,6 +92,7 @@ import { ShipmentsService } from './shipping/shipments.service';
     StocksService,
     StockLedgerService,
     ReceiptsService,
+    ReservationsService,
     AdjustmentsService,
     ReturnsService,
     OrdersService,

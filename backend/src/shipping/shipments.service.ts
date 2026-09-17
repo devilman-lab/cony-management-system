@@ -5,9 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { sql } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 
+import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
+import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
 
 export interface ShipmentListQuery {
@@ -21,7 +23,10 @@ export interface ShipmentListQuery {
 
 @Injectable()
 export class ShipmentsService {
-  constructor(@Inject(KYSELY) private readonly db: ConyDatabase) {}
+  constructor(
+    @Inject(KYSELY) private readonly db: ConyDatabase,
+    private readonly settings: SettingsService,
+  ) {}
 
   async list(query: ShipmentListQuery): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
@@ -71,7 +76,12 @@ export class ShipmentsService {
    * そのまま棚から出ていく、という動きになる。
    */
   async confirm(shipmentId: number, shipDate: string | null, userId: number) {
-    return this.db.transaction().execute(async (trx) => {
+    return this.db.transaction().execute((trx) => this.confirmInTrx(trx, shipmentId, shipDate, userId));
+  }
+
+  /** 出荷確定の本体。確定と印刷を同時に行う経路からも同じトランザクションで呼ぶ。 */
+  async confirmInTrx(trx: Transaction<DB>, shipmentId: number, shipDate: string | null, userId: number) {
+    {
       const shipment = await trx
         .selectFrom('shipments')
         .selectAll()
@@ -186,6 +196,115 @@ export class ShipmentsService {
         shipment_no: shipment.shipment_no,
         status: '出荷済',
         lines: lineNo,
+      };
+    }
+  }
+
+  /**
+   * 出荷確定の取消（9/15 ご確認③「出荷確定後でも内容を変更できること」）。
+   *
+   * 確定した内容をその場で書き換えるのではなく、いったん確定前に戻す。
+   * 実在庫と引当済を同じ数だけ戻し（有効在庫は動かない）、出荷明細を消し、
+   * 受注を修正できる状態にする。在庫移動履歴には「出荷取消」として残るので、
+   * 取消と再確定の両方があとから追える。
+   * 締め処理で請求に含めたあとは取り消せない（締めを取り直すか返品で扱う）。
+   */
+  async unconfirm(shipmentId: number, userId: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const shipment = await trx
+        .selectFrom('shipments')
+        .select(['id', 'shipment_no', 'status', 'sales_order_id'])
+        .where('id', '=', shipmentId)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!shipment) throw new NotFoundException(`出荷が見つかりません（ID: ${shipmentId}）`);
+      if (shipment.status !== '出荷済') {
+        throw new ConflictException(`この出荷は「${shipment.status}」です。取り消す出荷確定がありません`);
+      }
+      if (!shipment.sales_order_id) throw new ConflictException('受注に紐づいていない出荷です');
+
+      const invoiced = await trx
+        .selectFrom('invoice_lines')
+        .select('id')
+        .where('shipment_id', '=', shipmentId)
+        .executeTakeFirst();
+      if (invoiced) {
+        throw new ConflictException(
+          'この出荷はすでに請求に含まれています。締めを取り直すか、返品として処理してください',
+        );
+      }
+
+      const allocations = await trx
+        .selectFrom('allocations as a')
+        .innerJoin('sales_order_lines as l', 'l.id', 'a.sales_order_line_id')
+        .select(['a.id as id', 'a.stock_id as stock_id', 'a.qty as qty'])
+        .where('l.sales_order_id', '=', shipment.sales_order_id)
+        .where('a.status', '=', '出荷済')
+        .execute();
+
+      for (const alloc of allocations) {
+        const before = await trx
+          .selectFrom('stocks')
+          .select('qty_on_hand')
+          .where('id', '=', alloc.stock_id)
+          .executeTakeFirstOrThrow();
+
+        // 実在庫と引当済を同じ数だけ戻す。押さえた状態（確定前）に戻る。
+        await trx
+          .updateTable('stocks')
+          .set({
+            qty_on_hand: sql<string>`qty_on_hand + ${alloc.qty}::numeric`,
+            qty_allocated: sql<string>`qty_allocated + ${alloc.qty}::numeric`,
+            updated_by: userId,
+            updated_at: new Date(),
+          })
+          .where('id', '=', alloc.stock_id)
+          .execute();
+
+        await trx
+          .updateTable('allocations')
+          .set({ status: '引当中', updated_by: userId, updated_at: new Date() })
+          .where('id', '=', alloc.id)
+          .execute();
+
+        await trx
+          .insertInto('stock_movements')
+          .values({
+            stock_id: alloc.stock_id,
+            movement_type: '出荷取消',
+            ref_table: 'shipments',
+            ref_id: shipmentId,
+            qty: alloc.qty,
+            qty_before: before.qty_on_hand,
+            qty_after: sql<string>`${before.qty_on_hand}::numeric + ${alloc.qty}::numeric`,
+            created_by: userId,
+          })
+          .execute();
+      }
+
+      await trx.deleteFrom('shipment_lines').where('shipment_id', '=', shipmentId).execute();
+
+      await trx
+        .updateTable('shipments')
+        .set({ status: '確定済', ship_date: null, updated_by: userId, updated_at: new Date() })
+        .where('id', '=', shipmentId)
+        .execute();
+
+      const timing = await this.settings.allocationTiming();
+      const orderStatus = timing === 'order_entry' ? '引当済' : '出荷指示済';
+      await trx
+        .updateTable('sales_orders')
+        .set({ status: orderStatus, updated_by: userId, updated_at: new Date() })
+        .where('id', '=', shipment.sales_order_id)
+        .execute();
+
+      return {
+        shipment_id: shipmentId,
+        shipment_no: shipment.shipment_no,
+        status: '確定済',
+        order_status: orderStatus,
+        restored: allocations.length,
       };
     });
   }

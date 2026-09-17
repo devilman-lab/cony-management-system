@@ -17,6 +17,7 @@ export const SIMPLE_MASTERS = {
   sales_categories: '販売カテゴリー',
   delivery_rules: '納品ルール',
   work_instructions: '作業指示内容',
+  sales_staff: '販売担当',
 } as const;
 
 export type SimpleMaster = keyof typeof SIMPLE_MASTERS;

@@ -2,6 +2,8 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
+import { ReservationsService } from '../inventory/reservations.service';
+import { AllocationService } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import { applyTransform, decode, parseCsv } from './csv';
@@ -51,6 +53,8 @@ export class PartnerOrderImportService {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly numbering: NumberingService,
+    private readonly allocation: AllocationService,
+    private readonly reservations: ReservationsService,
   ) {}
 
   async import(input: ImportInput, userId: number): Promise<ImportResult> {
@@ -210,7 +214,7 @@ export class PartnerOrderImportService {
     externalOrderNo: string,
     rows: MappedRow[],
     userId: number,
-  ): Promise<{ order_no: string; external_order_no: string; lines: number; status: string }> {
+  ): Promise<{ order_no: string; external_order_no: string; lines: number; status: string; shortages?: string[] }> {
     const head = rows[0].values;
 
     // 同じ発注番号を2回取り込んでも二重計上しない（一意制約でも守っている）
@@ -379,7 +383,18 @@ export class PartnerOrderImportService {
       .where('id', '=', external.id)
       .execute();
 
-    return { order_no: order.order_no, external_order_no: externalOrderNo, lines: n, status: '変換済' };
+    // 手入力の受注と同じく、登録した時点で引当在庫の枠から減らし、在庫を引き当てる。
+    // 取込では止めずに進める（枠超え・実在庫超えは引当待ちで残し、あとで対処できる）。
+    const frameWarnings = await this.reservations.consume(trx, order.id, { strict: false });
+    const allocation = await this.allocation.afterOrderWrite(trx, order.id, userId, { checkOnHand: false });
+
+    return {
+      order_no: order.order_no,
+      external_order_no: externalOrderNo,
+      lines: n,
+      status: allocation?.status ?? '未確定',
+      shortages: [...frameWarnings, ...(allocation?.shortages ?? [])],
+    };
   }
 
   /**

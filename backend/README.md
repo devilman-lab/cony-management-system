@@ -1,6 +1,6 @@
 # バックエンド（NestJS）
 
-第2段階の成果物。第1段階で確定した `docs/02-schema.sql` の 69 テーブルに対して動く API サーバー。
+第2段階の成果物。第1段階で確定した `docs/02-schema.sql` の 70 テーブルに対して動く API サーバー。
 
 ## 通し確認
 
@@ -27,7 +27,14 @@ powershell -ExecutionPolicy Bypass -File scripts\smoke-backend.ps1
   OK  納品書が4様式とも出る
 === 27. 郵便番号・同梱・請求の手入力・販売予定・JAN出力・添付 ===
   OK  同じ郵便番号に複数の町域があれば全部返す
-すべて合格  257 項目
+すべて合格  309 項目
+```
+
+経路の一覧は実物から数え上げられます。提出用の API 仕様書の付録はこれで作っています。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\list-api-routes.ps1
+powershell -ExecutionPolicy Bypass -File scripts\list-api-routes.ps1 -AsMarkdown
 ```
 
 API を起動したままにして手で触りたいときは `-KeepRunning` を付けます。
@@ -66,11 +73,11 @@ npm run dev
 ## 動作確認
 
 ```powershell
-# データベースを正しく見ているか（テーブル69・初期データの件数が返る）
+# データベースを正しく見ているか（テーブル70・初期データの件数が返る）
 curl http://localhost:3001/api/health/db
 ```
 
-`status: "ok"` かつ `tables: 69` なら、アプリと SQL が同じデータベースを見ています。
+`status: "ok"` かつ `tables: 70` なら、アプリと SQL が同じデータベースを見ています。
 
 ### ログインできるようにする
 
@@ -94,16 +101,31 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 
 ## 現在の実装範囲
 
-経路 133 本。**要件定義書の機能ID 30 すべて**に対応しています。
+経路 143 本。**要件定義書の機能ID 30 すべて**に対応しています。
 
-貴社のご回答待ちのため暫定にしてある箇所は次のとおりです（いずれも設定値・マスタ値で、コードの変更は要りません）。
+2026-09-16、9/15 の社内確認へのご回答を反映しました（スキーマ v1.6）。
 
-| 箇所 | 暫定の扱い | 必要なご回答 |
-|---|---|---|
-| 納品書の様式 | 納品先マスタの伝票発行分類が4様式のいずれかならそれを使い、未設定なら設定 `DELIVERY_NOTE_DEFAULT_FORM` | 納品書4種の使い分け一覧 |
-| 納品書「上代あり」の上代 | 上代の保持先が未定のため、いまは卸単価の欄を使用 | 上代をどのマスタで持つか |
-| 帳票の差出人 | 設定 `COMPANY_ADDRESS` / `COMPANY_TEL` / `COMPANY_INVOICE_NO`（空欄） | 帳票に印刷する住所・電話・登録番号 |
-| 送料 | 設定 `SHIPPING_FEE_AMOUNT` | 送料金額 |
+| 項目 | 内容 |
+|---|---|
+| 受注登録時に引当 | `ALLOCATION_TIMING=order_entry` が既定。実在庫を超える数量は 400、有効在庫が足りない分は「引当待ち」。`POST /api/orders/:id/allocate` で引き当て直す |
+| 出荷確定と印刷を同時に | `POST /api/reports/confirm-and-print`。確定（実在庫減）＋帳票＋添付（PDF・画像）を1つのPDFで返す。Excel・Word は `X-Skipped-Attachments` で知らせる |
+| 出荷確定の取消 | `POST /api/shipments/:id/unconfirm`。実在庫を戻し受注を「引当済」に。請求に含めた出荷は 409 |
+| 送料 | 30,000円**未満**は 750 円（`fn_shipping_fee` は `<`）。締め処理が出荷ごとに判定 |
+| 上代 | `partner_products.retail_price`。納品書「上代あり」に印字 |
+| 納品書の様式 | 汎用区分 `SLIP_ISSUE_CLASS` に4様式。納品先マスタで選ぶ |
+| カード欄 | `cash_transactions.card_amount` |
+| 販売担当・利益 | 販売担当マスタ `sales_staff`（`/masters/simple/sales_staff`）。取引先の既定担当 → `sales_orders.sales_staff_id`。集計の軸「販売担当」、指標「原価・ロイヤリティ・利益」（SENSITIVE:view が要る） |
+| 引当在庫（9/17） | `reservations` を販売カテゴリー×SKU×期間で登録（取引先は任意）。`POST /api/orders` が枠を消費（`sales_order_lines.reservation_id`）、取消・修正で戻す。枠超えは 400。`POST /api/inventory/reservations/copy` で前月分を翌月へ複写。CSV取込の受注も登録時に引当・消費（止めずに引当待ちで残す） |
+
+次は現在の作りのまま画面に進み、画面テストでご指摘があれば見直す（改めて質問しない）。
+
+| 箇所 | 現在の作り |
+|---|---|
+| 分納 | 全量そろってから出荷（引当待ちは出荷の対象外） |
+| 引当在庫の枠超え | 登録できない（400）。警告に変える運用も可 |
+| 販売担当への原価・利益 | 権限 SENSITIVE:view で個別付与 |
+| 送料判定の基準額 | 税抜（`SHIPPING_FEE_BASE=excluded_tax`） |
+| 楽楽販売のデータ | 「どのデータを取り込むか後日まとめます」とのこと。連絡待ち |
 
 | | 経路 | 必要な権限 |
 |---|---|---|
@@ -156,11 +178,12 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/billing/royalties` | Y-02:view |
 | `GET` | `/api/billing/royalties/:id` | Y-02:view |
 | `POST` | `/api/billing/royalties/:id/confirm` | Y-02:update |
-| `GET` | `/api/health` | ログインのみ |
+| `GET` | `/api/health` | ログイン不要（監視用） |
 | `GET` | `/api/health/db` | ログインのみ |
 | `POST` | `/api/imports/partner-orders` | I-01:create |
 | `POST` | `/api/imports/oms-orders` | I-01:create |
 | `POST` | `/api/imports/amazon-transactions` | I-01:create |
+| `GET` | `/api/imports/templates` | I-01:view |
 | `GET` | `/api/imports/batches` | I-01:view |
 | `GET` | `/api/imports/pending` | I-01:view |
 | `POST` | `/api/inventory/receipts` | S-03:create |
@@ -171,8 +194,12 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/inventory/adjustments` | S-01:view |
 | `POST` | `/api/inventory/reservations` | S-08:create |
 | `GET` | `/api/inventory/reservations` | S-08:view |
+| `PATCH` | `/api/inventory/reservations/:id` | S-08:update |
+| `DELETE` | `/api/inventory/reservations/:id` | S-08:delete |
+| `POST` | `/api/inventory/reservations/copy` | S-08:create |
 | `GET` | `/api/masters/sales-categories` | O-01:view |
 | `GET` | `/api/masters/warehouses` | M-14:view |
+| `GET` | `/api/masters/code-categories` | M-16:view |
 | `GET` | `/api/masters/codes/:categoryCode` | M-16:view |
 | `GET` | `/api/masters/settings` | M-16:view |
 | `GET` | `/api/masters/simple/:kind` | M-16:view |
@@ -195,6 +222,7 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/masters/sets` | M-10:view |
 | `GET` | `/api/masters/sets/:id` | M-10:view |
 | `GET` | `/api/masters/partner-products` | M-11:view |
+| `GET` | `/api/masters/partner-products/lookup` | O-01:view |
 | `POST` | `/api/masters/partner-products` | M-11:create |
 | `PATCH` | `/api/masters/partner-products/:id` | M-11:update |
 | `POST` | `/api/masters/warehouses` | M-14:create |
@@ -214,6 +242,7 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/orders/:id` | O-03:view |
 | `PATCH` | `/api/orders/:id` | O-01:update |
 | `POST` | `/api/orders/:id/cancel` | O-01:delete |
+| `POST` | `/api/orders/:id/allocate` | D-01:create |
 | `POST` | `/api/orders/:id/shipping-instruction` | D-01:create |
 | `DELETE` | `/api/orders/:id/shipping-instruction` | D-01:delete |
 | `GET` | `/api/masters/partners` | M-01:view |
@@ -237,6 +266,8 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/shipments` | D-01:view |
 | `GET` | `/api/shipments/:id` | D-01:view |
 | `POST` | `/api/shipments/:id/confirm` | D-01:update |
+| `POST` | `/api/shipments/:id/unconfirm` | D-01:update |
+| `POST` | `/api/reports/confirm-and-print` | D-01:update＋D-03:print |
 | `GET` | `/api/inventory/stocks` | S-01:view |
 | `GET` | `/api/inventory/stocks/by-sku/:skuId` | S-01:view |
 | `GET` | `/api/inventory/stocks/movements` | S-05:view |

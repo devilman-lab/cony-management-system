@@ -51,10 +51,10 @@ DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM information_schema.tables
    WHERE table_schema='cony' AND table_type='BASE TABLE';
-  IF n <> 69 THEN
-    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 69 件）', n USING ERRCODE='TF001';
+  IF n <> 70 THEN
+    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 70 件）', n USING ERRCODE='TF001';
   END IF;
-  RAISE NOTICE 'T01 OK  テーブル数 69';
+  RAISE NOTICE 'T01 OK  テーブル数 70';
 
   SELECT count(*) INTO n FROM pg_type t JOIN pg_namespace ns ON ns.oid=t.typnamespace
    WHERE ns.nspname='cony' AND t.typtype='d' AND t.typname IN ('money_amt','qty_num','tax_rate');
@@ -609,29 +609,32 @@ BEGIN
 END $b16$;
 
 -- ----------------------------------------------------------------------------
--- T30  送料の判定（1回の出荷が30,000円以下のとき請求。取引先の個別設定が優先）
+-- T30  送料の判定（1回の出荷が30,000円未満のとき請求。取引先の個別設定が優先。9/15 ご回答）
 -- ----------------------------------------------------------------------------
 DO $b17$
 DECLARE v_p bigint; v numeric;
 BEGIN
   SELECT id INTO v_p FROM partners WHERE partner_code='P001';
 
-  -- 既定値のみ（送料額は暫定 0 円）
-  IF fn_shipping_fee(v_p, 29999) <> 0 THEN
-    RAISE EXCEPTION 'T30 失敗: 既定送料額が 0 でない' USING ERRCODE='TF001';
+  -- 既定値のみ（9/15 ご回答：30,000円未満は一律 750 円）
+  IF fn_shipping_fee(v_p, 29999) <> 750 THEN
+    RAISE EXCEPTION 'T30 失敗: 既定送料額が %（期待 750）', fn_shipping_fee(v_p, 29999) USING ERRCODE='TF001';
+  END IF;
+  IF fn_shipping_fee(v_p, 30000) <> 0 THEN
+    RAISE EXCEPTION 'T30 失敗: 30,000円ちょうどで送料が %（期待 0。「未満」のため）', fn_shipping_fee(v_p, 30000) USING ERRCODE='TF001';
   END IF;
 
   -- 取引先ごとに上書きできる
-  UPDATE partners SET shipping_fee_threshold = 30000, shipping_fee_amount = 800 WHERE id = v_p;
-  v := fn_shipping_fee(v_p, 30000);
+  UPDATE partners SET shipping_fee_threshold = 50000, shipping_fee_amount = 800 WHERE id = v_p;
+  v := fn_shipping_fee(v_p, 49999);
   IF v <> 800 THEN
-    RAISE EXCEPTION 'T30 失敗: 30,000円ちょうどで送料が %（期待 800）', v USING ERRCODE='TF001';
+    RAISE EXCEPTION 'T30 失敗: 個別設定 49,999円で送料が %（期待 800）', v USING ERRCODE='TF001';
   END IF;
-  v := fn_shipping_fee(v_p, 30001);
+  v := fn_shipping_fee(v_p, 50000);
   IF v <> 0 THEN
-    RAISE EXCEPTION 'T30 失敗: 30,001円で送料が %（期待 0）', v USING ERRCODE='TF001';
+    RAISE EXCEPTION 'T30 失敗: 個別設定 50,000円ちょうどで送料が %（期待 0）', v USING ERRCODE='TF001';
   END IF;
-  RAISE NOTICE 'T30 OK  送料は閾値以下のとき請求、取引先の個別設定が既定値に優先';
+  RAISE NOTICE 'T30 OK  送料は閾値未満のとき請求、取引先の個別設定が既定値に優先';
 
   BEGIN
     UPDATE partners SET shipping_fee_amount = -1 WHERE id = v_p;
@@ -934,12 +937,12 @@ BEGIN
 END $b23$;
 
 -- ----------------------------------------------------------------------------
--- T38  運用の切り替え設定（確認事項⑧⑪と、9/8 にご回答いただいた通販CSVの位置づけ）
+-- T38  運用の切り替え設定（確認事項⑧⑪→9/15 見直し、9/8 にご回答いただいた通販CSVの位置づけ）
 -- ----------------------------------------------------------------------------
 DO $b24$
 BEGIN
-  IF fn_setting_text('ALLOCATION_TIMING') <> 'shipping_instruction' THEN
-    RAISE EXCEPTION 'T38 失敗: 引当タイミングが %（期待 shipping_instruction）',
+  IF fn_setting_text('ALLOCATION_TIMING') <> 'order_entry' THEN
+    RAISE EXCEPTION 'T38 失敗: 引当タイミングが %（期待 order_entry。9/15 ご確認）',
       fn_setting_text('ALLOCATION_TIMING') USING ERRCODE='TF001';
   END IF;
   IF fn_setting_text('SHIPMENT_NO_SOURCE') <> 'sales_order' THEN

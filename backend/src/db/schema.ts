@@ -254,6 +254,33 @@ export type AuditLogs = Selectable<AuditLogsTable>;
 export type NewAuditLogs = Insertable<AuditLogsTable>;
 export type AuditLogsUpdate = Updateable<AuditLogsTable>;
 
+/** 販売担当（ログイン利用者とは別のマスタ） */
+export interface SalesStaffTable {
+  /** [BIGINT] */
+  id: Generated<number>;
+  /** [VARCHAR(40)] */
+  code: string;
+  /** [VARCHAR(120)] */
+  name: string;
+  /** [INTEGER] */
+  sort_order: number | null;
+  /** [BOOLEAN] */
+  is_active: Generated<boolean>;
+  /** [TEXT] */
+  note: string | null;
+  /** [TIMESTAMPTZ] */
+  created_at: Generated<Date>;
+  /** [-> users / BIGINT] */
+  created_by: number | null;
+  /** [TIMESTAMPTZ] */
+  updated_at: Generated<Date>;
+  /** [-> users / BIGINT] */
+  updated_by: number | null;
+}
+export type SalesStaff = Selectable<SalesStaffTable>;
+export type NewSalesStaff = Insertable<SalesStaffTable>;
+export type SalesStaffUpdate = Updateable<SalesStaffTable>;
+
 /** 媒体 */
 export interface MediaTable {
   /** [BIGINT] */
@@ -353,6 +380,8 @@ export interface PartnersTable {
   is_supplier: Generated<boolean>;
   /** [-> users / BIGINT] */
   staff_user_id: number | null;
+  /** 既定の販売担当。受注に引き継ぐ（v1.7）  [-> sales_staff / BIGINT] */
+  sales_staff_id: number | null;
   /** [-> media / BIGINT] */
   media_id: number | null;
   /** [-> partner_categories / BIGINT] */
@@ -869,6 +898,8 @@ export interface PartnerProductsTable {
   unit_price: Generated<string>;
   /** [money_amt] */
   old_unit_price: string | null;
+  /** 上代。納品書「上代あり」に印字（v1.6）  [money_amt] */
+  retail_price: string | null;
   /** [DATE] */
   price_changed_date: string | null;
   /** 閲覧者には非表示  [money_amt] */
@@ -1005,12 +1036,12 @@ export type StockMovements = Selectable<StockMovementsTable>;
 export type NewStockMovements = Insertable<StockMovementsTable>;
 export type StockMovementsUpdate = Updateable<StockMovementsTable>;
 
-/** 取引先別確保数（取引先×販売カテゴリー×SKU×期間） */
+/** 確保数（引当在庫）。販売カテゴリー×SKU×期間、任意で取引先。受注登録時にここから減る */
 export interface ReservationsTable {
   /** [BIGINT] */
   id: Generated<number>;
-  /** [-> partners / BIGINT] */
-  partner_id: number;
+  /** 任意。空なら販売カテゴリー全体の枠（v1.7）  [-> partners / BIGINT] */
+  partner_id: number | null;
   /** [-> sales_categories / BIGINT] */
   sales_category_id: number;
   /** [-> skus / BIGINT] */
@@ -1111,6 +1142,8 @@ export interface SalesOrdersTable {
   sales_category_id: number;
   /** [VARCHAR(10)] */
   trade_type: Generated<string>;
+  /** 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）  [-> sales_staff / BIGINT] */
+  sales_staff_id: number | null;
   /** 先方の発注番号  [VARCHAR(40)] */
   po_no: string | null;
   /** 先方の発注行番号（販社CSVに含まれる）  [INTEGER] */
@@ -1194,6 +1227,8 @@ export interface SalesOrderLinesTable {
   amount: Generated<string>;
   /** [qty_num] */
   allocated_qty: Generated<string>;
+  /** どの引当在庫の枠から減らしたか（v1.7）  [-> reservations / BIGINT] */
+  reservation_id: number | null;
   /** 在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。 セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。  [BOOLEAN] */
   is_stock_target: Computed<boolean>;
   /** [TIMESTAMPTZ] */
@@ -1822,6 +1857,8 @@ export interface CashTransactionsTable {
   transfer_amount: string | null;
   /** 現金  [money_amt] */
   cash_amount: string | null;
+  /** カード（v1.6）  [money_amt] */
+  card_amount: string | null;
   /** 手数料  [money_amt] */
   fee_amount: string | null;
   /** 集金  [money_amt] */
@@ -2457,6 +2494,7 @@ export interface DB {
   sales_order_lines: SalesOrderLinesTable;
   sales_orders: SalesOrdersTable;
   sales_schedules: SalesSchedulesTable;
+  sales_staff: SalesStaffTable;
   saved_queries: SavedQueriesTable;
   set_components: SetComponentsTable;
   set_headers: SetHeadersTable;

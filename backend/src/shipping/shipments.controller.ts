@@ -72,6 +72,14 @@ export class ShipmentsController {
     return this.shipments.unconsolidate(id, user.id);
   }
 
+  /** 出荷確定の取消。実在庫を戻し、受注を修正できる状態にする。 */
+  @Post(':id/unconfirm')
+  @HttpCode(200)
+  @RequirePermission('D-01', 'update')
+  unconfirm(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.shipments.unconfirm(id, user.id);
+  }
+
   /** 出荷確定。ここで初めて実在庫が減る。 */
   @Post(':id/confirm')
   @HttpCode(200)

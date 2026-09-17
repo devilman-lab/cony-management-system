@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
-import { type AuthenticatedUser } from '../auth/auth.service';
+import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { AnalyticsService, DIMENSIONS, MEASURES } from './analytics.service';
+import { AnalyticsService, DIMENSIONS, MEASURES, SENSITIVE_MEASURES } from './analytics.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 
@@ -35,13 +35,18 @@ type SaveBody = z.infer<typeof SaveSchema>;
 /** 機能ID A-01 販売実績管理／A-03 汎用クエリ集計 */
 @Controller('analytics')
 export class AnalyticsController {
-  constructor(private readonly analytics: AnalyticsService) {}
+  constructor(
+    private readonly analytics: AnalyticsService,
+    private readonly auth: AuthService,
+  ) {}
 
-  /** 選べる軸と指標。画面の選択肢に使う。 */
+  /** 選べる軸と指標。画面の選択肢に使う。機微な指標は権限のある方にだけ出す。 */
   @Get('options')
   @RequirePermission('A-03', 'view')
-  options() {
-    return this.analytics.options();
+  async options(@CurrentUser() user: AuthenticatedUser) {
+    const all = this.analytics.options();
+    if (await this.auth.canSeeSensitive(user.id)) return all;
+    return { ...all, measures: all.measures.filter((m) => !SENSITIVE_MEASURES.includes(m)) };
   }
 
   /**
@@ -50,7 +55,15 @@ export class AnalyticsController {
    */
   @Post('sales')
   @RequirePermission('A-01', 'view')
-  sales(@Body(new ZodValidationPipe(SalesSchema)) body: SalesBody) {
+  async sales(
+    @Body(new ZodValidationPipe(SalesSchema)) body: SalesBody,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    // 原価・ロイヤリティ・利益は機微項目。持っていない方には集計そのものを返さない。
+    const wantsSensitive = body.measures.some((m) => SENSITIVE_MEASURES.includes(m));
+    if (wantsSensitive && !(await this.auth.canSeeSensitive(user.id))) {
+      throw new ForbiddenException('原価・ロイヤリティ・利益を見る権限がありません');
+    }
     return this.analytics.sales(body as never);
   }
 

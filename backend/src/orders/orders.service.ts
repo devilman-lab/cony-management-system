@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
+import { ReservationsService } from '../inventory/reservations.service';
+import { AllocationService, type AllocationOutcome } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
@@ -27,6 +29,8 @@ export interface CreateOrderInput {
   delivery_destination_id?: number | null;
   sales_category_id: number;
   trade_type?: '委託' | '買取';
+  /** 販売担当（販売担当マスタ）。省略時は取引先マスタの既定担当（9/15・9/17 ご要望）。 */
+  sales_staff_id?: number | null;
   po_no?: string | null;
   po_line_no?: number | null;
   order_date: string;
@@ -58,6 +62,17 @@ export interface OrderListQuery {
   offset: number;
 }
 
+export interface OrderWriteResult {
+  id: number;
+  order_no: string;
+  /** 未確定／引当済／引当待ち／出荷指示済 */
+  status: string;
+  shipment_id: number | null;
+  shipment_no: string | null;
+  /** 有効在庫が足りず引き当てられなかった分（引当待ちのとき） */
+  shortages: string[];
+}
+
 /** 明細に SKU が要る種別。ここは 02-schema.sql の ck_sol_sku と同じ決まり。 */
 const SKU_REQUIRED: LineType[] = ['商品', 'セット商品', '内訳商品'];
 
@@ -66,13 +81,18 @@ export class OrdersService {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly numbering: NumberingService,
+    private readonly allocation: AllocationService,
+    private readonly reservations: ReservationsService,
   ) {}
 
-  async create(input: CreateOrderInput, userId: number): Promise<{ id: number; order_no: string }> {
+  async create(input: CreateOrderInput, userId: number): Promise<OrderWriteResult> {
     this.validate(input);
 
     return this.db.transaction().execute(async (trx) => {
       const orderNo = await this.numbering.next(trx, 'sales_order');
+
+      // 販売担当は取引先マスタの担当者を初期値にし、受注ごとに変えられる（9/15 ご要望）。
+      const salesStaffId = input.sales_staff_id ?? (await this.defaultStaff(trx, input.partner_id));
 
       // サンプル出荷は売上・請求に計上しない（確認事項④）。
       // データベース側にも ck_so_sample があり、後から売上計上には変えられない。
@@ -87,6 +107,7 @@ export class OrdersService {
           delivery_destination_id: input.delivery_destination_id ?? null,
           sales_category_id: input.sales_category_id,
           trade_type: input.trade_type ?? '買取',
+          sales_staff_id: salesStaffId,
           po_no: input.po_no ?? null,
           po_line_no: input.po_line_no ?? null,
           order_date: input.order_date,
@@ -113,8 +134,37 @@ export class OrdersService {
         .executeTakeFirstOrThrow();
 
       await this.insertLines(trx, order.id, input.lines, userId);
-      return order;
+
+      // 引当在庫（販売カテゴリーの枠）から減らす。枠を超えれば 400（9/17 ご確認②）。
+      await this.reservations.consume(trx, order.id, { strict: true });
+      // 実在庫を超えていればここで止まる。設定が受注登録時なら、そのまま引き当てる（9/15 ご確認①②）。
+      const allocation = await this.allocation.afterOrderWrite(trx, order.id, userId);
+      return this.writeResult(order, allocation);
     });
+  }
+
+  /** 取引先マスタの担当者。未設定なら null。 */
+  private async defaultStaff(trx: Transaction<DB>, partnerId: number): Promise<number | null> {
+    const p = await trx
+      .selectFrom('partners')
+      .select('sales_staff_id')
+      .where('id', '=', partnerId)
+      .executeTakeFirst();
+    return p?.sales_staff_id ?? null;
+  }
+
+  private writeResult(
+    order: { id: number; order_no: string },
+    allocation: AllocationOutcome | null,
+  ): OrderWriteResult {
+    return {
+      id: order.id,
+      order_no: order.order_no,
+      status: allocation?.status ?? '未確定',
+      shipment_id: allocation?.shipment_id ?? null,
+      shipment_no: allocation?.shipment_no ?? null,
+      shortages: allocation?.shortages ?? [],
+    };
   }
 
   /**
@@ -192,7 +242,12 @@ export class OrdersService {
       .selectFrom('sales_orders as o')
       .innerJoin('partners as p', 'p.id', 'o.partner_id')
       .leftJoin('delivery_destinations as d', 'd.id', 'o.delivery_destination_id')
-      .innerJoin('sales_categories as sc', 'sc.id', 'o.sales_category_id');
+      .innerJoin('sales_categories as sc', 'sc.id', 'o.sales_category_id')
+      .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
+      // 出荷確定・帳票の対象になる出荷（引当済みのとき1件）
+      .leftJoin('shipments as sh', (join) =>
+        join.onRef('sh.sales_order_id', '=', 'o.id').on('sh.status', '<>', '削除'),
+      );
 
     if (!query.include_cancelled) base = base.where('o.is_cancelled', '=', false);
     if (query.status) base = base.where('o.status', '=', query.status);
@@ -214,6 +269,10 @@ export class OrdersService {
           'o.trade_type as trade_type',
           'o.is_billable as is_billable',
           'o.is_cancelled as is_cancelled',
+          'o.sales_staff_id as sales_staff_id',
+          'su.name as staff_name',
+          'sh.id as shipment_id',
+          'sh.status as shipment_status',
           'p.partner_code as partner_code',
           'p.name1 as partner_name',
           'd.name as delivery_name',
@@ -243,8 +302,16 @@ export class OrdersService {
       .leftJoin('delivery_destinations as d', 'd.id', 'o.delivery_destination_id')
       .innerJoin('sales_categories as sc', 'sc.id', 'o.sales_category_id')
       .leftJoin('warehouses as w', 'w.id', 'o.ship_from_warehouse_id')
+      .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
+      .leftJoin('shipments as sh', (join) =>
+        join.onRef('sh.sales_order_id', '=', 'o.id').on('sh.status', '<>', '削除'),
+      )
       .selectAll('o')
       .select([
+        'su.name as staff_name',
+        'sh.id as shipment_id',
+        'sh.shipment_no as shipment_no',
+        'sh.status as shipment_status',
         'p.partner_code as partner_code',
         'p.name1 as partner_name',
         'd.name as delivery_name',
@@ -285,15 +352,16 @@ export class OrdersService {
   /**
    * 受注の修正（ご要望⑨⑩「受注一覧のまま編集」）。
    *
-   * 出荷指示を出したあとは修正できない。在庫を押さえたあとで数量を変えると
-   * 引当と受注が食い違うため、先に出荷指示を取り消していただく。
+   * 引当済み・引当待ちの受注は、押さえている在庫をいったん戻してから直し、直した内容で
+   * 引き当て直す。数量を変えても引当と受注が食い違わない。
+   * 出荷済みは直せない。先に出荷確定を取り消していただく（9/15 ご確認③）。
    * 明細を渡した場合は入れ替えになる（渡さなければヘッダだけ直す）。
    */
   async update(
     id: number,
     input: Partial<CreateOrderInput>,
     userId: number,
-  ): Promise<{ id: number; order_no: string }> {
+  ): Promise<OrderWriteResult> {
     return this.db.transaction().execute(async (trx) => {
       const order = await trx
         .selectFrom('sales_orders')
@@ -304,11 +372,15 @@ export class OrdersService {
 
       if (!order) throw new NotFoundException(`受注が見つかりません（ID: ${id}）`);
       if (order.is_cancelled) throw new ConflictException('取り消された受注は修正できません');
-      if (order.status !== '未確定') {
-        throw new ConflictException(
-          `この受注は「${order.status}」です。先に出荷指示を取り消してから修正してください`,
-        );
+      if (order.status === '出荷済') {
+        throw new ConflictException('出荷済みの受注です。先に出荷確定を取り消してから修正してください');
       }
+      if (order.status === '出荷指示済') {
+        throw new ConflictException('出荷指示済みの受注です。先に出荷指示を取り消してから修正してください');
+      }
+      // 引当済み・引当待ちなら、押さえている分をいったん戻す。引当在庫の枠も戻す
+      if (order.status !== '未確定') await this.allocation.releaseInTrx(trx, id, userId);
+      await this.reservations.restore(trx, id);
 
       const { lines, ...header } = input;
       const values = Object.fromEntries(
@@ -325,39 +397,53 @@ export class OrdersService {
 
       if (lines) {
         this.validateLines(lines, (input.order_type ?? order.order_type) as OrderType);
+        // 明細を入れ替える。解除済みの引当が明細を指しているので先に消す（在庫の履歴は stock_movements に残る）。
+        await trx
+          .deleteFrom('allocations')
+          .where('sales_order_line_id', 'in', (qb) =>
+            qb.selectFrom('sales_order_lines').select('id').where('sales_order_id', '=', id),
+          )
+          .execute();
         await trx.deleteFrom('sales_order_lines').where('sales_order_id', '=', id).execute();
         await this.insertLines(trx, id, lines, userId);
       }
 
-      return { id, order_no: order.order_no };
+      await this.reservations.consume(trx, id, { strict: true });
+      const allocation = await this.allocation.afterOrderWrite(trx, id, userId);
+      return this.writeResult(order, allocation);
     });
   }
 
   /**
-   * 取消。出荷指示済み以降は取り消せない。
-   * 先に引当を解除していただく（在庫が押さえられたまま消えるのを防ぐため）。
+   * 取消。引当済み・引当待ちなら引当を戻してから取り消す（在庫が押さえられたまま消えない）。
+   * 出荷指示済み・出荷済みは取り消せない。先に出荷指示の取消・出荷確定の取消をしていただく。
    */
   async cancel(id: number, userId: number): Promise<{ id: number; status: string }> {
-    const order = await this.db
-      .selectFrom('sales_orders')
-      .select(['id', 'status', 'is_cancelled'])
-      .where('id', '=', id)
-      .executeTakeFirst();
+    return this.db.transaction().execute(async (trx) => {
+      const order = await trx
+        .selectFrom('sales_orders')
+        .select(['id', 'status', 'is_cancelled'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
 
-    if (!order) throw new NotFoundException(`受注が見つかりません（ID: ${id}）`);
-    if (order.is_cancelled) throw new ConflictException('すでに取り消されています');
-    if (order.status !== '未確定') {
-      throw new ConflictException(
-        `この受注は「${order.status}」です。先に出荷指示を取り消して引当を解除してください`,
-      );
-    }
+      if (!order) throw new NotFoundException(`受注が見つかりません（ID: ${id}）`);
+      if (order.is_cancelled) throw new ConflictException('すでに取り消されています');
+      if (order.status === '出荷済' || order.status === '出荷指示済') {
+        throw new ConflictException(
+          `この受注は「${order.status}」です。先に出荷指示の取消（出荷済みなら出荷確定の取消）をしてください`,
+        );
+      }
+      if (order.status !== '未確定') await this.allocation.releaseInTrx(trx, id, userId);
+      await this.reservations.restore(trx, id);
 
-    await this.db
-      .updateTable('sales_orders')
-      .set({ is_cancelled: true, status: '取消', updated_by: userId, updated_at: new Date() })
-      .where('id', '=', id)
-      .execute();
+      await trx
+        .updateTable('sales_orders')
+        .set({ is_cancelled: true, status: '取消', updated_by: userId, updated_at: new Date() })
+        .where('id', '=', id)
+        .execute();
 
-    return { id, status: '取消' };
+      return { id, status: '取消' };
+    });
   }
 }

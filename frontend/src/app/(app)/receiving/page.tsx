@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useList, useWarehouses } from '@/lib/hooks';
 import { today, ymd } from '@/lib/format';
@@ -55,6 +55,9 @@ export default function ReceivingPage() {
 
   const create = async () => {
     setError(null);
+    // 候補から選ばずに文字だけ打った行は sku_id が無い。API に送る前に気づかせる
+    const missing = lines.findIndex((l) => !l.sku);
+    if (missing >= 0) return setError(new ApiError(400, `明細 ${missing + 1} 行目の商品を候補から選んでください（コードを打ったら候補をクリックするか Enter で確定します）`));
     setBusy('new');
     try {
       const wh = warehouseId || String(warehouses.data?.[0]?.id ?? '');
@@ -159,7 +162,7 @@ export default function ReceivingPage() {
                 <th style={{ width: 110 }}>ロット</th>
                 <th style={{ width: 140 }}>期限</th>
                 {canSeeSensitive && <th className="r" style={{ width: 100 }}>仕入単価</th>}
-                <th style={{ width: 36 }} />
+                <th style={{ width: 44 }} />
               </tr>
             </thead>
             <tbody>

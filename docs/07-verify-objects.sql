@@ -12,6 +12,8 @@
 --  テストデータの分だけ件数が増えるため、必ず 03 の直後に実行すること。
 -- ============================================================================
 
+-- Windows の psql は既定で SJIS として読むため、このファイル（UTF-8）を正しく扱わせる
+SET client_encoding = 'UTF8';
 SET search_path = cony, public;
 
 WITH expected(sort_key, category, item, actual, expect) AS (

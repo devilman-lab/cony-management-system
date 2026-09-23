@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList, useWarehouses } from '@/lib/hooks';
 import { money, qty, today, ymd } from '@/lib/format';
@@ -74,6 +74,9 @@ export default function ReturnsPage() {
 
   const create = async () => {
     setError(null);
+    // 候補から選ばずに文字だけ打った行は sku_id が無い。API に送る前に気づかせる
+    const missing = lines.findIndex((l) => !l.sku);
+    if (missing >= 0) return setError(new ApiError(400, `明細 ${missing + 1} 行目の商品を候補から選んでください（コードを打ったら候補をクリックするか Enter で確定します）`));
     setBusy(true);
     try {
       await api.post('/returns', {
@@ -171,7 +174,7 @@ export default function ReturnsPage() {
         <div className="mt-2"><Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="備考" /></div>
         <div className="mt-3 tbl-wrap">
           <table className="tbl">
-            <thead><tr><th>商品</th><th className="r" style={{ width: 80 }}>数量</th><th className="r" style={{ width: 100 }}>単価</th><th style={{ width: 80 }}>税率</th><th style={{ width: 36 }} /></tr></thead>
+            <thead><tr><th>商品</th><th className="r" style={{ width: 80 }}>数量</th><th className="r" style={{ width: 100 }}>単価</th><th style={{ width: 80 }}>税率</th><th style={{ width: 44 }} /></tr></thead>
             <tbody>
               {lines.map((l) => (
                 <tr key={l.key}>

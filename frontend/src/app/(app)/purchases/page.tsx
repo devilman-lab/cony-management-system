@@ -171,7 +171,7 @@ export default function PurchasesPage() {
                 <th style={{ width: 110 }}>紐づけ先</th>
                 <th style={{ width: 220 }}>対象</th>
                 <th style={{ width: 70 }}>税率</th>
-                <th style={{ width: 36 }} />
+                <th style={{ width: 44 }} />
               </tr>
             </thead>
             <tbody>

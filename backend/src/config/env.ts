@@ -39,7 +39,11 @@ const schema = z.object({
   /** ログインの有効時間（秒）。既定は8時間＝1営業日。 */
   JWT_EXPIRES_SECONDS: z.coerce.number().int().positive().default(28_800),
 
-  /** フロント（Next.js）のオリジン。カンマ区切りで複数可。 */
+  /**
+   * フロント（Next.js）のオリジン。カンマ区切りで複数可。
+   * `*` を含めると前方・後方一致で扱う（例: https://*.vercel.app）。
+   * Vercel のプレビュー配置は毎回URLが変わるため、これが無いと試せない。
+   */
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3000')
@@ -47,7 +51,12 @@ const schema = z.object({
       v
         .split(',')
         .map((s) => s.trim())
-        .filter(Boolean),
+        .filter(Boolean)
+        .map((s) =>
+          s.includes('*')
+            ? new RegExp(`^${s.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^.]*')}$`)
+            : s,
+        ),
     ),
 });
 

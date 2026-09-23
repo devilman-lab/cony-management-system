@@ -55,19 +55,41 @@ export function SearchSelect({
     };
   }, [dq, open, fetchOptions]);
 
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-
   const pick = (o: Option) => {
     onChange(o);
     setOpen(false);
     setQ('');
   };
+
+  /**
+   * 候補を選ばずに欄を離れたとき。打った文字に合う候補が1つに絞れていればそれを選ぶ
+   * （コードをそのまま打って Tab で抜ける使い方）。絞れなければ文字を消して、
+   * 「まだ選んでいない」ことが見た目で分かるようにする。
+   */
+  const commitTyped = () => {
+    if (!open && !q) return;
+    const t = q.trim().toLowerCase();
+    if (t) {
+      const hit =
+        options.length === 1
+          ? options[0]
+          : options.find((o) => o.label.toLowerCase().startsWith(t) || (o.sub ?? '').toLowerCase() === t) ?? null;
+      const others = hit ? options.filter((o) => o !== hit && o.label.toLowerCase().startsWith(t)) : [];
+      if (hit && others.length === 0) onChange(hit);
+    }
+    setOpen(false);
+    setQ('');
+  };
+  const commitRef = useRef(commitTyped);
+  commitRef.current = commitTyped;
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) commitRef.current();
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
 
   return (
     <div ref={box} className="relative" style={{ width }}>
@@ -107,13 +129,19 @@ export function SearchSelect({
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
+          onBlur={() => {
+            // 候補のボタンは mousedown を止めているので、ここに来るのは欄の外へ出たとき
+            if (open) commitTyped();
+          }}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') setActive((a) => Math.min(a + 1, options.length - 1));
             else if (e.key === 'ArrowUp') setActive((a) => Math.max(a - 1, 0));
-            else if (e.key === 'Enter' && options[active]) {
+            else if (e.key === 'Enter') {
               e.preventDefault();
-              pick(options[active]);
-            } else if (e.key === 'Escape') setOpen(false);
+              if (options[active]) pick(options[active]);
+              else commitTyped();
+            } else if (e.key === 'Tab') commitTyped();
+            else if (e.key === 'Escape') setOpen(false);
           }}
         />
       )}

@@ -387,7 +387,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                     <th className="r" style={{ width: 100 }}>単価</th>
                     <th className="c" style={{ width: 80 }}>税率</th>
                     <th className="r" style={{ width: 110 }}>金額</th>
-                    <th style={{ width: 40 }} />
+                    <th style={{ width: 44 }} />
                   </tr>
                 </thead>
                 <tbody>

@@ -24,13 +24,45 @@ export const DIMENSIONS = {
 export type Dimension = keyof typeof DIMENSIONS;
 
 /**
+ * 品物の行（数量として数えてよい行）。
+ * 送料・値引・非商品は個数ではないので数えない。販促品は在庫が動かないので数えない。
+ * 内訳商品は、親のセット行があると二重になるので数えない。
+ * 請求（billing）・納品書（reports の goodsQty）と同じ数え方。
+ */
+const IS_GOODS = sql`(sl.line_type in ('商品', 'セット商品')
+  or (sl.line_type = '内訳商品' and sl.parent_line_no is null))`;
+
+/**
+ * 受注明細1行あたりの原価。
+ *
+ * セット商品はそれ自体が在庫を持たないため（商品マスタの原価も 0 のまま）、
+ * 実際に倉庫から出た構成品の原価を合計する。それ以外の行は
+ * 得意先別商品 → 商品マスタ の順に原価を取る。送料・値引のような
+ * 商品でない行は原価 0 になる。
+ */
+const COST_PER_LINE = sql`(
+  case when sl.line_type = 'セット商品' then (
+    select coalesce(sum(coalesce(cpr.cost_price, 0) * a.qty), 0)
+      from allocations a
+      join skus cs on cs.id = a.sku_id
+      join products cpr on cpr.id = cs.product_id
+     where a.sales_order_line_id = sl.id
+       and a.status in ('引当中', '出荷済')
+  )
+  -- 在庫が動く行だけ原価を持つ。販促品・非商品は倉庫から出ないので 0。
+  when sl.is_stock_target then coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty
+  else 0 end
+)`;
+
+/**
  * 出荷明細1行あたりのロイヤリティ。支払先ごとに最も細かい規定（scope_priority）を当て、合算する。
  * 月次のロイヤリティ計算（royalty.service）と同じ当て方。
  */
 const ROYALTY_PER_LINE = sql`(
   select coalesce(sum(case when rule.is_excluded then 0
                            when rule.rate is not null then sl.amount * rule.rate
-                           else coalesce(rule.fixed_amount, 0) * sl.qty end), 0)
+                           when ${IS_GOODS} then coalesce(rule.fixed_amount, 0) * sl.qty
+                           else 0 end), 0)
     from (select distinct rr0.payee_partner_id from royalty_rules rr0 where rr0.is_active) py
     join lateral (
       select rr.rate, rr.fixed_amount, rr.is_excluded
@@ -49,16 +81,16 @@ const ROYALTY_PER_LINE = sql`(
 
 /** 集計する数値。 */
 export const MEASURES = {
-  数量: sql`coalesce(sum(sl.qty), 0)`,
+  数量: sql`coalesce(sum(sl.qty) filter (where ${IS_GOODS}), 0)`,
   金額: sql`coalesce(sum(sl.amount), 0)`,
   件数: sql`count(distinct o.id)`,
   明細数: sql`count(*)`,
   // ここから下は機微項目（SENSITIVE:view が要る）。9/15 ご要望「利益＝売上−（原価＋ロイヤリティ）」。
   // 原価は得意先別商品 → 商品マスタの順。ロイヤリティは規定を出荷明細ごとに当てて概算する
   // （確定値は月次のロイヤリティ計算表）。
-  原価: sql`coalesce(sum(coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty), 0)`,
+  原価: sql`coalesce(sum(${COST_PER_LINE}), 0)`,
   ロイヤリティ: sql`floor(coalesce(sum(${ROYALTY_PER_LINE}), 0))`,
-  利益: sql`coalesce(sum(sl.amount), 0) - coalesce(sum(coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty), 0) - floor(coalesce(sum(${ROYALTY_PER_LINE}), 0))`,
+  利益: sql`coalesce(sum(sl.amount), 0) - coalesce(sum(${COST_PER_LINE}), 0) - floor(coalesce(sum(${ROYALTY_PER_LINE}), 0))`,
 } as const;
 
 /** 機微な指標。持っていない利用者には返さない。 */
@@ -106,10 +138,27 @@ export class AnalyticsService {
     const measures = query.measures.map((m) => MEASURES[m].as(m));
     const groupBy = query.dimensions.map((d) => DIMENSIONS[d]);
 
+    // 集計するのは「出荷した受注の明細」。出荷明細（shipment_lines）は倉庫から出た
+    // ものの記録で、送料・値引を持たず、セット商品は構成品ごとに並ぶため、売上の
+    // 集計に使うと請求額と合わない。請求・納品書と同じ土台（受注明細）を使う。
     let q = this.db
-      .selectFrom('shipment_lines as sl')
-      .innerJoin('shipments as sh', 'sh.id', 'sl.shipment_id')
-      .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+      .selectFrom('sales_order_lines as sl')
+      // 出荷は受注ごとに1本だけ見る。単純な結合にすると、1つの受注に出荷済が
+      // 2本ある状態（将来の分納や取込経路）で明細がそのまま倍に数えられる。
+      .innerJoinLateral(
+        (eb) =>
+          eb
+            .selectFrom('shipments as sh0')
+            .select(['sh0.id as id', 'sh0.ship_date as ship_date', 'sh0.warehouse_id as warehouse_id', 'sh0.status as status'])
+            .whereRef('sh0.sales_order_id', '=', 'sl.sales_order_id')
+            .where('sh0.status', '=', '出荷済')
+            .orderBy('sh0.ship_date')
+            .orderBy('sh0.id')
+            .limit(1)
+            .as('sh'),
+        (join) => join.onTrue(),
+      )
+      .innerJoin('sales_orders as o', 'o.id', 'sl.sales_order_id')
       .innerJoin('partners as p', 'p.id', 'o.partner_id')
       .innerJoin('sales_categories as sc', 'sc.id', 'o.sales_category_id')
       .innerJoin('warehouses as w', 'w.id', 'sh.warehouse_id')
@@ -117,8 +166,7 @@ export class AnalyticsService {
       .leftJoin('products as pr', 'pr.id', 's.product_id')
       .leftJoin('brands as b', 'b.id', 'pr.brand_id')
       .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
-      .leftJoin('sales_order_lines as sol', 'sol.id', 'sl.sales_order_line_id')
-      .leftJoin('partner_products as pp', 'pp.id', 'sol.partner_product_id')
+      .leftJoin('partner_products as pp', 'pp.id', 'sl.partner_product_id')
       .where('sh.status', '=', '出荷済')
       // サンプル出荷は実績に含めない
       .where('o.is_billable', '=', true)

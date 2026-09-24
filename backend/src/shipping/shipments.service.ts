@@ -156,6 +156,11 @@ export class ShipmentsService {
           })
           .execute();
 
+        // 出荷明細は「倉庫から実際に出たもの」の記録。セット商品は構成品の SKU で並ぶ。
+        // 在庫・原価・ロイヤリティはこの記録を見る。
+        // 一方、**得意先に出す納品書と請求は受注明細から作る**（reports/billing）。
+        // ここには送料・値引のような在庫を持たない行は入らないので、
+        // この表を売った内容として使ってはいけない。
         lineNo += 1;
         await trx
           .insertInto('shipment_lines')

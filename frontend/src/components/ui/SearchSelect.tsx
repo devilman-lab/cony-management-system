@@ -184,7 +184,8 @@ export interface PartnerRow {
   short_name?: string | null;
   default_trade_type?: string | null;
   closing_day?: number | null;
-  sales_staff_id?: number | null;
+  /** 既定の販売担当。一覧APIが必ず返す（省略可にすると欠落に気づけない） */
+  sales_staff_id: number | null;
 }
 
 export const fetchPartners =

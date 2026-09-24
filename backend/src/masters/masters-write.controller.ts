@@ -656,6 +656,13 @@ export class MastersWriteController {
     return this.crud.update('partner_products', id, body, '得意先別商品', user.id);
   }
 
+  @Post('partner-products/:id/deactivate')
+  @HttpCode(200)
+  @RequirePermission('M-11', 'delete')
+  deactivatePartnerProduct(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.crud.setActive('partner_products', id, false, '得意先別商品', user.id);
+  }
+
   // ---- 倉庫 -----------------------------------------------------------------
   @Post('warehouses')
   @RequirePermission('M-14', 'create')
@@ -674,6 +681,13 @@ export class MastersWriteController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('warehouses', id, body, '倉庫', user.id);
+  }
+
+  @Post('warehouses/:id/deactivate')
+  @HttpCode(200)
+  @RequirePermission('M-14', 'delete')
+  deactivateWarehouse(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.crud.setActive('warehouses', id, false, '倉庫', user.id);
   }
 
   // ---- 仕入マスタ -----------------------------------------------------------
@@ -704,6 +718,13 @@ export class MastersWriteController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('purchase_items', id, body, '仕入品目', user.id);
+  }
+
+  @Post('purchase-items/:id/deactivate')
+  @HttpCode(200)
+  @RequirePermission('M-15', 'delete')
+  deactivatePurchaseItem(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.crud.setActive('purchase_items', id, false, '仕入品目', user.id);
   }
 
   // ---- 汎用区分 -------------------------------------------------------------

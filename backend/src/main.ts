@@ -17,7 +17,14 @@ async function bootstrap(): Promise<void> {
   app.useBodyParser('json', { limit: `${env.MAX_UPLOAD_MB}mb` });
 
   app.use(helmet());
-  app.enableCors({ origin: env.CORS_ORIGINS, credentials: true });
+  // 画面と API が別オリジン（Vercel＋Render）になる構成では、既定のままだと
+  // ブラウザが下の応答ヘッダを読めない。帳票のファイル名や、出荷確定の件数・
+  // 同梱できなかった添付の警告はここに載せているため、明示的に公開する。
+  app.enableCors({
+    origin: env.CORS_ORIGINS,
+    credentials: true,
+    exposedHeaders: ['Content-Disposition', 'X-Skipped-Attachments', 'X-Confirmed-Shipments'],
+  });
   app.setGlobalPrefix('api');
   // データベースが弾いた内容を、意味の分かる応答に変える。
   // 制約に引っかかること自体は正しい動きなので、500 ではなく 400／409 で返す。

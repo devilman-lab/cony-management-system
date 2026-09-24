@@ -20,6 +20,8 @@ export interface PartnerListItem {
   is_supplier: boolean;
   closing_day: number | null;
   default_trade_type: string | null;
+  /** 既定の販売担当。受注入力で取引先を選んだときに引き継ぐ。 */
+  sales_staff_id: number | null;
   is_active: boolean;
 }
 
@@ -68,6 +70,7 @@ export class PartnersService {
           'is_supplier',
           'closing_day',
           'default_trade_type',
+          'sales_staff_id',
           'is_active',
         ])
         .orderBy('sort_order', sql`asc nulls last`)

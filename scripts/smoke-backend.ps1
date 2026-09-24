@@ -537,7 +537,9 @@ Check '請求番号が採番される（IV+年月+連番）' { $inv.invoice_no -
 Check '締め期間が月末締めで1日〜末日になる' {
   $inv.period_from -eq ($month + '-01') -and $inv.period_to -match "^$month-\d{2}$"
 }
-Check '出荷済みの金額が集計される（20×3500＝70,000）' { [decimal]$inv.shipment_amount -eq 70000 }
+# 9/24 仕様変更：請求は受注明細から作る（送料・値引の行も請求に乗る）。
+# この受注には送料行 800 円があるので 70,000 + 800 = 70,800。
+Check '出荷済みの金額が集計される（20×3500＋送料800＝70,800）' { [decimal]$inv.shipment_amount -eq 70800 }
 Check '返品がマイナスで反映される（5×3500＝17,500）' { [decimal]$inv.return_amount -eq 17500 }
 
 $invoiceId = ($inv.id)
@@ -554,8 +556,8 @@ Check '請求額＝明細合計＋消費税＋送料' {
   [decimal]$invDetail.current_invoice_amount -eq ($lineSum + $taxSum + [decimal]$invDetail.shipping_fee_amount)
 }
 Check 'サンプル出荷は請求に入らない' {
-  # サンプルは出荷確定していないうえ is_billable=false。出荷明細の合計と一致すること
-  [decimal]$invDetail.shipment_amount -eq 70000
+  # サンプルは出荷確定していないうえ is_billable=false。受注明細（送料行込み）の合計と一致すること
+  [decimal]$invDetail.shipment_amount -eq 70800
 }
 Check '売掛残高一覧に12項目が並ぶ' {
   $ar = Invoke-RestMethod "$B/billing/ar-balances?partner_id=$($partner.id)" -Headers $H

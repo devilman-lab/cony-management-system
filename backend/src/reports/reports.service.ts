@@ -164,7 +164,7 @@ export class ReportsService {
         columns,
         lines.map((l) => [l.line_no, l.sku_code ?? '', l.item_name, l.line_type, qty(l.qty)]),
       );
-      doc.totals([['合計数量', qty(this.sum(lines.filter((l) => l.is_stock_target).map((l) => l.qty)))]]);
+      doc.totals([['合計数量', qty(this.goodsQty(lines))]]);
     }
 
     await this.recordPrint(shipmentIds, '出荷指示書', userId);
@@ -204,7 +204,10 @@ export class ReportsService {
             sql<string>`sum(a.qty)`.as('qty'),
           ])
           .where('l.sales_order_id', 'in', orderIds)
-          .where('a.status', '=', '引当中')
+          // 出荷確定と同時に印刷すると、この時点では引当が「出荷済」に変わっている。
+          // 「引当中」だけを見ると、出荷確定して印刷したときのピッキングリストが
+          // 必ず白紙になる（確定後の刷り直しも同じ）。
+          .where('a.status', 'in', ['引当中', '出荷済'])
           .groupBy(['w.short_name', 's.sku_code', 's.jan', 'p.product_name', 'st.lot_no'])
           .orderBy('w.short_name')
           .orderBy('s.sku_code')
@@ -309,13 +312,16 @@ export class ReportsService {
         lines.map((l) => this.deliveryRow(chosen, l)),
       );
 
+      // 合計数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
+      // 出荷指示書も同じ数え方にしてあるので、同じ束の中で数が食い違わない。
+      const totalQty = qty(this.goodsQty(lines));
       if (chosen === '単価なし') {
-        doc.totals([['合計数量', qty(this.sum(lines.map((l) => l.qty)))]]);
+        doc.totals([['合計数量', totalQty]]);
       } else {
         const subtotal = this.sum(lines.map((l) => l.amount));
         const tax = await this.taxOf(lines);
         doc.totals([
-          ['合計数量', qty(this.sum(lines.map((l) => l.qty)))],
+          ['合計数量', totalQty],
           ['小計（税抜）', money(subtotal)],
           ['消費税', money(tax)],
           ['合計（税込）', money(Number(subtotal) + Number(tax))],
@@ -540,6 +546,7 @@ export class ReportsService {
       .leftJoin('skus as s', 's.id', 'l.sku_id')
       .select([
         'l.line_no as line_no',
+        'l.parent_line_no as parent_line_no',
         'l.line_type as line_type',
         'l.item_name as item_name',
         'l.qty as qty',
@@ -556,32 +563,18 @@ export class ReportsService {
       .execute();
   }
 
-  /** 出荷済みなら出荷明細、まだなら受注明細を使う。 */
-  private async deliveryLines(sh: { id: number; sales_order_id: number }) {
-    const shipped = await this.db
-      .selectFrom('shipment_lines as l')
-      .innerJoin('shipments as sh', 'sh.id', 'l.shipment_id')
-      .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
-      .leftJoin('sales_order_lines as sol', 'sol.id', 'l.sales_order_line_id')
-      .leftJoin('skus as s', 's.id', 'l.sku_id')
-      .select([
-        'l.line_no as line_no',
-        sql<string>`'商品'`.as('line_type'),
-        'l.item_name as item_name',
-        'l.qty as qty',
-        'l.unit_price as unit_price',
-        'l.tax_rate as tax_rate',
-        'l.amount as amount',
-        sql<boolean>`true`.as('is_stock_target'),
-        's.sku_code as sku_code',
-        's.jan as jan',
-        this.retailPriceExpr('sol', 'o').as('retail_price'),
-      ])
-      .where('l.shipment_id', '=', sh.id)
-      .orderBy('l.line_no')
-      .execute();
-
-    return shipped.length > 0 ? shipped : this.orderLines(sh.sales_order_id);
+  /**
+   * 納品書に載せる明細。**常に受注明細を使う。**
+   *
+   * 出荷明細（shipment_lines）は倉庫から実際に出たものの記録で、
+   * 在庫を持たない行（送料・値引・販促品・非商品）を持たず、セット商品は
+   * 構成品ごとに並ぶ。これを納品書に使うと、出荷確定の前後で得意先に渡す
+   * 書類の内容と金額が変わってしまう（送料と値引が消え、セットは構成品の数だけ
+   * 金額が重複する）。出荷は全量引き当てできたときだけ作られるので、
+   * 受注明細がそのまま「出荷した内容」になる。
+   */
+  private deliveryLines(sh: { id: number; sales_order_id: number }) {
+    return this.orderLines(sh.sales_order_id);
   }
 
   private deliveryColumns(form: DeliveryNoteForm): Column[] {
@@ -741,6 +734,26 @@ export class ReportsService {
     const tel = direct ? sh.direct_tel : sh.dest_tel;
     const name = direct && sh.direct_name ? `${sh.direct_name} 様　` : '';
     return `${name}〒${zip ?? ''}　${a1 ?? ''}${a2 ?? ''}${tel ? `　TEL ${tel}` : ''}`;
+  }
+
+  /**
+   * 帳票の「合計数量」。品物の行だけ数える。
+   * ・送料・値引・非商品は個数ではないので数えない
+   * ・セット商品は1行＝そのセット数として数える
+   * ・内訳商品は、親のセット行があるときは二重になるので数えない
+   * 出荷指示書と納品書で同じ規則を使う（同じ束の中で数が食い違わないように）。
+   */
+  private goodsQty(lines: { line_type: string; qty: string | number; parent_line_no?: number | null }[]): number {
+    return this.sum(
+      lines
+        .filter(
+          (l) =>
+            l.line_type === '商品' ||
+            l.line_type === 'セット商品' ||
+            (l.line_type === '内訳商品' && !l.parent_line_no),
+        )
+        .map((l) => l.qty),
+    );
   }
 
   private sum(values: (string | number)[]): number {

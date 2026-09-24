@@ -61,7 +61,14 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell-root">
-      <button type="button" className={`shell-overlay no-print ${navOpen ? 'is-open' : ''}`} aria-label="メニューを閉じる" onClick={() => setNavOpen(false)} />
+      {/*
+        暗幕はメニューを開いている間だけ置く。常に置くと、幅1024px未満では
+        画面全体を覆ったままになり（.shell-overlay は display:block 固定で、
+        閉じている状態を表す CSS 規則が無い）、どこも押せなくなる。
+      */}
+      {navOpen && (
+        <button type="button" className="shell-overlay no-print" aria-label="メニューを閉じる" onClick={() => setNavOpen(false)} />
+      )}
 
       <nav className={`shell-sidebar no-print text-[#dbe8ee] ${navOpen ? 'is-open' : ''}`} style={{ background: 'linear-gradient(180deg,#22495a 0%,#1b3b49 62%,#163241 100%)' }}>
         <div className="shell-sidebar-head h-[52px] flex items-center gap-2.5 px-4 border-b border-white/10">

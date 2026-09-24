@@ -161,15 +161,21 @@ export class BillingService {
       .columns(['invoice_id', 'line_no', 'shipment_id', 'item_name', 'qty', 'unit_price', 'tax_rate', 'amount', 'created_by'])
       .expression(
         trx
-          .selectFrom('shipment_lines as sl')
-          .innerJoin('shipments as sh', 'sh.id', 'sl.shipment_id')
+          // 請求は「売った内容」。出荷明細（shipment_lines）は倉庫から出たものの記録で、
+          // 送料・値引のような在庫を持たない行が無く、セット商品は構成品ごとに並ぶため、
+          // そのまま請求にすると送料と値引が落ち、セットは構成品の数だけ金額が膨らむ。
+          .selectFrom('sales_order_lines as sl')
+          .innerJoin('shipments as sh', 'sh.sales_order_id', 'sl.sales_order_id')
           .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
           .select([
             sql<number>`${invoice.id}`.as('invoice_id'),
             sql<number>`row_number() over (order by sh.shipment_no, sl.tax_rate)`.as('line_no'),
             'sh.id as shipment_id',
             sql<string>`'出荷 ' || sh.shipment_no`.as('item_name'),
-            sql<string>`sum(sl.qty)`.as('qty'),
+            // 数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
+            // 納品書・出荷指示書の goodsQty() と同じ数え方にそろえてある。
+            sql<string>`coalesce(sum(sl.qty) filter (where sl.line_type in ('商品','セット商品')
+              or (sl.line_type = '内訳商品' and sl.parent_line_no is null)), 0)`.as('qty'),
             sql<string>`0`.as('unit_price'),
             'sl.tax_rate as tax_rate',
             sql<string>`sum(sl.amount)`.as('amount'),
@@ -239,22 +245,30 @@ export class BillingService {
     // 送料は出荷ごとに判定する（9/15 ご回答：1回の出荷が 30,000 円未満なら一律 750 円）。
     //   受注に送料調整欄があればその額（直送はここに直接入力）。
     //   取引先マスタの送料区分が「請求しない」「直送のみ」なら 0。
+    //   受注明細に金額の入った「送料」の行があるときは、その行が請求明細に乗るので
+    //   自動計算も送料調整欄も使わない（同じ送料を二重に請求しないため）。
+    //   0 円の送料行は「送料なし」の意思表示ではないので、自動計算をそのまま行う。
+    //   判定の元になる金額は送料の行を除いた受注金額（送料で閾値を超えるのを避ける）。
     //   それ以外は fn_shipping_fee（閾値・金額は取引先マスタ → 設定の順）。
     await trx
       .updateTable('invoices')
       .set({
         shipping_fee_amount: sql<string>`(
           select coalesce(sum(
-            coalesce(o.shipping_fee_adjustment,
-              case when o.order_type = '直送' then 0
-                   when fr.code in ('NO_CHARGE', 'DIRECT_ONLY') then 0
-                   else fn_shipping_fee(o.partner_id, t.total) end)), 0)
+            case when t.fee_amount <> 0 then 0
+                 else coalesce(o.shipping_fee_adjustment,
+                        case when o.order_type = '直送' then 0
+                             when fr.code in ('NO_CHARGE', 'DIRECT_ONLY') then 0
+                             else fn_shipping_fee(o.partner_id, t.total) end) end), 0)
             from shipments sh
             join sales_orders o on o.id = sh.sales_order_id
             join partners pa on pa.id = o.partner_id
             left join codes fr on fr.id = pa.shipping_fee_rule_code_id
-            join lateral (select coalesce(sum(sl.amount), 0) as total
-                            from shipment_lines sl where sl.shipment_id = sh.id) t on true
+            join lateral (
+              select coalesce(sum(sl.amount) filter (where sl.line_type <> '送料'), 0) as total,
+                     coalesce(sum(sl.amount) filter (where sl.line_type = '送料'), 0) as fee_amount
+                from sales_order_lines sl
+               where sl.sales_order_id = sh.sales_order_id) t on true
            where sh.status = '出荷済' and o.is_billable and o.partner_id = ${partnerId}
              and sh.ship_date >= ${period.from} and sh.ship_date <= ${period.to})`,
         shipment_amount: sql<string>`(select coalesce(sum(amount),0) from invoice_lines where invoice_id = ${invoice.id} and shipment_id is not null)`,

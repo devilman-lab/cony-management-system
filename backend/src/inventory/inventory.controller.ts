@@ -105,7 +105,11 @@ type CopyReservationBody = z.infer<typeof CopyReservationSchema>;
 const ReservationListSchema = z.object({
   partner_id: z.coerce.number().int().positive().optional(),
   sku_id: z.coerce.number().int().positive().optional(),
+  /** この日を含む枠だけ。単日で見たいとき。 */
   on: ymd.optional(),
+  /** from〜to に少しでも重なる枠。月の一覧はこちらを使う（月の途中から始まる枠を取りこぼさないため）。 */
+  from: ymd.optional(),
+  to: ymd.optional(),
   sales_category_id: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
@@ -213,9 +217,13 @@ export class InventoryController {
     if (query.partner_id !== undefined) base = base.where('r.partner_id', '=', query.partner_id);
     if (query.sku_id !== undefined) base = base.where('r.sku_id', '=', query.sku_id);
     if (query.sales_category_id !== undefined) base = base.where('r.sales_category_id', '=', query.sales_category_id);
-    if (query.on) {
-      base = base.where('r.period_from', '<=', query.on).where('r.period_to', '>=', query.on);
-    }
+    // 期間の重なりで絞る。単日（on）は from=to=on と同じ扱い。
+    // 「月の15日を含む枠」だけを出す作りだと、月の途中から始まる枠が一覧に一度も出ず、
+    // 画面から直せないのに受注の枠判定にだけ効く、という状態になる。
+    const from = query.from ?? query.on;
+    const to = query.to ?? query.on;
+    if (from) base = base.where('r.period_to', '>=', from);
+    if (to) base = base.where('r.period_from', '<=', to);
 
     const [items, total] = await Promise.all([
       base

@@ -89,8 +89,14 @@ export class RoyaltyService {
       .returning(['id'])
       .executeTakeFirstOrThrow();
 
-    // 出荷済みの明細を、規定が当たるものだけ拾う。
+    // 出荷した受注の明細を、規定が当たるものだけ拾う。
     // 規定は「販売先 → 商品 → ブランド」の順に細かいものを優先する（scope_priority）。
+    //
+    // 金額の元は受注明細（＝請求・納品書と同じ土台）。出荷明細（shipment_lines）は
+    // 倉庫から出たものの記録で、セット商品は構成品ごとにセットの単価を持つため、
+    // そのまま使うと構成品の数だけ課税基礎が膨らむ。
+    // なおセット商品の行は「セット商品そのもの」のブランド・商品で規定を当てる。
+    // 構成品側のブランドで規定を当てたい場合は、セット商品にそのブランドを設定する。
     const applied = sql`
       lateral (
         select rr.id, rr.rate, rr.fixed_amount, rr.is_excluded
@@ -117,13 +123,21 @@ export class RoyaltyService {
                case when rule.rate is not null then sum(sl.amount) * rule.rate
                     else coalesce(rule.fixed_amount, 0) * sum(sl.qty) end,
                ${roundingMode})
-        from shipment_lines sl
-        join shipments sh on sh.id = sl.shipment_id
-        join sales_orders o on o.id = sh.sales_order_id
+        from sales_order_lines sl
+        join lateral (
+          select sh0.id, sh0.ship_date
+            from shipments sh0
+           where sh0.sales_order_id = sl.sales_order_id
+             and sh0.status = '出荷済'
+           order by sh0.ship_date, sh0.id
+           limit 1
+        ) sh on true
+        join sales_orders o on o.id = sl.sales_order_id
         join skus s on s.id = sl.sku_id
         join products p on p.id = s.product_id
         join ${applied} on true
-       where sh.status = '出荷済'
+       where (sl.line_type in ('商品', 'セット商品')
+              or (sl.line_type = '内訳商品' and sl.parent_line_no is null))
          and o.is_billable
          and date_trunc('month', sh.ship_date) = ${monthStart}::date
          and not rule.is_excluded

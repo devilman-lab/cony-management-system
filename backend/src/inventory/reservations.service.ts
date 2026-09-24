@@ -124,20 +124,25 @@ export class ReservationsService {
     const clean = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     if (Object.keys(clean).length === 0) throw new BadRequestException('更新する項目がありません');
 
-    const row = await this.db
-      .updateTable('reservations')
-      .set({ ...clean, updated_by: userId, updated_at: new Date() } as never)
-      .where('id', '=', id)
-      .returningAll()
-      .executeTakeFirst();
+    // 使用数を下回る枠には減らせない。書いてから判定すると、例外を投げても
+    // 更新はすでに確定してしまい「エラーが出たのに保存されている」状態になる。
+    // トランザクションの中で行を押さえてから確かめ、駄目ならまとめて取り消す。
+    return this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .updateTable('reservations')
+        .set({ ...clean, updated_by: userId, updated_at: new Date() } as never)
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirst();
 
-    if (!row) throw new NotFoundException(`確保数が見つかりません（ID: ${id}）`);
-    if (Number(row.reserved_qty) < Number(row.consumed_qty)) {
-      throw new BadRequestException(
-        `すでに ${row.consumed_qty} 使われているため、${row.reserved_qty} には減らせません`,
-      );
-    }
-    return row;
+      if (!row) throw new NotFoundException(`確保数が見つかりません（ID: ${id}）`);
+      if (Number(row.reserved_qty) < Number(row.consumed_qty)) {
+        throw new BadRequestException(
+          `すでに ${row.consumed_qty} 使われているため、${row.reserved_qty} には減らせません`,
+        );
+      }
+      return row;
+    });
   }
 
   /** まだ受注に使われていない枠だけ消せる。 */

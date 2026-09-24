@@ -39,8 +39,13 @@ export default function AllocationPage() {
 
   const [month, setMonth] = useState(thisMonth());
   const [categoryId, setCategoryId] = useState('');
-  const on = `${month}-15`;
-  const list = useList<ReservationRow>('/inventory/reservations', { on, sales_category_id: categoryId || undefined }, 200);
+  // その月に少しでもかかる枠をすべて出す（月の15日で判定すると、月の途中から始まる枠が出ない）
+  const range = monthRange(month);
+  const list = useList<ReservationRow>(
+    '/inventory/reservations',
+    { from: range.from, to: range.to, sales_category_id: categoryId || undefined },
+    200,
+  );
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<ReservationRow | null>(null);
@@ -85,6 +90,8 @@ export default function AllocationPage() {
       await list.reload();
     } catch (e) {
       setError(e);
+      // 失敗した理由が「今の使用数」に依るので、画面の数字を最新にしておく
+      await list.reload();
     } finally {
       setBusy(false);
     }

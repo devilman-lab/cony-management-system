@@ -117,7 +117,8 @@ function toBody(d: OrderDraft) {
       line_type: l.line_type,
       sku_id: l.sku?.id ?? null,
       partner_product_id: l.partner_product_id,
-      item_name: l.item_name.trim() || l.sku?.label.split('　')[1] || l.line_type,
+      // 得意先別商品に販売名が無いと undefined が入りうるので、必ず文字列として扱う
+      item_name: (l.item_name ?? '').trim() || l.sku?.label.split('　')[1] || l.line_type,
       qty: l.qty.trim() || '0',
       unit_price: l.unit_price.trim() || '0',
       tax_rate: l.tax_rate,
@@ -163,7 +164,8 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     setD((s) => ({
       ...s,
       trade_type: (p.default_trade_type as '委託' | '買取' | null) ?? s.trade_type,
-      sales_staff_id: p.sales_staff_id ? String(p.sales_staff_id) : s.sales_staff_id,
+      // 取引先を変えたら販売担当も必ずその取引先の既定にそろえる（前の取引先の担当を残さない）
+      sales_staff_id: p.sales_staff_id ? String(p.sales_staff_id) : '',
     }));
     try {
       const dests = await fetchDestinations(o.id);
@@ -206,7 +208,9 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
           setLine(key, {
             unit_price: pp.unit_price,
             partner_product_id: pp.id,
-            item_name: pp.sales_name ?? undefined,
+            // 販売名が未登録（null）なら空にする。undefined を入れると品名が失われ、
+            // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
+            item_name: pp.sales_name ?? '',
             note: pp.partner_product_code ? `専用コード ${pp.partner_product_code}` : '得意先別単価',
           });
         }

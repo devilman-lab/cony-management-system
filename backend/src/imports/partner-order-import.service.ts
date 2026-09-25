@@ -33,8 +33,11 @@ export interface ImportResult {
   total_rows: number;
   success_rows: number;
   error_rows: number;
+  /** 受注として登録できた件数。原本だけ残った分は含めない。 */
   created_orders: number;
   skipped_orders: number;
+  /** 原本は残したが受注にできなかった件数（マスタ未登録）。取込一覧の「要確認」に出る。 */
+  pending_orders: number;
   errors: Array<{ row_no: number; reason: string }>;
   /** 行は通したが読めなかった項目。JANが指数表記に壊れている等。 */
   warnings: string[];
@@ -110,6 +113,7 @@ export class PartnerOrderImportService {
       error_rows: errors.length,
       created_orders: 0,
       skipped_orders: 0,
+      pending_orders: 0,
       errors,
       warnings: mapped.flatMap((r) => r.warnings),
       orders: [],
@@ -127,6 +131,9 @@ export class PartnerOrderImportService {
     }
 
     await this.db.transaction().execute(async (trx) => {
+      // 件数は受注を作り終えてから入れ直す。
+      // 「読めた行数」を成功として先に入れてしまうと、マスタ未登録で受注にできなかった分まで
+      // 取り込めたことになり、履歴の件数と実際に登録された受注の件数が食い違う。
       const batch = await trx
         .insertInto('import_batches')
         .values({
@@ -134,7 +141,7 @@ export class PartnerOrderImportService {
           import_template_id: template.id,
           file_name: input.file_name,
           total_count: mapped.length,
-          success_count: ok.length,
+          success_count: 0,
           error_count: errors.length,
           imported_by: userId,
         })
@@ -150,10 +157,22 @@ export class PartnerOrderImportService {
           rowsOfOrder,
           userId,
         );
+        // 「作成した受注」は本当に受注番号が付いたものだけ数える。
+        // マスタ未登録で原本のまま残した分まで数えると、画面の件数が実態と合わず、
+        // 取り込めたつもりで出荷一覧に出てこない受注に気づけなくなる。
         if (outcome.status === '取込済のため除外') result.skipped_orders += 1;
-        else result.created_orders += 1;
+        else if (outcome.order_no) result.created_orders += 1;
+        else result.pending_orders += 1;
         result.orders.push(outcome);
       }
+
+      // 取込履歴の「登録できた件数」は、通販(OMS)・Amazon と同じく
+      // 実際に登録できた件数（＝受注番号が付いた受注）に揃える。
+      await trx
+        .updateTable('import_batches')
+        .set({ success_count: result.created_orders })
+        .where('id', '=', batch.id)
+        .execute();
     });
 
     return result;
@@ -202,6 +221,19 @@ export class PartnerOrderImportService {
         values[col.target_field] = null;
         warnings.push(`${rowNo}行目：${reason}`);
       }
+    }
+
+    // 数量が読めない・0以下の行は受注にしない。
+    // そのまま通すと引当されない受注ができ、出荷一覧に出ないまま埋もれる。
+    const qty = Number(values['qty']);
+    if (values['qty'] === null || values['qty'] === undefined || !Number.isFinite(qty) || qty <= 0) {
+      return {
+        row_no: rowNo,
+        values,
+        raw,
+        warnings,
+        error: `数量が読めません（${values['qty'] ?? '空欄'}）。0 より大きい数量が要ります`,
+      };
     }
 
     return { row_no: rowNo, values, raw, warnings };
@@ -464,27 +496,37 @@ export class PartnerOrderImportService {
     return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
   }
 
-  /** 要確認のまま残っている取込。マスタ登録が済んだら取り込み直す。 */
+  /**
+   * 要確認のまま残っている取込。マスタ登録が済んだら取り込み直す。
+   *
+   * 件数は1ページ分ではなく全体の件数を返す。ここを表示件数にすると
+   * 「50件」で頭打ちになり、あと何件残っているのかが画面から分からない。
+   */
   async listPending(query: { limit: number; offset: number }) {
-    const items = await this.db
+    const base = this.db
       .selectFrom('external_orders as e')
       .leftJoin('partners as p', 'p.id', 'e.partner_id')
-      .select([
-        'e.id as id',
-        'e.channel as channel',
-        'e.external_order_no as external_order_no',
-        'e.delivery_code as delivery_code',
-        'p.name1 as partner_name',
-        'e.status as status',
-        'e.error_message as error_message',
-        'e.ordered_at as ordered_at',
-      ])
-      .where('e.status', '=', '取込済')
-      .orderBy('e.id', 'desc')
-      .limit(query.limit)
-      .offset(query.offset)
-      .execute();
+      .where('e.status', '=', '取込済');
 
-    return { items, total: items.length, limit: query.limit, offset: query.offset };
+    const [items, total] = await Promise.all([
+      base
+        .select([
+          'e.id as id',
+          'e.channel as channel',
+          'e.external_order_no as external_order_no',
+          'e.delivery_code as delivery_code',
+          'p.name1 as partner_name',
+          'e.status as status',
+          'e.error_message as error_message',
+          'e.ordered_at as ordered_at',
+        ])
+        .orderBy('e.id', 'desc')
+        .limit(query.limit)
+        .offset(query.offset)
+        .execute(),
+      base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
+    ]);
+
+    return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
   }
 }

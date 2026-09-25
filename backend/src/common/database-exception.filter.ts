@@ -54,6 +54,16 @@ const UNIQUE_MESSAGES: Record<string, string> = {
   postal_codes_postal_code_town_key: 'この郵便番号と町域の組み合わせはすでに登録されています',
   ux_reservations_scope:
     'この取引先・販売カテゴリー・商品・期間の確保数はすでに登録されています',
+  ux_skus_jan: 'この JAN コードは別の SKU で使われています。JAN は1つの商品にだけ登録してください',
+  skus_sku_code_key: 'この SKU コードはすでに登録されています',
+  partners_partner_code_key: 'この取引先コードはすでに登録されています',
+  products_product_code_key: 'この品番はすでに登録されています',
+  warehouses_warehouse_code_key: 'この倉庫コードはすでに登録されています',
+  purchase_items_purchase_code_key: 'この仕入コードはすでに登録されています',
+  users_login_id_key: 'このログインIDはすでに使われています',
+  delivery_destinations_delivery_code_key:
+    'この納品先コードはすでに使われています（納品先コードは全社で1つに限ります）',
+  set_headers_sku_id_key: 'この SKU のセットはすでに登録されています',
 };
 
 @Catch()

@@ -55,6 +55,17 @@ export class ReturnsService {
   async create(input: CreateReturnInput, userId: number) {
     if (input.lines.length === 0) throw new BadRequestException('返品明細を1行以上入力してください');
 
+    // 数量 0 の返品を受け付けると、返品額 0 の伝票が残る。
+    // その月を締めると請求明細に「返品 数量 -0.00 ／ 金額 0」の行が載り、
+    // 経理には何のための行なのか分からなくなる。入荷・受注と同じ扱いにする。
+    // ケース端数があるので小数は通す。
+    for (const line of input.lines) {
+      const qty = Number(line.qty);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new BadRequestException(`${line.line_no}行目：数量は 0 より大きい数で入力してください`);
+      }
+    }
+
     return this.db.transaction().execute(async (trx) => {
       const returnNo = await this.numbering.next(trx, 'return');
 
@@ -179,6 +190,68 @@ export class ReturnsService {
         .execute();
 
       return { id, return_no: header.return_no, status: '完了', inspected: lines.length };
+    });
+  }
+
+  /**
+   * 返品の取消。
+   *
+   * 取り消せるのは「受付」のうちだけ。検品で在庫に戻したあとに取り消しても在庫は減らないので、
+   * 伝票だけが消えて在庫が合わなくなる。その場合は在庫調整で戻してもらう。
+   * 誤登録をそのまま残すと請求の返品額に乗り続けるため、取消の出口は用意する。
+   */
+  async cancel(id: number, userId: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const header = await trx
+        .selectFrom('returns')
+        .select(['id', 'return_no', 'status'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!header) throw new NotFoundException(`返品が見つかりません（ID: ${id}）`);
+      if (header.status === '取消') throw new ConflictException('すでに取り消されています');
+
+      // 在庫が動いたかどうかは状態ではなく移動履歴で見る。
+      // 状態の付け替えを取りこぼした伝票があっても、在庫を動かした返品を消さないため。
+      const moved = await trx
+        .selectFrom('stock_movements')
+        .select('id')
+        .where('ref_table', '=', 'returns')
+        .where('ref_id', '=', id)
+        .executeTakeFirst();
+
+      if (moved) {
+        throw new ConflictException(
+          `${header.return_no} は検品が済み、戻した分がすでに在庫に入っています。取り消しても在庫は減らないため、在庫の「在庫調整」で数量を戻してください`,
+        );
+      }
+      if (header.status !== '受付') {
+        throw new ConflictException(`${header.return_no} は「${header.status}」です。取り消せるのは「受付」のうちだけです`);
+      }
+
+      // 請求に載せたあとで返品だけ消すと、請求書の金額と伝票が合わなくなる。
+      const invoiced = await trx
+        .selectFrom('invoice_lines as il')
+        .innerJoin('invoices as i', 'i.id', 'il.invoice_id')
+        .select('i.invoice_no as invoice_no')
+        .where('il.return_id', '=', id)
+        .where('i.status', '<>', '取消')
+        .executeTakeFirst();
+
+      if (invoiced) {
+        throw new ConflictException(
+          `この返品は請求 ${invoiced.invoice_no} に含まれています。請求書の一覧でこの請求を「取消」にしてから、もう一度お試しください`,
+        );
+      }
+
+      await trx
+        .updateTable('returns')
+        .set({ status: '取消', updated_by: userId, updated_at: new Date() })
+        .where('id', '=', id)
+        .execute();
+
+      return { id, return_no: header.return_no, status: '取消' };
     });
   }
 

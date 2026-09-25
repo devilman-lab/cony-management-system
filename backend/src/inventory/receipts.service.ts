@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { sql } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
@@ -28,6 +28,8 @@ export interface ReceiptListQuery {
   warehouse_id?: number;
   from?: string;
   to?: string;
+  /** 取り消した入荷も出す。既定では出さない（受注一覧と同じ扱い） */
+  include_cancelled?: boolean;
   limit: number;
   offset: number;
 }
@@ -42,6 +44,15 @@ export class ReceiptsService {
   ) {}
 
   async create(input: CreateReceiptInput, userId: number) {
+    // 数量 0 の明細でも登録・確定できてしまうと、在庫が1つも増えないまま「入荷済」の行だけが残り、
+    // 入荷したのかどうかが誰にも分からなくなる。ケース端数があるので小数は通す。
+    for (const line of input.lines) {
+      const qty = Number(line.qty);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new BadRequestException(`${line.line_no}行目：数量は 0 より大きい数で入力してください`);
+      }
+    }
+
     return this.db.transaction().execute(async (trx) => {
       const receiptNo = await this.numbering.next(trx, 'receipt');
 
@@ -99,12 +110,21 @@ export class ReceiptsService {
 
       const lines = await trx
         .selectFrom('receipt_lines')
-        .select(['id', 'sku_id', 'qty', 'lot_no'])
+        .select(['id', 'line_no', 'sku_id', 'qty', 'lot_no'])
         .where('receipt_id', '=', id)
         .orderBy('line_no', 'asc')
         .execute();
 
       if (lines.length === 0) throw new ConflictException('入荷明細がありません');
+
+      // 登録時に止めているが、この検査を入れる前に作られた入荷もある。
+      // そのまま確定すると在庫が増えないのに「入荷済」になるので、ここでも止めて取消へ誘導する。
+      const zeroLine = lines.find((l) => !(Number(l.qty) > 0));
+      if (zeroLine) {
+        throw new ConflictException(
+          `${zeroLine.line_no}行目の数量が ${zeroLine.qty} です。この入荷は取り消して、数量を入れて登録し直してください`,
+        );
+      }
 
       for (const line of lines) {
         const stockId = await this.ledger.findOrCreate(
@@ -130,13 +150,64 @@ export class ReceiptsService {
     });
   }
 
+  /**
+   * 入荷の取消。
+   *
+   * 取り消せるのは入荷確定前（「指示」）のうちだけ。確定後に取り消しても実在庫は減らないので、
+   * 伝票だけが消えて在庫が合わなくなる。確定を間違えたときは在庫調整で戻してもらう。
+   */
+  async cancel(id: number, userId: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const receipt = await trx
+        .selectFrom('receipts')
+        .select(['id', 'receipt_no', 'status'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!receipt) throw new NotFoundException(`入荷が見つかりません（ID: ${id}）`);
+      if (receipt.status === '取消') throw new ConflictException('すでに取り消されています');
+
+      // 在庫が動いたかどうかは状態ではなく移動履歴で見る。
+      // 状態の付け替えを取りこぼした伝票があっても、在庫を増やした入荷を消さないため。
+      const moved = await trx
+        .selectFrom('stock_movements')
+        .select('id')
+        .where('ref_table', '=', 'receipts')
+        .where('ref_id', '=', id)
+        .executeTakeFirst();
+
+      if (moved) {
+        throw new ConflictException(
+          `${receipt.receipt_no} は入荷確定済みで、実在庫がすでに増えています。取り消しても在庫は減らないため、在庫の「在庫調整」で数量を戻してください`,
+        );
+      }
+      if (receipt.status !== '指示') {
+        throw new ConflictException(
+          `${receipt.receipt_no} は「${receipt.status}」です。取り消せるのは入荷確定前（「指示」）のうちだけです`,
+        );
+      }
+
+      await trx
+        .updateTable('receipts')
+        .set({ status: '取消', updated_by: userId, updated_at: new Date() })
+        .where('id', '=', id)
+        .execute();
+
+      return { id, receipt_no: receipt.receipt_no, status: '取消' };
+    });
+  }
+
   async list(query: ReceiptListQuery): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
       .selectFrom('receipts as r')
       .innerJoin('warehouses as w', 'w.id', 'r.warehouse_id')
       .leftJoin('partners as p', 'p.id', 'r.supplier_partner_id');
 
+    // 取り消した入荷は既定では出さない（誤登録の取消が入荷予定に混ざると、届く予定のものが読みにくい）。
+    // 状態で「取消」を選んだときと include_cancelled のときだけ出す。
     if (query.status) base = base.where('r.status', '=', query.status);
+    else if (!query.include_cancelled) base = base.where('r.status', '<>', '取消');
     if (query.warehouse_id !== undefined) base = base.where('r.warehouse_id', '=', query.warehouse_id);
     if (query.from) base = base.where('r.planned_date', '>=', query.from);
     if (query.to) base = base.where('r.planned_date', '<=', query.to);

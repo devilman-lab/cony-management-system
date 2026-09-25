@@ -122,7 +122,13 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
 /* ---------- 汎用区分 ---------- */
 
 interface CodeCategory { id: number; code: string; name: string }
-interface CodeRow extends Record<string, unknown> { id: number; code: string; name: string }
+interface CodeRow extends Record<string, unknown> {
+  id: number;
+  code: string;
+  name: string;
+  sort_order: number | null;
+  note: string | null;
+}
 
 function CodesTab() {
   const { can } = useAuth();
@@ -168,7 +174,7 @@ function CodesTab() {
           columns={[
             { key: 'code', label: 'コード', width: 140, render: (r) => <Num className="font-semibold">{r.code}</Num> },
             { key: 'name', label: '名称' },
-            { key: '_act', label: '', width: 80, render: (r) => can('M-16', 'update') && <Button size="sm" onClick={() => { setEditing(r); setF({ code: r.code, name: r.name, sort_order: '', note: '' }); setError(null); setOpen(true); }}>編集</Button> },
+            { key: '_act', label: '', width: 80, render: (r) => can('M-16', 'update') && <Button size="sm" onClick={() => { setEditing(r); setF({ code: r.code, name: r.name, sort_order: r.sort_order == null ? '' : String(r.sort_order), note: r.note ?? '' }); setError(null); setOpen(true); }}>編集</Button> },
           ]}
           rows={values.data?.values ?? []}
           rowKey={(r) => r.id}

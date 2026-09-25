@@ -534,7 +534,9 @@ CREATE TABLE skus (
 );
 COMMENT ON TABLE skus IS 'SKU（品番-カラー2桁+サイズ2桁-入数区分）';
 CREATE INDEX ix_skus_product ON skus (product_id);
-CREATE INDEX ix_skus_jan     ON skus (jan);
+-- JAN は空欄を許すが、入っているものは全社で1つに限る。
+-- 重複を許すと、JANで引き当てる販社CSV（白鳩）の取込がどちらの商品に付くか定まらない。
+CREATE UNIQUE INDEX ux_skus_jan ON skus (jan) WHERE jan IS NOT NULL;
 
 -- (25) set_headers セット
 CREATE TABLE set_headers (
@@ -955,12 +957,16 @@ CREATE TABLE invoices (
   issued_at              TIMESTAMPTZ,   -- 請求書には印刷しない
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
-  UNIQUE (partner_id, period_to),
   CONSTRAINT ck_invoices_period CHECK (period_to >= period_from),
   CONSTRAINT ck_invoices_status CHECK (status IN ('未発行','発行済','取消'))
 );
 COMMENT ON TABLE invoices IS '請求（取引先別締め日）';
 CREATE INDEX ix_invoices_partner ON invoices (partner_id, period_to DESC);
+-- 同じ取引先・同じ締め期間の請求は1件だけ。ただし「取消」にしたものは履歴として残すので数えない。
+-- （取消のあと同じ期間を締め直すと、取消の行はそのまま残り、新しい番号の請求がもう1件できる）
+-- 索引名は元の UNIQUE 制約と同じにしてある。重複したときの日本語の案内が名前で引かれているため。
+CREATE UNIQUE INDEX invoices_partner_id_period_to_key
+  ON invoices (partner_id, period_to) WHERE status <> '取消';
 -- TODO(Q10) 未計上10%/8%、調整10%/8%、手数料の定義。暫定は手入力可
 
 -- (45) invoice_lines 請求明細
@@ -1288,7 +1294,7 @@ CREATE TABLE import_batches (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_import_type   CHECK (import_type IN
-    ('OMS_ORDER','AMAZON_TRANSACTION','PARTNER_ORDER')),
+    ('OMS_ORDER','AMAZON_TRANSACTION','PARTNER_ORDER','POSTAL_CODE')),
   CONSTRAINT ck_import_status CHECK (status IN ('完了','一部エラー','取消'))
 );
 COMMENT ON TABLE import_batches IS '取込バッチ。バッチ単位で取消できる（出荷確定済みは不可）';
@@ -1376,6 +1382,14 @@ CREATE TABLE platform_transactions (
 );
 COMMENT ON TABLE platform_transactions IS 'Amazon等の決済レポート。売上／返品／経費／入金の4系統へ振り分ける';
 CREATE INDEX ix_pt_type ON platform_transactions (platform, transaction_type, transaction_at);
+-- 同じレポートを二度取り込んでも増えないようにする（空欄も1つの値として扱う）。
+--   ・注文番号は広告費用・振込みの行では空。決済番号＋日時で見分ける。
+--   ・1つの注文番号・同一日時に「手数料あり」「手数料なし」の2行が並ぶことがあり
+--     （Amazonの手数料訂正）、別の行として残す必要があるため合計金額まで含める。
+CREATE UNIQUE INDEX ux_platform_tx_natural ON platform_transactions
+  (platform, COALESCE(settlement_no, ''), COALESCE(external_order_no, ''),
+   transaction_type, COALESCE(external_sku_code, ''),
+   COALESCE(transaction_at, '-infinity'::TIMESTAMPTZ), COALESCE(total_amount, 0));
 -- TODO(Q14) 手数料の計上先・入金消込ルール
 
 -- (62) sales_schedules 販売スケジュール

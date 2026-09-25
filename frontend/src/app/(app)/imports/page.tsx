@@ -43,12 +43,22 @@ type Kind = 'partner' | 'oms' | 'amazon' | 'postal';
 
 const KINDS: { k: Kind; label: string; desc: string }[] = [
   { k: 'partner', label: '販社の発注CSV', desc: 'ビックカメラ・ラベルヴィ・白鳩・コネクトなど、販社から届く発注データ。受注として登録し、引当まで行います' },
-  { k: 'oms', label: '通販（OMS）受注CSV', desc: '通販システムから出した63列の受注CSV。出荷済みの受注として登録します' },
+  { k: 'oms', label: '通販（OMS）受注CSV', desc: '通販システムから出した63列の受注CSV。出荷済みの受注として登録します（Shift-JIS・UTF-8 のどちらでも読めます）' },
   { k: 'amazon', label: 'Amazon 決済レポート', desc: 'セラーセントラルのトランザクションレポート。手数料・返金を含めて登録します' },
   { k: 'postal', label: '郵便番号データ', desc: '日本郵便の KEN_ALL.CSV。住所の自動入力に使います' },
 ];
 
-const TYPE_LABEL: Record<string, string> = { PARTNER_ORDER: '販社発注', OMS_ORDER: '通販受注', AMAZON_TRANSACTION: 'Amazon' };
+/** 郵便番号取込の結果に出す項目。英語のキー名をそのまま並べない。 */
+const POSTAL_LABELS: [string, string][] = [
+  ['rows', '読んだ行'],
+  ['records', '登録対象'],
+  ['skipped_rows', '郵便番号として読めなかった行'],
+  ['inserted', '登録した件数'],
+  ['updated', '更新した件数'],
+  ['data_version', '版'],
+];
+
+const TYPE_LABEL: Record<string, string> = { PARTNER_ORDER: '販社発注', OMS_ORDER: '通販受注', AMAZON_TRANSACTION: 'Amazon', POSTAL_CODE: '郵便番号' };
 
 /** CSV取込（I-01）。まず「確認だけ」で読めるか確かめ、問題なければ取り込む。 */
 export default function ImportsPage() {
@@ -134,16 +144,16 @@ export default function ImportsPage() {
           {result && <ResultCard r={result} kind={kind} />}
 
           <Card>
-            <CardHead title="取込履歴" sub="いつ・誰が・何件取り込んだか" />
+            <CardHead title="取込履歴" sub="いつ・誰が・何件取り込んだか。「登録できた件数」は実際に登録できた件数（販社・通販は受注の件数）で、読めただけの行は含みません" />
             <DataTable<BatchRow>
               columns={[
                 { key: 'imported_at', label: '日時', width: 130, render: (r) => ymdhm(r.imported_at) },
                 { key: 'import_type', label: '種類', width: 90, render: (r) => TYPE_LABEL[r.import_type] ?? r.import_type },
                 { key: 'template_name', label: '書式', width: 150, render: (r) => r.template_name ?? '' },
                 { key: 'file_name', label: 'ファイル' },
-                { key: 'total_count', label: '行数', r: true, width: 70 },
-                { key: 'success_count', label: '成功', r: true, width: 70 },
-                { key: 'error_count', label: 'エラー', r: true, width: 70, render: (r) => (r.error_count > 0 ? <span className="text-[var(--color-crit)] font-semibold">{r.error_count}</span> : '0') },
+                { key: 'total_count', label: '読んだ行数', r: true, width: 90 },
+                { key: 'success_count', label: '登録できた件数', r: true, width: 110 },
+                { key: 'error_count', label: '読めなかった行', r: true, width: 110, render: (r) => (r.error_count > 0 ? <span className="text-[var(--color-crit)] font-semibold">{r.error_count}</span> : '0') },
                 { key: 'imported_by_name', label: '担当', width: 90, render: (r) => r.imported_by_name ?? '' },
               ]}
               rows={batches.items}
@@ -156,19 +166,22 @@ export default function ImportsPage() {
 
         <div className="flex flex-col gap-3.5">
           <Card>
-            <CardHead title="受注にできなかったもの" sub="マスタ登録が済んだら取り込み直してください" />
-            {pending.items.length === 0 ? (
+            <CardHead title="受注にできなかったもの" sub={pending.total > 0 ? `全部で ${pending.total} 件。マスタ登録が済んだら取り込み直してください` : 'マスタ登録が済んだら取り込み直してください'} />
+            {pending.total === 0 ? (
               <div className="p-3.5 text-[12px] text-[var(--color-ink-3)]">ありません</div>
             ) : (
-              <div className="max-h-[480px] overflow-auto">
-                {pending.items.map((p) => (
-                  <div key={p.id} className="px-3.5 py-2 border-b border-[var(--color-line)] text-[12px]">
-                    <div className="flex items-center gap-2"><Badge status={p.status} /><span className="num font-semibold">{p.external_order_no}</span><span className="text-[var(--color-ink-3)] ml-auto">{p.channel}</span></div>
-                    <div className="text-[11px] text-[var(--color-ink-2)]">{p.partner_name ?? ''}{p.delivery_code ? `　納品先 ${p.delivery_code}` : ''}</div>
-                    {p.error_message && <div className="text-[11px] text-[var(--color-crit)] mt-0.5">{p.error_message}</div>}
-                  </div>
-                ))}
-              </div>
+              <>
+                <div className="max-h-[480px] overflow-auto">
+                  {pending.items.map((p) => (
+                    <div key={p.id} className="px-3.5 py-2 border-b border-[var(--color-line)] text-[12px]">
+                      <div className="flex items-center gap-2"><Badge status={p.status} /><span className="num font-semibold">{p.external_order_no}</span><span className="text-[var(--color-ink-3)] ml-auto">{p.channel}</span></div>
+                      <div className="text-[11px] text-[var(--color-ink-2)]">{p.partner_name ?? ''}{p.delivery_code ? `　納品先 ${p.delivery_code}` : ''}</div>
+                      {p.error_message && <div className="text-[11px] text-[var(--color-crit)] mt-0.5">{p.error_message}</div>}
+                    </div>
+                  ))}
+                </div>
+                <Pager total={pending.total} limit={pending.limit} offset={pending.offset} onChange={pending.setOffset} />
+              </>
             )}
           </Card>
           <Card>
@@ -201,14 +214,33 @@ function ResultCard({ r, kind }: { r: Record<string, unknown>; kind: Kind }) {
             <span>行数 <b className="num">{n('total_rows')}</b></span>
             <span>読めた行 <b className="num">{n('success_rows')}</b></span>
             <span>エラー行 <b className={`num ${n('error_rows') ? 'text-[var(--color-crit)]' : ''}`}>{n('error_rows')}</b></span>
-            {!dry && <><span>作成した受注 <b className="num">{n('created_orders')}</b></span><span>取込済で除外 <b className="num">{n('skipped_orders')}</b></span></>}
+            {!dry && (
+              <>
+                <span>作成した受注 <b className="num">{n('created_orders')}</b></span>
+                <span>取込済で除外 <b className="num">{n('skipped_orders')}</b></span>
+                {n('pending_orders') > 0 && (
+                  <span className="text-[var(--color-warn)]">
+                    受注にできず要確認 <b className="num">{n('pending_orders')}</b>（マスタ登録のあと取り込み直してください）
+                  </span>
+                )}
+              </>
+            )}
           </div>
         )}
         {kind === 'oms' && (
           <div className="flex flex-wrap gap-x-5 gap-y-1">
             <span>明細 <b className="num">{n('total_lines')}</b></span>
             <span>受注 <b className="num">{n('orders')}</b></span>
-            {!dry && <><span>作成 <b className="num">{n('created_orders')}</b></span><span>除外 <b className="num">{n('skipped_orders')}</b></span></>}
+            {r.encoding ? <span className="text-[var(--color-ink-3)]">文字コード {String(r.encoding)}</span> : null}
+            {!dry && (
+              <>
+                <span>作成 <b className="num">{n('created_orders')}</b></span>
+                <span>除外 <b className="num">{n('skipped_orders')}</b></span>
+                {n('pending_orders') > 0 && (
+                  <span className="text-[var(--color-warn)]">受注にできず要確認 <b className="num">{n('pending_orders')}</b></span>
+                )}
+              </>
+            )}
             <span>商品が見つからない <b className={`num ${n('unresolved_skus') ? 'text-[var(--color-warn)]' : ''}`}>{n('unresolved_skus')}</b></span>
             <span className="text-[var(--color-ink-3)]">種別: {Object.entries(map('line_types')).map(([k, v]) => `${k} ${v}`).join('、')}</span>
           </div>
@@ -224,7 +256,11 @@ function ResultCard({ r, kind }: { r: Record<string, unknown>; kind: Kind }) {
         )}
         {kind === 'postal' && (
           <div className="flex flex-wrap gap-x-5 gap-y-1">
-            {Object.entries(r).filter(([k, v]) => k !== '_dry' && (typeof v === 'number' || typeof v === 'string')).map(([k, v]) => <span key={k}>{k} <b className="num">{String(v)}</b></span>)}
+            {/* 版を指定せずに取り込んだときは r.data_version が空で返る。
+                そのまま出すと「版 null」と英語が並ぶため、値の無い項目は出さない。 */}
+            {POSTAL_LABELS.filter(([key]) => r[key] !== undefined && r[key] !== null && r[key] !== '').map(([key, label]) => (
+              <span key={key}>{label} <b className="num">{String(r[key])}</b></span>
+            ))}
           </div>
         )}
         {errors.length > 0 && (

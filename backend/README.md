@@ -101,7 +101,7 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 
 ## 現在の実装範囲
 
-経路 143 本。**要件定義書の機能ID 30 すべて**に対応しています。
+経路 156 本。**要件定義書の機能ID 30 すべて**に対応しています。
 
 2026-09-16、9/15 の社内確認へのご回答を反映しました（スキーマ v1.6）。
 
@@ -126,6 +126,41 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | 販売担当への原価・利益 | 権限 SENSITIVE:view で個別付与 |
 | 送料判定の基準額 | 税抜（`SHIPPING_FEE_BASE=excluded_tax`） |
 | 楽楽販売のデータ | 「どのデータを取り込むか後日まとめます」とのこと。連絡待ち |
+
+2026-09-25、全機能テストのご指摘に対応しました（第2弾：登録したものを訂正・取消できるように）。
+
+| 箇所 | 現在の作り |
+|---|---|
+| 支払の訂正・取消 | `GET /api/payments` で一覧、`PATCH /api/payments/:id`（支払日・支払額・消込先の仕入・備考）、`DELETE /api/payments/:id` で物理削除。入出金処理に取り込み済み（`cash_transaction_id` あり）の支払は 409 |
+| 入金の訂正・取消 | `PATCH /api/billing/cash-receipts/:id`・`DELETE /api/billing/cash-receipts/:id`。消込先を外すときは `invoice_id: null`。取引先は変えられない（削除して入れ直す）。消込額はサーバ側で辻褄を合わせる |
+| 仕入・経費の取消 | `POST /api/purchases/:id/cancel` で `status='取消'`。支払がひも付いていれば 409。買掛残高・商品別経費の集計から外れる |
+| 返品の取消 | `POST /api/returns/:id/cancel`。「受付」のうちだけ。検品で在庫が動いた後、未取消の請求に載っている返品は 409 |
+| 入荷の取消 | `POST /api/inventory/receipts/:id/cancel`。「指示」のうちだけ。一覧の既定から「取消」を外したので、出すときは `include_cancelled=true` |
+| 買掛残高 | `GET /api/ap-balances` に `carryover_amount`（前月繰越）を追加。`balance` は 繰越＋期間内仕入−期間内支払 を SQL の numeric で計算 |
+| CSV取込 | 郵便番号は `dry_run` を受け付ける（確認だけで登録しない）。販社・通販の `created_orders` は実際に作れた受注だけを数え、マスタ未登録で残した分は `pending_orders`。Amazon は一意索引 `ux_platform_tx_natural` で二重登録を止める |
+
+2026-09-25、あわせて第3弾（残っていた食い違いの解消）を入れました。
+
+| 箇所 | 現在の作り |
+|---|---|
+| 取り消した請求を残す | 「取消」にした請求は締め直しでも消えず、履歴として残る。締め直すと**新しい請求番号**でもう1件できる（未発行のまま締め直したときは今まで通り同じ番号で作り直す）。取消の請求に消し込んでいた入金は、新しい請求へ付け替わる。売掛残高・前回請求残高は取消を数えない。請求書の一覧では「取消」として見える |
+| 数量の検査をそろえた | 受注・入荷・**返品**のいずれも、0 とマイナスで同じ文言「N行目：数量は 0 より大きい数で入力してください」。仕入明細の数量0も同じ文言で弾く（単価のマイナスは値引・返金の記録に使うため残す） |
+| 入出金の訂正・取消 | `PATCH /api/cash-transactions/:id`・`DELETE /api/cash-transactions/:id`。入金・支払と同じ作り |
+| 支払の消込先 | `GET /api/purchases?exclude_cancelled=true`。支払の登録・訂正のプルダウンから取消済みの仕入を外す |
+| 通販(OMS)CSV | 文字コードを自動で見分ける（UTF-8 → だめなら CP932）。見出しが合わないときの案内も文字コードに触れる |
+| 取込履歴の件数 | 販社発注の「登録できた件数」を、読めた行数ではなく**実際に作れた受注の件数**に。郵便番号の取込も履歴に残る（取込種別 `POSTAL_CODE`） |
+| 操作履歴 | `audit_logs` に書く側を実装（`src/common/audit.interceptor.ts`）。詳しくは「設計の決めごと ＞ 操作履歴は経路の一覧で決める」 |
+
+稼働中のデータベースには `docs/migrations/` の SQL を**上から順に**当てる必要があります（新規構築では `docs/02-schema.sql` に入っています）。
+
+| 順 | ファイル | 何をするか |
+|---|---|---|
+| 1 | `2026-09-25_jan_unique.sql` | JAN の重複を禁止する（販社CSVの引当先が定まらない問題） |
+| 2 | `2026-09-25_amazon_unique.sql` | Amazon 決済レポートの二重登録を止める。**先に 2-a で行番号から作った注文番号を空欄に戻すこと** |
+| 3 | `2026-09-25_import_type_postal.sql` | 取込履歴に「郵便番号データ」を残せるようにする |
+| 4 | `2026-09-25_invoice_cancel_history.sql` | 取り消した請求を履歴として残せるようにする（一意制約を部分索引に入れ替え） |
+
+どのファイルも、先頭の 1) で件数を確かめてから 2) 以降を流す作りにしてあります。
 
 | | 経路 | 必要な権限 |
 |---|---|---|
@@ -171,9 +206,12 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/billing/invoices` | B-02:view |
 | `GET` | `/api/billing/invoices/:id` | B-02:view |
 | `POST` | `/api/billing/invoices/:id/issue` | B-02:print |
+| `POST` | `/api/billing/invoices/:id/cancel` | B-02:delete |
 | `GET` | `/api/billing/ar-balances` | B-04:view |
 | `POST` | `/api/billing/cash-receipts` | B-05:create |
 | `GET` | `/api/billing/cash-receipts` | B-05:view |
+| `PATCH` | `/api/billing/cash-receipts/:id` | B-05:update |
+| `DELETE` | `/api/billing/cash-receipts/:id` | B-05:delete |
 | `POST` | `/api/billing/royalties/calculate` | Y-02:create |
 | `GET` | `/api/billing/royalties` | Y-02:view |
 | `GET` | `/api/billing/royalties/:id` | Y-02:view |
@@ -190,6 +228,7 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/inventory/receipts` | S-03:view |
 | `GET` | `/api/inventory/receipts/:id` | S-03:view |
 | `POST` | `/api/inventory/receipts/:id/receive` | S-03:update |
+| `POST` | `/api/inventory/receipts/:id/cancel` | S-03:delete |
 | `POST` | `/api/inventory/adjustments` | S-01:update |
 | `GET` | `/api/inventory/adjustments` | S-01:view |
 | `POST` | `/api/inventory/reservations` | S-08:create |
@@ -225,11 +264,14 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/masters/partner-products/lookup` | O-01:view |
 | `POST` | `/api/masters/partner-products` | M-11:create |
 | `PATCH` | `/api/masters/partner-products/:id` | M-11:update |
+| `POST` | `/api/masters/partner-products/:id/deactivate` | M-11:delete |
 | `POST` | `/api/masters/warehouses` | M-14:create |
 | `PATCH` | `/api/masters/warehouses/:id` | M-14:update |
+| `POST` | `/api/masters/warehouses/:id/deactivate` | M-14:delete |
 | `GET` | `/api/masters/purchase-items` | M-15:view |
 | `POST` | `/api/masters/purchase-items` | M-15:create |
 | `PATCH` | `/api/masters/purchase-items/:id` | M-15:update |
+| `POST` | `/api/masters/purchase-items/:id/deactivate` | M-15:delete |
 | `POST` | `/api/masters/codes` | M-16:create |
 | `PATCH` | `/api/masters/codes/:id` | M-16:update |
 | `PATCH` | `/api/masters/settings/:key` | M-16:update |
@@ -255,14 +297,21 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `GET` | `/api/purchases` | P-01:view |
 | `GET` | `/api/purchases/expense-by-product` | P-01:view |
 | `GET` | `/api/purchases/:id` | P-01:view |
+| `POST` | `/api/purchases/:id/cancel` | P-01:delete |
 | `POST` | `/api/payments` | P-01:create |
+| `GET` | `/api/payments` | P-01:view |
+| `PATCH` | `/api/payments/:id` | P-01:update |
+| `DELETE` | `/api/payments/:id` | P-01:delete |
 | `GET` | `/api/ap-balances` | P-03:view |
 | `POST` | `/api/cash-transactions` | C-01:create |
 | `GET` | `/api/cash-transactions` | C-01:view |
+| `PATCH` | `/api/cash-transactions/:id` | C-01:update |
+| `DELETE` | `/api/cash-transactions/:id` | C-01:delete |
 | `POST` | `/api/returns` | R-01:create |
 | `GET` | `/api/returns` | R-01:view |
 | `GET` | `/api/returns/:id` | R-01:view |
 | `POST` | `/api/returns/:id/inspect` | R-01:update |
+| `POST` | `/api/returns/:id/cancel` | R-01:delete |
 | `GET` | `/api/shipments` | D-01:view |
 | `GET` | `/api/shipments/:id` | D-01:view |
 | `POST` | `/api/shipments/:id/confirm` | D-01:update |
@@ -301,6 +350,19 @@ npm run db:types
 取引先・商品・利用者は物理削除しません。伝票から参照されているため、消すと過去の伝票が読めなくなります。`.../deactivate` で無効にし、一覧から外します。
 
 利用者についてはもう一段、**最後の管理者を無効にできない／管理者ロールから M-17 を外せない**ようにしてあります。管理者が1人もいなくなると、誰も権限画面に入れず、データベースを直接触るしか戻す手段がなくなるためです。
+
+### 操作履歴は経路の一覧で決める
+
+`src/common/audit.interceptor.ts` が `audit_logs` に「誰が・いつ・何を・どう変えたか」を残します。全経路を自動で拾うのではなく、**ファイル冒頭の `RULES` に載せた書き込み経路だけ**を記録します。
+
+- `ref_table` に入るのは `RULES` に書いた文字列（実在のテーブル名）だけです。URL の文字がそのまま SQL に渡ることはありません。分類マスタの `:kind` は `SIMPLE_MASTERS` に載っているものだけ通します。
+- 変更前後はその行をそのまま写します。伝票（受注・入荷・返品・仕入・請求など）は**明細も付けます**。受注の数量を 3 → 5 に直しても見出し側は何も変わらず、明細が無いと差が読めないためです。
+- 締め処理・取込のように行が1つに決まらない操作は `ref_id` を空にし、「何を頼んだか」と「どういう結果になったか（件数）」を残します。
+- パスワードは `（伏せ字）`、**取込ファイルの中身（`content_base64`）は残しません**。CSV には購入者の氏名・住所・電話番号が入っており、履歴に写すと個人情報がもう一か所に増え、行も何MBにもなるためです。
+- 失敗した操作は残しません（`audit_logs.action` は insert/update/delete の3つだけのため）。
+- 履歴の書き込みでつまずいても業務の操作は止めません（警告を出して先へ進みます）。
+
+**書き込みの経路を足したら `RULES` にも足してください。**載せ忘れた経路は黙って記録されません。
 
 ### 帳票の日本語フォントは同梱しない
 

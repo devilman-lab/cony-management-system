@@ -23,6 +23,8 @@ const PERMISSION_CACHE_MS = 60_000;
 @Injectable()
 export class AuthService {
   private readonly permissionCache = new Map<number, { at: number; keys: Set<string> }>();
+  /** 利用者が停止されていないか。権限と同じ短い間だけ覚えておく。 */
+  private readonly activeCache = new Map<number, { at: number; active: boolean }>();
 
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
@@ -96,9 +98,36 @@ export class AuthService {
     return keys;
   }
 
+  /**
+   * その利用者が今も使える状態か。
+   *
+   * ログインのときだけ is_active を見る作りだと、停止した利用者が
+   * 停止前に受け取ったトークンで有効期限（8時間）まで操作を続けられてしまう。
+   * 権限は毎リクエスト引き直しているので、同じところで停止も見る。
+   */
+  async isActive(userId: number): Promise<boolean> {
+    const cached = this.activeCache.get(userId);
+    if (cached && Date.now() - cached.at < PERMISSION_CACHE_MS) return cached.active;
+
+    const row = await this.db
+      .selectFrom('users')
+      .select('is_active')
+      .where('id', '=', userId)
+      .executeTakeFirst();
+
+    const active = row?.is_active === true;
+    this.activeCache.set(userId, { at: Date.now(), active });
+    return active;
+  }
+
   invalidate(userId?: number): void {
-    if (userId === undefined) this.permissionCache.clear();
-    else this.permissionCache.delete(userId);
+    if (userId === undefined) {
+      this.permissionCache.clear();
+      this.activeCache.clear();
+      return;
+    }
+    this.activeCache.delete(userId);
+    this.permissionCache.delete(userId);
   }
 
   async can(userId: number, functionId: string, action: string): Promise<boolean> {

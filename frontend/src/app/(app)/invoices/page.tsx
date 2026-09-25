@@ -118,6 +118,31 @@ export default function InvoicesPage() {
     }
   };
 
+  /**
+   * 請求の取消。発行してしまった請求を締め直したいときに使う。
+   * 消すのではなく「取消」として残し、同じ期間で締め直せるようにする。
+   */
+  const cancel = async (inv: InvoiceRow) => {
+    if (
+      !(await confirm(
+        `${inv.invoice_no} を取り消しますか`,
+        'この請求は「取消」として残り、同じ期間で締め直せるようになります。得意先に送った請求書は各自で差し替えてください。',
+      ))
+    )
+      return;
+    setBusy('cancel');
+    try {
+      await api.post(`/billing/invoices/${inv.id}/cancel`);
+      toast('取り消しました。締め直せます', 'good');
+      await list.reload();
+      if (detailId === inv.id) await detail.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const print = async (ids: number[]) => {
     setBusy('print');
     try {
@@ -136,7 +161,7 @@ export default function InvoicesPage() {
       {element}
       <PageHead
         title="締め・請求書"
-        sub="対象月を締めると取引先ごとの締め日で請求が作られます。内容を確かめて発行し、印刷します"
+        sub="対象月を締めると取引先ごとの締め日で請求が作られます。内容を確かめて発行し、印刷します。PDFを開くだけでは発行済みになりません"
         right={can('B-01', 'create') && <Button variant="primary" onClick={() => setCloseOpen(true)}>締め処理</Button>}
       />
       <Card>
@@ -152,6 +177,7 @@ export default function InvoicesPage() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<InvoiceRow>
           wide
+          stickyLast
           columns={[
             { key: 'invoice_no', label: '請求番号', width: 130, render: (r) => <button type="button" className="num font-semibold text-[var(--color-brand-700)] underline" onClick={() => { setManual({}); setError(null); setDetailId(r.id); }}>{r.invoice_no}</button> },
             { key: 'partner_name', label: '請求先' },
@@ -163,11 +189,12 @@ export default function InvoicesPage() {
             { key: 'current_balance', label: '今回請求残高', r: true, width: 110, render: (r) => money(r.current_balance) },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
             {
-              key: '_act', label: '', width: 150,
+              key: '_act', label: '', width: 210,
               render: (r) => (
-                <div className="flex gap-1">
+                <div className="flex gap-1 justify-end">
                   {r.status === '未発行' && can('B-02', 'print') && <Button size="sm" variant="primary" loading={busy === 'issue'} onClick={() => issue(r)}>発行</Button>}
                   {can('D-03', 'print') && <Button size="sm" icon="print" loading={busy === 'print'} onClick={() => print([r.id])}>PDF</Button>}
+                  {r.status !== '取消' && can('B-02', 'delete') && <Button size="sm" variant="danger" loading={busy === 'cancel'} onClick={() => cancel(r)}>取消</Button>}
                 </div>
               ),
             },
@@ -192,6 +219,7 @@ export default function InvoicesPage() {
             {can('D-03', 'print') && <Button icon="print" onClick={() => print([d.id])}>請求書PDF</Button>}
             {d.status === '未発行' && can('B-02', 'update') && <Button variant="primary" loading={busy === 'manual'} onClick={saveManual}>手入力欄を保存して再計算</Button>}
             {d.status === '未発行' && can('B-02', 'print') && <Button variant="primary" loading={busy === 'issue'} onClick={() => issue(d)}>発行する</Button>}
+            {d.status !== '取消' && can('B-02', 'delete') && <Button variant="danger" loading={busy === 'cancel'} onClick={() => cancel(d)}>取り消す</Button>}
           </>
         )}
       >

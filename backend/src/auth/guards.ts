@@ -43,6 +43,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
+    private readonly auth: AuthService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -65,9 +66,14 @@ export class JwtAuthGuard implements CanActivate {
         login_id: string;
         name: string;
       }>(token);
+      if (!(await this.auth.isActive(payload.sub))) {
+        // 停止された利用者は、まだ期限内のトークンを持っていても通さない
+        throw new UnauthorizedException('この利用者は停止されています。管理者にお問い合わせください');
+      }
       req.user = { id: payload.sub, login_id: payload.login_id, name: payload.name };
       return true;
-    } catch {
+    } catch (e) {
+      if (e instanceof UnauthorizedException) throw e;
       throw new UnauthorizedException('ログインの有効期限が切れています');
     }
   }

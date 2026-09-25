@@ -86,6 +86,22 @@ export default function ReceivingPage() {
     }
   };
 
+  // 入荷確定すると実在庫が増えているので、取り消せるのは予定（指示）のままのものだけ
+  const [cancelId, setCancelId] = useState<number | null>(null);
+  const cancel = async (r: ReceiptRow) => {
+    if (!(await confirm(`${r.receipt_no} を取り消しますか`, '入荷予定を取り消します。入荷済のものは取り消せません。', true))) return;
+    setCancelId(r.id);
+    try {
+      await api.post(`/inventory/receipts/${r.id}/cancel`);
+      toast('取り消しました', 'good');
+      await list.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '取り消せませんでした', 'bad');
+    } finally {
+      setCancelId(null);
+    }
+  };
+
   const receive = async (r: ReceiptRow) => {
     if (!(await confirm(`${r.receipt_no} を入荷確定しますか`, '実在庫が増えます。'))) return;
     setBusy(r.id);
@@ -111,7 +127,7 @@ export default function ReceivingPage() {
       <Card>
         <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-[130px]">
-            <option value="">状態：すべて</option>
+            <option value="">状態：取消を除く</option>
             <option value="指示">入荷予定</option>
             <option value="入荷済">入荷済</option>
             <option value="取消">取消</option>
@@ -126,11 +142,22 @@ export default function ReceivingPage() {
             { key: 'supplier_name', label: '仕入先', render: (r) => r.supplier_name ?? '' },
             { key: 'warehouse_name', label: '入荷倉庫', width: 120 },
             { key: 'status', label: '状態', width: 90, render: (r) => <Badge status={r.status}>{r.status === '指示' ? '入荷予定' : r.status}</Badge> },
-            { key: '_act', label: '', width: 110, render: (r) => r.status === '指示' && can('S-03', 'update') && <Button size="sm" variant="primary" loading={busy === r.id} onClick={() => receive(r)}>入荷確定</Button> },
+            {
+              key: '_act',
+              label: '',
+              width: 170,
+              render: (r) => r.status === '指示' && (
+                <span className="flex gap-1">
+                  {can('S-03', 'update') && <Button size="sm" variant="primary" loading={busy === r.id} onClick={() => receive(r)}>入荷確定</Button>}
+                  {can('S-03', 'delete') && <Button size="sm" variant="danger" loading={cancelId === r.id} onClick={() => cancel(r)}>取消</Button>}
+                </span>
+              ),
+            },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}
           loading={list.loading}
+          rowClassName={(r) => (r.status === '取消' ? 'opacity-50' : '')}
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>

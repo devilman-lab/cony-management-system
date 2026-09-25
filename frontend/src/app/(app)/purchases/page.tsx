@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList, useSimpleMaster } from '@/lib/hooks';
 import { money, qty, today, ymd } from '@/lib/format';
-import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar } from '@/components/ui';
+import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
@@ -25,10 +25,12 @@ interface PurchaseDetail extends PurchaseRow {
   lines: { line_no: number; item_name: string; qty: string | null; unit_cost: string; subtotal: string; tax_rate: string; target_product_name: string | null; target_brand_name: string | null }[];
 }
 
+/** GET /masters/purchase-items は仕入マスタの行をそのまま返す。列名は purchase_code／item_name／unit_cost。 */
 interface PurchaseItem {
   id: number;
-  code: string;
-  name: string;
+  purchase_code: string;
+  item_name: string;
+  unit_cost: string;
 }
 
 interface ProductOpt {
@@ -52,6 +54,9 @@ interface LineDraft {
 let seq = 1;
 const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_rate: '10.00' });
 
+/** NUMERIC は "1200.00" の形で返る。入力欄に入れるときだけ見た目を整える（数値には通さない）。 */
+const plain = (v: string | null | undefined): string => (v ?? '').replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+
 const fetchProducts = async (q: string): Promise<Option[]> => {
   const r = await api.get<{ items: ProductOpt[] }>('/masters/products', { q: q || undefined, limit: 20 });
   return r.items.map((p) => ({ id: p.id, label: p.product_name, sub: p.product_code }));
@@ -61,6 +66,7 @@ const fetchProducts = async (q: string): Promise<Option[]> => {
 export default function PurchasesPage() {
   const { can } = useAuth();
   const toast = useToast();
+  const { confirm, element } = useConfirm();
   const fetchSuppliers = useMemo(() => fetchPartners('supplier'), []);
   const items = useFetch<{ items: PurchaseItem[] }>('/masters/purchase-items', { limit: 200 });
   const brands = useSimpleMaster('brands');
@@ -76,6 +82,28 @@ export default function PurchasesPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const setLine = (key: number, p: Partial<LineDraft>) => setLines((s) => s.map((l) => (l.key === key ? { ...l, ...p } : l)));
+
+  // 仕入項目を選んだら品名と単価をその場で埋める。単価はマスタの値を起点に手で直せる
+  const pickItem = (key: number, id: string) => {
+    const m = (items.data?.items ?? []).find((x) => String(x.id) === id);
+    if (!m) return setLine(key, { purchase_item_id: '' });
+    setLine(key, { purchase_item_id: id, item_name: m.item_name, unit_cost: plain(m.unit_cost) });
+  };
+
+  const [cancelId, setCancelId] = useState<number | null>(null);
+  const cancel = async (r: PurchaseRow) => {
+    if (!(await confirm(`${r.purchase_no} を取り消しますか`, '買掛残高からこの分が外れます。支払を済ませている場合は、先に支払を削除してください。', true))) return;
+    setCancelId(r.id);
+    try {
+      await api.post(`/purchases/${r.id}/cancel`);
+      toast('取り消しました', 'good');
+      await list.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '取り消せませんでした', 'bad');
+    } finally {
+      setCancelId(null);
+    }
+  };
 
   const [detailId, setDetailId] = useState<number | null>(null);
   const detail = useFetch<PurchaseDetail>(detailId ? `/purchases/${detailId}` : null);
@@ -94,7 +122,7 @@ export default function PurchasesPage() {
         lines: lines.map((l, i) => ({
           line_no: i + 1,
           purchase_item_id: l.purchase_item_id ? Number(l.purchase_item_id) : null,
-          item_name: l.item_name || items.data?.items.find((x) => String(x.id) === l.purchase_item_id)?.name || '',
+          item_name: l.item_name || items.data?.items.find((x) => String(x.id) === l.purchase_item_id)?.item_name || '',
           qty: l.qty || undefined,
           unit_cost: l.unit_cost,
           target_product_id: l.target === 'product' ? l.product?.id ?? null : null,
@@ -118,6 +146,7 @@ export default function PurchasesPage() {
 
   return (
     <div className="page-body">
+      {element}
       <PageHead
         title="仕入・経費"
         sub="仕入と経費を登録します。経費は商品（品番）・商品分類・ブランドのいずれかに紐づけられます"
@@ -141,10 +170,12 @@ export default function PurchasesPage() {
             { key: 'supplier_name', label: '仕入先' },
             { key: 'total_amount', label: '金額', r: true, width: 120, render: (r) => money(r.total_amount) },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
+            { key: '_act', label: '', width: 80, render: (r) => r.status !== '取消' && can('P-01', 'delete') && <Button size="sm" variant="danger" loading={cancelId === r.id} onClick={() => cancel(r)}>取消</Button> },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}
           loading={list.loading}
+          rowClassName={(r) => (r.status === '取消' ? 'opacity-50' : '')}
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
@@ -178,9 +209,9 @@ export default function PurchasesPage() {
               {lines.map((l) => (
                 <tr key={l.key}>
                   <td>
-                    <Select value={l.purchase_item_id} onChange={(e) => setLine(l.key, { purchase_item_id: e.target.value })} className="!h-[26px]">
+                    <Select value={l.purchase_item_id} onChange={(e) => pickItem(l.key, e.target.value)} className="!h-[26px]">
                       <option value="">（自由入力）</option>
-                      {(items.data?.items ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      {(items.data?.items ?? []).map((x) => <option key={x.id} value={x.id}>{x.purchase_code}　{x.item_name}</option>)}
                     </Select>
                   </td>
                   <td><Input value={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder="品名・内容" /></td>

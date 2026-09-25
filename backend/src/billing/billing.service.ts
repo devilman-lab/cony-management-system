@@ -23,6 +23,15 @@ export interface CashReceiptInput {
   note?: string | null;
 }
 
+/** 入金の訂正。取引先は入れ替えさせないので、ここには入っていない。 */
+export interface CashReceiptUpdateInput {
+  receipt_date?: string;
+  amount?: string;
+  /** null を入れると消込を外す。 */
+  invoice_id?: number | null;
+  note?: string | null;
+}
+
 const pad = (n: number): string => String(n).padStart(2, '0');
 const lastDayOfMonth = (y: number, m: number): number => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
@@ -48,7 +57,35 @@ export function closingPeriod(targetMonth: string, closingDay: number): { from: 
   return { from: `${py}-${pad(pm)}-${pad(fromDay)}`, to: `${targetMonth}-${pad(closingDay)}` };
 }
 
+/**
+ * 入金額の決まり。0 円の入金は記録する意味がなく、打ち間違いのほうが疑わしいので受け付けない。
+ *
+ * 0・負数・数字以外をひとつの文言にそろえたいので、受注・入荷・返品と同じく
+ * ここ（サービス側）でまとめて見る。画面の項目名「入金額」を文言に入れてあるので、
+ * 項目名を頭に付けずにそのまま出せる。
+ * 金額は NUMERIC の文字列のまま扱うため、0 かどうかも数値に直さず文字で見る
+ * （数字とピリオドだけの文字列なので、1〜9 が1つも無ければ 0）。
+ */
+function assertReceiptAmount(value: string): void {
+  if (!/^\d+(\.\d+)?$/.test(value) || !/[1-9]/.test(value)) {
+    throw new BadRequestException('入金額は 0 より大きい数で入力してください');
+  }
+}
+
 /** 機能ID B-01 締め処理／B-02 請求書発行／B-04 売掛残高一覧／B-05 入金登録・消込 */
+/**
+ * その請求の期間に入っている入金の合計。締めたあとに登録された分も含める。
+ * 請求書そのもの（findInvoice・PDF）は送付済みの書類なので締め時点の値を保ち、
+ * 一覧・売掛残高だけを最新の入金で見せる。
+ */
+const RECEIPT_IN_PERIOD = sql<string>`(
+  select coalesce(sum(cr.amount), 0)
+    from cash_receipts cr
+   where cr.partner_id = i.partner_id
+     and cr.receipt_date >= i.period_from
+     and cr.receipt_date <= i.period_to
+)`;
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -62,6 +99,7 @@ export class BillingService {
    *
    * サンプル出荷（is_billable=false）は集計に入らない。
    * 一度発行した請求書は締め直せない。取り消してからやり直していただく。
+   * 取り消した請求は残したまま、新しい請求番号で作り直す（未発行のやり直しは同じ番号のまま）。
    */
   async close(input: ClosingInput, userId: number) {
     if (!/^\d{4}-\d{2}$/.test(input.target_month)) {
@@ -109,19 +147,44 @@ export class BillingService {
     roundingMode: string,
     userId: number,
   ) {
+    // 取り消した請求は残す（請求番号と、いくらで出してどう取り消したかを追えるようにする）。
+    // そのため、締め直しの判断材料になるのは「取消でない請求」だけ。
     const existing = await trx
       .selectFrom('invoices')
       .select(['id', 'invoice_no', 'status'])
       .where('partner_id', '=', partnerId)
       .where('period_to', '=', period.to)
+      .where('status', '<>', '取消')
+      .orderBy('id', 'desc')
       .executeTakeFirst();
 
     if (existing && existing.status === '発行済') {
       throw new ConflictException(
-        `${existing.invoice_no} はすでに発行済みです。締め直すには先に取り消してください`,
+        `${existing.invoice_no} はすでに発行済みです。締め直すには、請求書の一覧でこの請求を「取消」にしてください`,
       );
     }
-    // 未発行のものは作り直す（明細ごと消える）
+
+    // 未発行のものは「締めのやり直し」なので作り直し、請求番号はそのまま使う（明細ごと消える）。
+    // 取消のものは残すので、そちらには触らず、新しい請求番号で作る。
+    //
+    // 入金の消込先になっている請求は外部キーで消せないため、いったん消込を外す。
+    // 取り消した請求に消し込んでいた入金も、ここで作る新しい請求に付け替える
+    // （取り消した請求に入金がぶら下がったままにしない）。
+    const receipts = await trx
+      .selectFrom('cash_receipts as c')
+      .innerJoin('invoices as i', 'i.id', 'c.invoice_id')
+      .select('c.id as id')
+      .where('i.partner_id', '=', partnerId)
+      .where('i.period_to', '=', period.to)
+      .execute();
+    const relinkReceiptIds = receipts.map((r) => r.id);
+    if (relinkReceiptIds.length > 0) {
+      await trx
+        .updateTable('cash_receipts')
+        .set({ invoice_id: null, updated_by: userId, updated_at: new Date() })
+        .where('id', 'in', relinkReceiptIds)
+        .execute();
+    }
     if (existing) {
       await trx.deleteFrom('invoices').where('id', '=', existing.id).execute();
     }
@@ -129,12 +192,15 @@ export class BillingService {
     const invoiceNo = existing?.invoice_no ?? (await this.numbering.next(trx, 'invoice'));
 
     // 前回の請求残高。初回は 0。
+    // 取り消した請求の残高は引き継がない（取り消した金額を繰り越すと、繰越残高が実態と合わなくなる）。
     const prev = await trx
       .selectFrom('invoices')
       .select(['current_balance'])
       .where('partner_id', '=', partnerId)
       .where('period_to', '<', period.from)
+      .where('status', '<>', '取消')
       .orderBy('period_to', 'desc')
+      .orderBy('id', 'desc')
       .limit(1)
       .executeTakeFirst();
     const prevBalance = prev?.current_balance ?? '0';
@@ -154,6 +220,14 @@ export class BillingService {
       })
       .returning(['id', 'invoice_no'])
       .executeTakeFirstOrThrow();
+
+    if (relinkReceiptIds.length > 0) {
+      await trx
+        .updateTable('cash_receipts')
+        .set({ invoice_id: invoice.id, updated_by: userId, updated_at: new Date() })
+        .where('id', 'in', relinkReceiptIds)
+        .execute();
+    }
 
     // 出荷（サンプルは除く）を、出荷×税率でまとめて明細にする
     await trx
@@ -415,10 +489,19 @@ export class BillingService {
     });
   }
 
+  /**
+   * 請求書の一覧。
+   *
+   * 取り消した請求も「取消」として並べる（どの番号をいつ取り消したかを見ていただくため）。
+   * 売掛残高一覧（exclude_cancelled）だけは取消を外す。取り消した請求を残高に数えると、
+   * 同じ期間の請求が2行並んで当月請求額も残高も二重になってしまう。
+   */
   async listInvoices(query: {
     partner_id?: number;
     status?: string;
     period_to?: string;
+    /** 売掛残高一覧のように、取り消した請求を数えてはいけないときに true。 */
+    exclude_cancelled?: boolean;
     limit: number;
     offset: number;
   }): Promise<Paged<Record<string, unknown>>> {
@@ -426,6 +509,7 @@ export class BillingService {
     if (query.partner_id !== undefined) base = base.where('i.partner_id', '=', query.partner_id);
     if (query.status) base = base.where('i.status', '=', query.status);
     if (query.period_to) base = base.where('i.period_to', '=', query.period_to);
+    if (query.exclude_cancelled) base = base.where('i.status', '<>', '取消');
 
     const [items, total] = await Promise.all([
       base
@@ -439,8 +523,11 @@ export class BillingService {
           'p.name1 as partner_name',
           // 売掛残高一覧の12項目。現行と同じ並び。
           'i.prev_invoice_balance as prev_invoice_balance',
-          'i.current_receipt_amount as current_receipt_amount',
-          'i.carryover_balance as carryover_balance',
+          // 入金は締めたあとに登録されることもあるので、一覧では数え直す。
+          // 締め時点の値をそのまま返すと、入金しても売掛残高が減らず、
+          // 入金済みと未入金が画面で区別できない。
+          RECEIPT_IN_PERIOD.as('current_receipt_amount'),
+          sql<string>`i.prev_invoice_balance - ${RECEIPT_IN_PERIOD}`.as('carryover_balance'),
           'i.shipment_amount as shipment_amount',
           'i.return_amount as return_amount',
           'i.unposted_10 as unposted_10',
@@ -450,7 +537,7 @@ export class BillingService {
           'i.adjust_8 as adjust_8',
           'i.shipping_fee_amount as shipping_fee_amount',
           'i.current_invoice_amount as current_invoice_amount',
-          'i.current_balance as current_balance',
+          sql<string>`i.prev_invoice_balance - ${RECEIPT_IN_PERIOD} + i.current_invoice_amount`.as('current_balance'),
         ])
         .orderBy('i.period_to', 'desc')
         .orderBy('p.partner_code', 'asc')
@@ -502,6 +589,11 @@ export class BillingService {
 
     if (!invoice) throw new NotFoundException(`請求が見つかりません（ID: ${id}）`);
     if (invoice.status === '発行済') throw new ConflictException('すでに発行済みです');
+    if (invoice.status === '取消') {
+      throw new ConflictException(
+        `${invoice.invoice_no} は取り消された請求です。締め処理でこの期間を締め直し、新しくできた請求書を発行してください`,
+      );
+    }
 
     await this.db
       .updateTable('invoices')
@@ -512,17 +604,63 @@ export class BillingService {
     return { id, invoice_no: invoice.invoice_no, status: '発行済' };
   }
 
+  /**
+   * 請求の取消。
+   *
+   * 発行済の請求を締め直したいときに使う。消してしまうと請求番号と履歴が
+   * 追えなくなるため、状態を「取消」にして残す（スキーマの ck_invoices_status
+   * が許容している3つ目の状態）。取消にすると同じ期間で締め直せるようになり、
+   * 締め直すと取消の行はそのまま残したまま、新しい請求番号の請求が作られる。
+   * 売掛元帳はその場で取り消す（締め直せば作り直される）。
+   */
+  async cancelInvoice(id: number, userId: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const invoice = await trx
+        .selectFrom('invoices')
+        .select(['id', 'invoice_no', 'status', 'partner_id', 'period_to'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!invoice) throw new NotFoundException(`請求が見つかりません（ID: ${id}）`);
+      if (invoice.status === '取消') throw new ConflictException('すでに取り消されています');
+
+      await trx
+        .updateTable('invoices')
+        .set({ status: '取消', updated_by: userId, updated_at: new Date() })
+        .where('id', '=', id)
+        .execute();
+
+      // 売掛元帳からも外す（締め直せば作り直される）
+      await trx
+        .deleteFrom('ar_ledgers')
+        .where('partner_id', '=', invoice.partner_id)
+        .where('period_to', '=', invoice.period_to)
+        .execute();
+
+      return { id, invoice_no: invoice.invoice_no, status: '取消' };
+    });
+  }
+
   /** 入金登録と消込。請求を指定すると、その請求に充当した額として記録する。 */
   async createCashReceipt(input: CashReceiptInput, userId: number) {
+    assertReceiptAmount(input.amount);
+
     if (input.invoice_id) {
       const invoice = await this.db
         .selectFrom('invoices')
-        .select(['id', 'partner_id'])
+        .select(['id', 'partner_id', 'invoice_no', 'status'])
         .where('id', '=', input.invoice_id)
         .executeTakeFirst();
       if (!invoice) throw new NotFoundException('消込先の請求が見つかりません');
       if (invoice.partner_id !== input.partner_id) {
         throw new BadRequestException('入金の取引先と請求の取引先が違います');
+      }
+      // 取り消した請求に消し込んでも売掛残高に入らないので、先に選び直していただく。
+      if (invoice.status === '取消') {
+        throw new BadRequestException(
+          `${invoice.invoice_no} は取り消された請求です。締め直してできた請求を消込先に選んでください`,
+        );
       }
     }
 
@@ -547,6 +685,125 @@ export class BillingService {
       .executeTakeFirstOrThrow();
   }
 
+  /**
+   * 入金の訂正。
+   *
+   * 入金は「振り込まれた事実」の記録なので、消し込んだ請求が発行済でも直せる
+   * （入力を間違えたまま直せないと、売掛残高がいつまでも実態と合わない）。
+   * 売掛残高一覧は入金を期間で数え直して出しているため（RECEIPT_IN_PERIOD）、
+   * 金額や入金日を直せばそのまま残高に反映される。請求書そのものは送付済みの
+   * 書類なので、締め時点の値（invoices の列）は触らない。
+   */
+  async updateCashReceipt(id: number, input: CashReceiptUpdateInput, userId: number) {
+    const clean = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined));
+    if (Object.keys(clean).length === 0) {
+      throw new BadRequestException('更新する項目がありません');
+    }
+    if (input.amount !== undefined) assertReceiptAmount(input.amount);
+
+    return this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom('cash_receipts')
+        .select(['id', 'partner_id', 'amount', 'applied_amount', 'invoice_id', 'cash_transaction_id'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!current) throw new NotFoundException(`入金が見つかりません（ID: ${id}）`);
+
+      // 入出金処理（出納帳）に取り込まれた入金をここで直すと、出納帳と食い違う。
+      if (current.cash_transaction_id) {
+        throw new ConflictException(
+          'この入金は入出金処理に取り込まれているため、ここでは直せません。入出金処理の画面で直してください',
+        );
+      }
+
+      const nextInvoiceId =
+        'invoice_id' in clean ? ((clean.invoice_id as number | null | undefined) ?? null) : current.invoice_id;
+      const nextAmount = (clean.amount as string | undefined) ?? current.amount;
+
+      // 消込先を付け替えるときは取引先の一致を確かめる（登録時と同じ確認）。
+      // 他社の請求に消し込むと、どちらの売掛残高も合わなくなる。
+      if (nextInvoiceId !== null && nextInvoiceId !== current.invoice_id) {
+        const invoice = await trx
+          .selectFrom('invoices')
+          .select(['id', 'partner_id', 'invoice_no', 'status'])
+          .where('id', '=', nextInvoiceId)
+          .executeTakeFirst();
+        if (!invoice) throw new NotFoundException('消込先の請求が見つかりません');
+        if (invoice.partner_id !== current.partner_id) {
+          throw new BadRequestException('入金の取引先と請求の取引先が違います');
+        }
+        // 取り消した請求に消し込んでも売掛残高に入らないので、先に選び直していただく。
+        if (invoice.status === '取消') {
+          throw new BadRequestException(
+            `${invoice.invoice_no} は取り消された請求です。締め直してできた請求を消込先に選んでください`,
+          );
+        }
+      }
+
+      // 消込額は画面から直接いただかないので、ここで辻褄を合わせる。
+      // 入金日や備考だけを直したときに消込額が動くと驚かれるので、
+      // 金額か消込先が変わったときだけ計算し直す。
+      // 金額の比較だけ数値に直す（保存する値は NUMERIC の文字列のまま）。
+      let nextApplied = current.applied_amount;
+      if ('amount' in clean || 'invoice_id' in clean) {
+        if (nextInvoiceId === null) {
+          nextApplied = '0'; // 消込を外したら消込額も戻す
+        } else if (current.invoice_id === null || Number(current.applied_amount) >= Number(current.amount)) {
+          nextApplied = nextAmount; // 新たに消し込む／これまで全額消込だったものは新しい金額に合わせる
+        } else if (Number(current.applied_amount) > Number(nextAmount)) {
+          nextApplied = nextAmount; // 一部消込。金額を減らしたら消込額が入金額を超えないよう詰める
+        }
+      }
+
+      await trx
+        .updateTable('cash_receipts')
+        .set({ ...clean, applied_amount: nextApplied, updated_by: userId, updated_at: new Date() } as never)
+        .where('id', '=', id)
+        .execute();
+
+      return trx
+        .selectFrom('cash_receipts as c')
+        .leftJoin('invoices as i', 'i.id', 'c.invoice_id')
+        .selectAll('c')
+        .select('i.invoice_no as invoice_no')
+        .where('c.id', '=', id)
+        .executeTakeFirstOrThrow();
+    });
+  }
+
+  /**
+   * 入金の削除。
+   *
+   * 消し込んだ請求が発行済でも消せる。入金そのものが無かったと分かったときに
+   * 消せないと、売掛残高が実態と合わないまま残ってしまうため。
+   * 売掛残高一覧は入金を期間で数え直しているので、消せばその分の残高が戻る。
+   */
+  async removeCashReceipt(id: number) {
+    return this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom('cash_receipts')
+        .select(['id', 'cash_transaction_id'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!current) throw new NotFoundException(`入金が見つかりません（ID: ${id}）`);
+
+      // 出納帳に取り込まれた入金を黙って消すと、帳簿側だけが残って合わなくなる。
+      if (current.cash_transaction_id) {
+        throw new ConflictException(
+          'この入金は入出金処理に取り込まれているため、削除できません。入出金処理の画面で取り消してから、もう一度お試しください',
+        );
+      }
+
+      await trx.deleteFrom('cash_receipts').where('id', '=', id).execute();
+
+      return { id, deleted: true };
+    });
+  }
+
   async listCashReceipts(query: { partner_id?: number; from?: string; to?: string; limit: number; offset: number }) {
     let base = this.db
       .selectFrom('cash_receipts as c')
@@ -565,8 +822,13 @@ export class BillingService {
           'c.amount as amount',
           'c.applied_amount as applied_amount',
           sql<string>`c.amount - c.applied_amount`.as('unapplied_amount'),
+          'c.partner_id as partner_id',
           'p.name1 as partner_name',
+          // 訂正の画面で「どの請求に消し込んだか」「備考に何を書いたか」を
+          // そのまま開き直せるよう、番号だけでなく id と備考も返す。
+          'c.invoice_id as invoice_id',
           'i.invoice_no as invoice_no',
+          'c.note as note',
         ])
         .orderBy('c.receipt_date', 'desc')
         .orderBy('c.id', 'desc')

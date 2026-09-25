@@ -19,7 +19,7 @@ const ImportSchema = z.object({
 type ImportBody = z.infer<typeof ImportSchema>;
 
 const ListSchema = z.object({
-  import_type: z.enum(['PARTNER_ORDER', 'OMS_ORDER', 'AMAZON_TRANSACTION']).optional(),
+  import_type: z.enum(['PARTNER_ORDER', 'OMS_ORDER', 'AMAZON_TRANSACTION', 'POSTAL_CODE']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

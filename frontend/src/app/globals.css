@@ -59,6 +59,14 @@ textarea.inp{resize:vertical;height:auto;padding:6px 8px;line-height:1.5}
 .tbl tbody td{vertical-align:middle;border-bottom:1px solid #eef2f4;padding:6px 10px}
 .tbl tbody tr:hover td{background:#f7fafb}
 .tbl tbody tr.sel td{background:var(--color-brand-50)}
+/* 列が多くて横に長い表で、行の操作ボタン（編集・削除など）を右端に貼り付けておく。
+   貼り付けないと、初期表示ではボタンが枠の外にあり、横スクロールに気づかないと押せない。
+   セルに背景を敷かないと、スクロールした中身がボタンの下に透けてしまう。 */
+.tbl-stick-last thead th:last-child,
+.tbl-stick-last tbody td:last-child{position:sticky;right:0;background:#fff;box-shadow:-7px 0 7px -7px #0003}
+.tbl-stick-last thead th:last-child{z-index:3;background:#f4f7f8}
+.tbl-stick-last tbody tr:hover td:last-child{background:#f7fafb}
+.tbl-stick-last tbody tr.sel td:last-child{background:var(--color-brand-50)}
 .tbl .r{text-align:right;font-variant-numeric:tabular-nums}
 .tbl .c{text-align:center}
 .bdg{white-space:nowrap;border-radius:999px;align-items:center;gap:4px;padding:1px 7px;font-size:11px;font-weight:600;line-height:1.7;display:inline-flex}

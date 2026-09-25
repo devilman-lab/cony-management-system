@@ -32,6 +32,55 @@ interface AuditRow extends Record<string, unknown> {
 
 const ACTION_LABEL: Record<string, string> = { view: '参照', create: '登録', update: '更新', delete: '削除', print: '印刷' };
 
+/** 操作履歴の「対象」を日本語で出すための対応表。左は audit_logs.ref_table（実テーブル名）。 */
+const AUDIT_TARGETS: [string, string][] = [
+  ['sales_orders', '受注'],
+  ['shipments', '出荷'],
+  ['receipts', '入荷'],
+  ['returns', '返品'],
+  ['invoices', '請求'],
+  ['cash_receipts', '入金'],
+  ['purchases', '仕入・経費'],
+  ['cash_payments', '支払'],
+  ['cash_transactions', '入出金'],
+  ['stock_adjustments', '在庫調整'],
+  ['reservations', '引当在庫'],
+  ['royalty_calculations', 'ロイヤリティ'],
+  ['import_batches', '取込'],
+  ['postal_codes', '郵便番号'],
+  ['partners', '取引先'],
+  ['delivery_destinations', '納品先'],
+  ['products', '商品'],
+  ['skus', 'SKU'],
+  ['set_headers', 'セット商品'],
+  ['partner_products', '得意先別商品'],
+  ['warehouses', '倉庫'],
+  ['purchase_items', '仕入項目'],
+  ['royalty_rules', 'ロイヤリティ条件'],
+  ['sales_schedules', '販売予定'],
+  ['codes', '区分値'],
+  ['system_settings', '設定'],
+  ['users', '利用者'],
+  ['roles', '役割'],
+  ['brands', 'ブランド'],
+  ['categories', 'カテゴリー'],
+  ['product_classes', '商品分類'],
+  ['colors', 'カラー'],
+  ['sizes', 'サイズ'],
+  ['media', '媒体'],
+  ['partner_categories', '取引先カテゴリー'],
+  ['sales_categories', '販売カテゴリー'],
+  ['delivery_rules', '納品ルール'],
+  ['work_instructions', '作業指示内容'],
+  ['sales_staff', '販売担当'],
+  ['attachments', '添付'],
+  ['saved_queries', '保存した集計条件'],
+];
+const AUDIT_TARGET_LABEL: Record<string, string> = Object.fromEntries(AUDIT_TARGETS);
+/** 何をしたか。audit_logs.action は insert/update/delete の3つだけ。 */
+const AUDIT_ACTION_LABEL: Record<string, string> = { insert: '登録', update: '変更', delete: '削除' };
+
+
 /** ユーザー・権限（M-17）。利用者・役割・役割ごとの権限・操作履歴。 */
 export default function UsersPage() {
   const [tab, setTab] = useState<'users' | 'roles' | 'audit'>('users');
@@ -256,15 +305,25 @@ function AuditTab() {
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="!w-[140px]" />
           <span className="text-[var(--color-ink-3)]">〜</span>
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="!w-[140px]" />
-          <Input value={refTable} onChange={(e) => setRefTable(e.target.value)} placeholder="テーブル名（例 sales_orders）" className="!w-[220px]" />
+          <select className="inp !w-[220px]" value={refTable} onChange={(e) => setRefTable(e.target.value)}>
+            <option value="">対象：すべて</option>
+            {AUDIT_TARGETS.map(([table, label]) => (
+              <option key={table} value={table}>{label}</option>
+            ))}
+          </select>
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<AuditRow>
           columns={[
             { key: 'acted_at', label: '日時', width: 140, render: (r) => ymdhm(r.acted_at) },
             { key: 'user_name', label: '利用者', width: 120, render: (r) => r.user_name ?? '' },
-            { key: 'action', label: '操作', width: 90 },
-            { key: 'ref_table', label: '対象', render: (r) => <Num>{r.ref_table} #{r.ref_id}</Num> },
+            { key: 'action', label: '操作', width: 90, render: (r) => AUDIT_ACTION_LABEL[r.action] ?? r.action },
+            { key: 'ref_table', label: '対象', render: (r) => (
+              <>
+                {AUDIT_TARGET_LABEL[r.ref_table] ?? r.ref_table}
+                {r.ref_id === null ? '' : <Num>　#{r.ref_id}</Num>}
+              </>
+            ) },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}
@@ -273,7 +332,7 @@ function AuditTab() {
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
-      <Modal open={!!detail} title={detail ? `${detail.ref_table} #${detail.ref_id}　${detail.action}` : ''} onClose={() => setDetail(null)} width={760}>
+      <Modal open={!!detail} title={detail ? `${AUDIT_TARGET_LABEL[detail.ref_table] ?? detail.ref_table}${detail.ref_id === null ? '' : ' #' + detail.ref_id}　${AUDIT_ACTION_LABEL[detail.action] ?? detail.action}` : ''} onClose={() => setDetail(null)} width={760}>
         {detail && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Card><CardHead title="変更前" /><pre className="p-3 text-[11px] overflow-auto max-h-[400px] whitespace-pre-wrap">{JSON.stringify(detail.before_data ?? null, null, 2)}</pre></Card>

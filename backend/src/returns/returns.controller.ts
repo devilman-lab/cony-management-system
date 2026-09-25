@@ -8,6 +8,13 @@ import { ReturnsService } from './returns.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const positive = z.string().regex(/^\d+(\.\d+)?$/, '0 以上の数値で入力してください');
+/**
+ * 数量。ここでは符号を見ない。
+ * 0 も負数も「1行目：数量は 0 より大きい数で入力してください」で返したいが、
+ * ここで負数だけ先に止めると 0 のときと文言が変わってしまうため、
+ * 0 か負数かの判定は入荷・受注と同じくサービス側にまとめている。
+ */
+const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
 
 const CreateSchema = z.object({
   return_type: z.enum(['販社返品', '顧客返品', 'プラットフォーム返金']),
@@ -21,7 +28,7 @@ const CreateSchema = z.object({
       z.object({
         line_no: z.number().int().min(1),
         sku_id: z.number().int().positive(),
-        qty: positive,
+        qty: decimal,
         unit_price: positive.optional(),
         tax_rate: z.enum(['0.00', '8.00', '10.00']).optional(),
       }),
@@ -92,5 +99,13 @@ export class ReturnsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.returns.inspect(id, body.lines, user.id);
+  }
+
+  /** 返品の取消。誤登録を消す手段。検品して在庫に戻したあとは取り消せない。 */
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @RequirePermission('R-01', 'delete')
+  cancel(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.returns.cancel(id, user.id);
   }
 }

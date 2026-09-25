@@ -13,6 +13,8 @@ const SearchSchema = z.object({
 type SearchQuery = z.infer<typeof SearchSchema>;
 
 const ImportSchema = z.object({
+  /** 取込履歴に残すファイル名。画面から送られる。 */
+  file_name: z.string().trim().min(1).max(255).optional(),
   content_base64: z.string().min(1, 'ファイルの中身が空です'),
   encoding: z.string().trim().min(1).max(20).optional(),
   /** 取り込んだ版。YYYYMM */
@@ -20,6 +22,9 @@ const ImportSchema = z.object({
     .string()
     .regex(/^\d{6}$/, '版は YYYYMM の6桁で入力してください')
     .optional(),
+  // 12万件を一気に置き換える取込のため、件数を見てから本番に流せるようにする。
+  // ここに無いと画面の「確認だけ」が捨てられ、そのまま登録されてしまう。
+  dry_run: z.boolean().optional(),
 });
 type ImportBody = z.infer<typeof ImportSchema>;
 

@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard, PermissionsGuard } from './auth/guards';
 import { DatabaseModule } from './db/database.module';
+import { AuditInterceptor } from './common/audit.interceptor';
 import { NumberingService } from './common/numbering.service';
 import { SettingsService } from './common/settings.service';
 import { UsersController } from './admin/users.controller';
@@ -104,6 +105,8 @@ import { ShipmentsService } from './shipping/shipments.service';
     // 「付け忘れたら守られない」ではなく「付け忘れたら通れない」向きにしておく。
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    // 誰が・いつ・何を変えたかを audit_logs に残す。記録する経路は audit.interceptor.ts の表で決める。
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
 })
 export class AppModule {}

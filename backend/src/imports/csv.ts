@@ -72,6 +72,39 @@ export function decode(bytes: Buffer, encoding: string): string {
   }
 }
 
+/** 画面やエラー文に出す文字コードの呼び名。英語のラベルをそのまま出さない。 */
+export type DetectedEncoding = 'UTF-8' | 'Shift-JIS(CP932)';
+
+/**
+ * 文字コードを自動で見分けて復号する。
+ *
+ * 通販（OMS）のCSVは、助ネコからの出力そのままなら Shift-JIS だが、
+ * Excel や他のツールを通すと UTF-8 で保存されて届くことがある。
+ * 決め打ちにすると「見出しが無い」という見当違いのエラーになり、
+ * 担当者が本当の原因（文字コード）に辿り着けない。
+ *
+ * 見分け方: BOM があれば UTF-8 で確定。無ければ UTF-8 として厳密に読んでみて、
+ * 成り立たない並びがあれば Shift-JIS(CP932) として読み直す。
+ * （Shift-JIS の日本語は UTF-8 としてはまず成り立たないため、この順で判別できる）
+ */
+export function decodeAuto(bytes: Buffer): { text: string; encoding: DetectedEncoding } {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return { text: bytes.toString('utf8'), encoding: 'UTF-8' };
+  }
+
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'UTF-8' };
+  } catch {
+    return { text: decode(bytes, 'CP932'), encoding: 'Shift-JIS(CP932)' };
+  }
+}
+
+/** 取込テンプレート等で指定された文字コードを、画面に出す呼び名に直す。 */
+export function encodingLabel(encoding: string): DetectedEncoding {
+  const label = encoding.toUpperCase();
+  return label === 'UTF8' || label === 'UTF-8' ? 'UTF-8' : 'Shift-JIS(CP932)';
+}
+
 /** 全角数字を半角にし、桁区切りと空白を落とす。 */
 function normalizeDigits(value: string): string {
   return value

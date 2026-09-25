@@ -5,12 +5,12 @@ import { NumberingService } from '../common/numbering.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
-import { decode, parseCsv } from './csv';
+import { decode, decodeAuto, encodingLabel, parseCsv, type DetectedEncoding } from './csv';
 
 export interface OmsImportInput {
   file_name: string;
   content_base64: string;
-  /** 既定は CP932（助ネコの出力そのまま） */
+  /** 省略時は中身から見分ける（UTF-8／Shift-JIS）。明示するとその文字コードで読む。 */
   encoding?: string;
   dry_run?: boolean;
 }
@@ -18,10 +18,15 @@ export interface OmsImportInput {
 export interface OmsImportResult {
   file_name: string;
   dry_run: boolean;
+  /** 実際に読み取った文字コード。ファイルの出どころを確かめるために返す。 */
+  encoding: DetectedEncoding;
   total_lines: number;
   orders: number;
+  /** 受注として登録できた件数。原本だけ残った分は含めない。 */
   created_orders: number;
   skipped_orders: number;
+  /** 原本は残したが受注にできなかった件数（商品マスタ未登録）。 */
+  pending_orders: number;
   unresolved_skus: number;
   line_types: Record<string, number>;
   channels: Record<string, number>;
@@ -34,6 +39,9 @@ const LINE_TYPES = new Set(['商品', 'セット商品', '内訳商品', '販促
 
 /** 在庫を引き当てる対象になる種別（セット商品は内訳商品から引くため除く）。 */
 const STOCK_TYPES = new Set(['商品', '内訳商品']);
+
+/** 自社商品コードそのものが空の明細。件数に出さないと「0件なのに受注にならない」になる。 */
+const NO_CODE = '（自社商品コードなし）';
 
 const need = (row: Record<string, string>, key: string): string => (row[key] ?? '').trim();
 
@@ -57,7 +65,12 @@ export class OmsImportService {
   ) {}
 
   async import(input: OmsImportInput, userId: number): Promise<OmsImportResult> {
-    const text = decode(Buffer.from(input.content_base64, 'base64'), input.encoding ?? 'CP932');
+    const bytes = Buffer.from(input.content_base64, 'base64');
+    // 文字コードの指定がなければ中身から見分ける。助ネコの出力は Shift-JIS だが、
+    // Excel などを通すと UTF-8 で届くことがあり、決め打ちだと読めない。
+    const { text, encoding } = input.encoding
+      ? { text: decode(bytes, input.encoding), encoding: encodingLabel(input.encoding) }
+      : decodeAuto(bytes);
     const rows = parseCsv(text);
     if (rows.length < 2) throw new BadRequestException('見出し行と明細行が読み取れませんでした');
 
@@ -66,7 +79,9 @@ export class OmsImportService {
     const missing = required.filter((k) => !header.includes(k));
     if (missing.length > 0) {
       throw new BadRequestException(
-        `通販CSVの見出しに ${missing.join('・')} がありません。別の書式のファイルではありませんか`,
+        `通販CSVの見出しに ${missing.join('・')} がありません。` +
+          `別の書式のファイルか、文字コードが違う可能性があります（${encoding} として読みました）。` +
+          `通販システムから出したCSVを、そのまま選び直してください`,
       );
     }
 
@@ -103,10 +118,12 @@ export class OmsImportService {
     const result: OmsImportResult = {
       file_name: input.file_name,
       dry_run: input.dry_run ?? false,
+      encoding,
       total_lines: records.length,
       orders: groups.size,
       created_orders: 0,
       skipped_orders: 0,
+      pending_orders: 0,
       unresolved_skus: 0,
       line_types: lineTypes,
       channels,
@@ -115,17 +132,22 @@ export class OmsImportService {
     };
 
     if (input.dry_run) {
-      // 自社商品コードが商品マスタにあるかだけ先に見る
-      const codes = [...new Set(records.map((r) => need(r, '自社商品コード')).filter(Boolean))];
+      // 自社商品コードが商品マスタにあるかだけ先に見る。
+      // 受注にできるかを左右するのは在庫を動かす明細だけなので、そこに絞って数える。
+      const stockLines = records.filter((r) => STOCK_TYPES.has(need(r, '商品種別')));
+      const codes = [...new Set(stockLines.map((r) => need(r, '自社商品コード')).filter(Boolean))];
+      const known = new Set<string>();
       if (codes.length > 0) {
         const found = await this.db
           .selectFrom('skus')
           .select('sku_code')
           .where('sku_code', 'in', codes)
           .execute();
-        const known = new Set(found.map((f) => f.sku_code));
-        result.unresolved_skus = codes.filter((c) => !known.has(c)).length;
+        for (const f of found) known.add(f.sku_code);
       }
+      const unresolved = new Set(codes.filter((c) => !known.has(c)));
+      if (stockLines.some((r) => !need(r, '自社商品コード'))) unresolved.add(NO_CODE);
+      result.unresolved_skus = unresolved.size;
       return result;
     }
 
@@ -145,6 +167,10 @@ export class OmsImportService {
       .returning('id')
       .executeTakeFirstOrThrow();
 
+    // 商品マスタに無い自社商品コードは、同じものが何受注にも出る。
+    // 何種類を登録すればよいかが分かるよう、重複を除いて数える（確認だけのときと同じ数え方）。
+    const unresolvedCodes = new Set<string>();
+
     // 受注1件ごとに独立したトランザクションで処理する。
     // 1つのトランザクションにまとめると、1件でも失敗した時点で以降の命令が
     // すべて無効になり、残りの76件も入らなくなる。
@@ -154,8 +180,12 @@ export class OmsImportService {
         const outcome = await this.db
           .transaction()
           .execute((trx) => this.createOne(trx, batch.id, orderNo, lines, mode, userId));
-        if (outcome === 'skipped') result.skipped_orders += 1;
+        // 受注にできなかったものを「作成」に混ぜない。混ぜると取り込めたつもりになり、
+        // 商品マスタを直して取り込み直す必要があることに気づけない。
+        if (outcome.result === 'skipped') result.skipped_orders += 1;
+        else if (outcome.result === 'pending') result.pending_orders += 1;
         else result.created_orders += 1;
+        for (const c of outcome.unresolved_codes) unresolvedCodes.add(c);
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         this.logger.warn(`受注番号 ${orderNo} を取り込めませんでした: ${reason}`);
@@ -163,6 +193,8 @@ export class OmsImportService {
         result.errors.push({ order_no: orderNo, reason });
       }
     }
+
+    result.unresolved_skus = unresolvedCodes.size;
 
     await this.db
       .updateTable('import_batches')
@@ -180,7 +212,7 @@ export class OmsImportService {
     lines: Record<string, string>[],
     mode: string,
     userId: number,
-  ): Promise<'created' | 'skipped'> {
+  ): Promise<{ result: 'created' | 'skipped' | 'pending'; unresolved_codes: string[] }> {
     const head = lines[0];
     const channel = need(head, '受注ルート') || '自社サイト';
 
@@ -191,7 +223,7 @@ export class OmsImportService {
       .where('channel', '=', channel)
       .where('external_order_no', '=', orderNo)
       .executeTakeFirst();
-    if (already) return 'skipped';
+    if (already) return { result: 'skipped', unresolved_codes: [] };
 
     const partnerCode = await this.settings.text('AMAZON_PARTNER_CODE', 'AMZN');
     // 通販は個人宛の直送。取引先は受注ルートに対応する1件を使う。
@@ -243,6 +275,7 @@ export class OmsImportService {
       parent_line_no: number | null;
       line_type: string;
       sku_id: number | null;
+      sku_code: string;
       item_name: string;
       qty: string;
       unit_price: string;
@@ -282,6 +315,7 @@ export class OmsImportService {
         parent_line_no: parent,
         line_type: LINE_TYPES.has(lineType) ? lineType : '非商品',
         sku_id: sku?.id ?? null,
+        sku_code: skuCode,
         item_name: need(line, '商品名') || '（品名なし）',
         qty: this.num(need(line, '個数')) ?? '0',
         unit_price: this.num(need(line, '単価')) ?? '0',
@@ -301,7 +335,11 @@ export class OmsImportService {
         })
         .where('id', '=', external.id)
         .execute();
-      return 'created';
+      // 受注は作っていない。原本だけが残った状態なので「作成した受注」には数えない。
+      return {
+        result: 'pending',
+        unresolved_codes: [...new Set(unresolved.map((u) => u.sku_code || NO_CODE))],
+      };
     }
 
     const orderDate = this.toDate(need(head, '注文日')) ?? sql<string>`current_date`;
@@ -407,7 +445,7 @@ export class OmsImportService {
       .where('id', '=', external.id)
       .execute();
 
-    return 'created';
+    return { result: 'created', unresolved_codes: [] };
   }
 
   /** 「2026/9/1」「2026-09-01」を YYYY-MM-DD にする。空なら null。 */

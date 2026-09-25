@@ -58,7 +58,9 @@ export class LookupsController {
 
     const values = await this.db
       .selectFrom('codes')
-      .select(['id', 'code', 'name'])
+      // 表示順・備考も返す。返さないと編集画面が空で読み込み、
+      // そのまま更新したときに登録済みの値が消えてしまう。
+      .select(['id', 'code', 'name', 'sort_order', 'note'])
       .where('code_category_id', '=', category.id)
       .where('is_active', '=', true)
       .orderBy('sort_order', sql`asc nulls last`)

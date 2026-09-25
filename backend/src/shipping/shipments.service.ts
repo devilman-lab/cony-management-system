@@ -229,10 +229,14 @@ export class ShipmentsService {
       }
       if (!shipment.sales_order_id) throw new ConflictException('受注に紐づいていない出荷です');
 
+      // 取消にした請求は履歴として残るだけなので数えない。
+      // 数えてしまうと、取り消した請求に載っている出荷をいつまでも取り消せなくなる。
       const invoiced = await trx
-        .selectFrom('invoice_lines')
-        .select('id')
-        .where('shipment_id', '=', shipmentId)
+        .selectFrom('invoice_lines as il')
+        .innerJoin('invoices as i', 'i.id', 'il.invoice_id')
+        .select('il.id')
+        .where('il.shipment_id', '=', shipmentId)
+        .where('i.status', '<>', '取消')
         .executeTakeFirst();
       if (invoiced) {
         throw new ConflictException(

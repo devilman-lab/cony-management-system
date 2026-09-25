@@ -342,7 +342,7 @@ export class ReportsService {
   // 請求書
   // ==========================================================================
 
-  async invoices(invoiceIds: number[], userId: number): Promise<PrintResult> {
+  async invoices(invoiceIds: number[], _userId: number): Promise<PrintResult> {
     if (invoiceIds.length === 0) throw new BadRequestException('請求書を選んでください');
 
     const headers = await this.db
@@ -459,13 +459,10 @@ export class ReportsService {
       if (iv.invoice_note) doc.line(`備考　${iv.invoice_note}`);
     }
 
-    await this.db
-      .updateTable('invoices')
-      .set({ status: '発行済', issued_at: new Date(), updated_by: userId, updated_at: new Date() })
-      .where('id', 'in', invoiceIds)
-      .where('status', '=', '未発行')
-      .execute();
-
+    // 印刷しただけでは「発行済」にしない。
+    // 発行は画面の「発行」ボタン（POST /billing/invoices/:id/issue）だけで行う。
+    // 印刷で状態が変わると、中身を確かめようと PDF を開いた時点で
+    // 手入力の修正も締め直しもできなくなってしまう（GET に副作用を持たせない）。
     return { pdf: await doc.finish(), filename: this.filename('請求書', headers.length) };
   }
 

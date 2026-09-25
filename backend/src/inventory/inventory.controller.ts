@@ -25,7 +25,10 @@ const CreateReceiptSchema = z.object({
       z.object({
         line_no: z.number().int().min(1),
         sku_id: z.number().int().positive(),
-        qty: positive,
+        // 符号はここで見ない。0 でも負数でも
+        // 「1行目：数量は 0 より大きい数で入力してください」に揃えたいので、
+        // 判定は受注と同じくサービス側（receipts.service.ts）にまとめている。
+        qty: decimal,
         lot_no: z.string().trim().max(40).nullish(),
         expiry_date: ymd.nullish(),
         cost_price: decimal.nullish(),
@@ -43,6 +46,11 @@ const ReceiptListSchema = z.object({
   warehouse_id: z.coerce.number().int().positive().optional(),
   from: ymd.optional(),
   to: ymd.optional(),
+  /** 既定では取り消した入荷を出さない。受注一覧と同じ指定の仕方にそろえる。 */
+  include_cancelled: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -158,6 +166,14 @@ export class InventoryController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.receipts.receive(id, body.received_date ?? null, user.id);
+  }
+
+  /** 入荷の取消。誤登録を消す手段。入荷確定して在庫が増えたあとは取り消せない。 */
+  @Post('receipts/:id/cancel')
+  @HttpCode(200)
+  @RequirePermission('S-03', 'delete')
+  cancelReceipt(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.receipts.cancel(id, user.id);
   }
 
   // ---- 在庫調整 -----------------------------------------------------------

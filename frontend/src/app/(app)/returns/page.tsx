@@ -6,7 +6,7 @@ import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList, useWarehouses } from '@/lib/hooks';
 import { money, qty, today, ymd } from '@/lib/format';
-import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar } from '@/components/ui';
+import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
@@ -53,6 +53,7 @@ const TYPES = ['販社返品', '顧客返品', 'プラットフォーム返金']
 export default function ReturnsPage() {
   const { can } = useAuth();
   const toast = useToast();
+  const { confirm, element } = useConfirm();
   const warehouses = useWarehouses();
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
 
@@ -98,6 +99,22 @@ export default function ReturnsPage() {
     }
   };
 
+  // 検品を済ませると在庫が動いているので、取り消せるのは受付のままの返品だけ
+  const [cancelId, setCancelId] = useState<number | null>(null);
+  const cancel = async (r: ReturnRow) => {
+    if (!(await confirm(`${r.return_no} を取り消しますか`, '取り消せるのは状態が「受付」の返品だけです。検品が済んで在庫に戻したもの（状態が「完了」）は取り消せません。', true))) return;
+    setCancelId(r.id);
+    try {
+      await api.post(`/returns/${r.id}/cancel`);
+      toast('取り消しました', 'good');
+      await list.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '取り消せませんでした', 'bad');
+    } finally {
+      setCancelId(null);
+    }
+  };
+
   const doInspect = async () => {
     if (!detail.data) return;
     setBusy(true);
@@ -122,6 +139,7 @@ export default function ReturnsPage() {
 
   return (
     <div className="page-body">
+      {element}
       <PageHead
         title="返品・再生"
         sub="返品を受け付け、検品で良品・不良に振り分けると在庫に戻ります。返品額はマイナスの出荷として請求に反映されます"
@@ -131,7 +149,9 @@ export default function ReturnsPage() {
         <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-[130px]">
             <option value="">状態：すべて</option>
-            {['受付', '検品済', '完了', '取消'].map((s) => <option key={s}>{s}</option>)}
+            {/* 検品は1回の操作で終わり、状態は「受付」から直接「完了」になる。
+                途中の「検品済」は付かないので、選んでも必ず0件になる。出さない。 */}
+            {['受付', '完了', '取消'].map((s) => <option key={s}>{s}</option>)}
           </Select>
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
@@ -144,11 +164,22 @@ export default function ReturnsPage() {
             { key: 'warehouse_name', label: '入庫倉庫', width: 110 },
             { key: 'return_amount', label: '返品額', r: true, width: 100, render: (r) => money(r.return_amount) },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
-            { key: '_act', label: '', width: 90, render: (r) => r.status === '受付' && can('R-01', 'update') && <Button size="sm" variant="primary" onClick={() => { setInspect({}); setInspectId(r.id); }}>検品</Button> },
+            {
+              key: '_act',
+              label: '',
+              width: 150,
+              render: (r) => r.status === '受付' && (
+                <span className="flex gap-1">
+                  {can('R-01', 'update') && <Button size="sm" variant="primary" onClick={() => { setInspect({}); setInspectId(r.id); }}>検品</Button>}
+                  {can('R-01', 'delete') && <Button size="sm" variant="danger" loading={cancelId === r.id} onClick={() => cancel(r)}>取消</Button>}
+                </span>
+              ),
+            },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}
           loading={list.loading}
+          rowClassName={(r) => (r.status === '取消' ? 'opacity-50' : '')}
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>

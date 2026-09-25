@@ -210,6 +210,7 @@ export function DataTable<T extends Record<string, unknown>>({
   selectedKey,
   loading,
   wide,
+  stickyLast,
   rowClassName,
 }: {
   columns: Column<T>[];
@@ -220,6 +221,8 @@ export function DataTable<T extends Record<string, unknown>>({
   selectedKey?: string | number | null;
   loading?: boolean;
   wide?: boolean;
+  /** 列が多い表で、いちばん右の列（操作ボタン）を右端に貼り付ける。 */
+  stickyLast?: boolean;
   rowClassName?: (row: T) => string;
 }) {
   // 列幅の合計より狭い画面では横スクロールにする（列が1文字に潰れないように）
@@ -228,7 +231,7 @@ export function DataTable<T extends Record<string, unknown>>({
   const minWidth = Math.max(wide ? 960 : 520, fixed + autos * 150);
   return (
     <div className={wide ? 'tbl-wrap-wide' : 'tbl-wrap'}>
-      <table className="tbl" style={{ minWidth }}>
+      <table className={`tbl${stickyLast ? ' tbl-stick-last' : ''}`} style={{ minWidth }}>
         <thead>
           <tr>
             {columns.map((c) => (

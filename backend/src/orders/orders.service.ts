@@ -75,6 +75,8 @@ export interface OrderWriteResult {
 
 /** 明細に SKU が要る種別。ここは 02-schema.sql の ck_sol_sku と同じ決まり。 */
 const SKU_REQUIRED: LineType[] = ['商品', 'セット商品', '内訳商品'];
+/** 数量が 0 より大きくないといけない行の種別。値引・販促品・送料はマイナスや0を許す。 */
+const QTY_POSITIVE_REQUIRED = ['商品', 'セット商品', '内訳商品'];
 
 @Injectable()
 export class OrdersService {
@@ -227,6 +229,20 @@ export class OrdersService {
       }
       if (line.line_type === '内訳商品' && !line.parent_line_no) {
         throw new BadRequestException(`${line.line_no}行目：内訳商品には親のセット商品の行番号が要ります`);
+      }
+
+      // 品物の行は 0 や負数を受けない。
+      // 0 や負数で登録すると引当が一切行われないまま「未確定」で残り、
+      // 出荷一覧にも出ないため、受けた注文が誰にも気づかれず落ちる。
+      // 値引・販促品のマイナスは仕様どおり（通販CSVのクーポンなど）なので、
+      // 商品・セット商品・内訳商品の行だけを対象にする。
+      if (QTY_POSITIVE_REQUIRED.includes(line.line_type)) {
+        const qty = Number(line.qty);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          throw new BadRequestException(
+            `${line.line_no}行目：数量は 0 より大きい数で入力してください（「${line.line_type}」の行）`,
+          );
+        }
       }
     }
 

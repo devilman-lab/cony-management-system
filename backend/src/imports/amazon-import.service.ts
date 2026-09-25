@@ -145,11 +145,14 @@ export class AmazonImportService {
       .executeTakeFirstOrThrow();
 
     // 1,000件を超えるため、まとめて投入する。
-    // 決済番号＋注文番号＋SKU＋日時が同じ行は同一とみなし、再取込では増やさない。
+    // 同一行の判定は ux_platform_tx_natural（プラットフォーム＋決済番号＋注文番号＋
+    // 種類＋SKU＋日時＋合計）に任せ、再取込では増やさない。
+    // 注文番号が無い行（広告費用・振込み等）に行番号から作った番号を入れていたが、
+    // 行の並びが変わるだけで別の行になってしまい、二重登録の元になっていたのでやめた。
     const values = records
       // 種類のない行（空行や集計行）は取り込まない
       .filter((r) => need(r, 'トランザクションの種類') !== '')
-      .map((r, i) => {
+      .map((r) => {
         const settlementNo = need(r, '決済番号');
         const orderNo = need(r, '注文番号');
         const skuCode = need(r, 'SKU');
@@ -159,7 +162,7 @@ export class AmazonImportService {
           import_batch_id: batch.id,
           platform: 'Amazon',
           settlement_no: settlementNo || null,
-          external_order_no: orderNo || `(${settlementNo || 'no-settlement'})-${i + 1}`,
+          external_order_no: orderNo || null,
           transaction_type: need(r, 'トランザクションの種類'),
           transaction_at: transactedAt,
           external_sku_code: skuCode || null,
@@ -182,17 +185,47 @@ export class AmazonImportService {
         };
       });
 
+    // 同じファイルの中に一意キーの同じ行が並んでいることがある。
+    // 先に1件にまとめておかないと「登録した件数」が投入件数と食い違い、
+    // 何件が重複で見送られたのかが分からなくなる。
+    const unique = new Map<string, (typeof values)[number]>();
+    for (const v of values) {
+      const key = [
+        v.platform,
+        v.settlement_no ?? '',
+        v.external_order_no ?? '',
+        v.transaction_type,
+        v.external_sku_code ?? '',
+        v.transaction_at?.toISOString() ?? '',
+        v.total_amount ?? '',
+      ].join('\u0001');
+      if (!unique.has(key)) unique.set(key, v);
+    }
+    const deduped = [...unique.values()];
+    const inFile = values.length - deduped.length;
+    if (inFile > 0) {
+      result.warnings.push(`ファイルの中に同じ内容の行が ${inFile} 件あったため1件にまとめました`);
+    }
+
     const CHUNK = 200;
-    for (let i = 0; i < values.length; i += CHUNK) {
+    for (let i = 0; i < deduped.length; i += CHUNK) {
       const inserted = await this.db
         .insertInto('platform_transactions')
-        .values(values.slice(i, i + CHUNK))
+        .values(deduped.slice(i, i + CHUNK))
         .onConflict((oc) => oc.doNothing())
         .returning('id')
         .execute();
       result.inserted += inserted.length;
     }
+
+    // 登録しなかった分＝すでに取り込み済みの行と、ファイル内で重なっていた行。
     result.skipped = values.length - result.inserted;
+    const already = deduped.length - result.inserted;
+    if (already > 0) {
+      result.warnings.push(
+        `取込済みの行が ${already} 件あったため登録しませんでした（同じレポートを重ねて取り込んでも増えません）`,
+      );
+    }
 
     await this.db
       .updateTable('import_batches')

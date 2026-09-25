@@ -145,6 +145,9 @@ export class UsersService {
       .executeTakeFirst();
 
     if (!row) throw new NotFoundException(`利用者が見つかりません（ID: ${id}）`);
+
+    // 停止・再開・パスワード変更をすぐ効かせる
+    this.auth.invalidate(id);
     return this.findOne(id);
   }
 
@@ -165,6 +168,9 @@ export class UsersService {
       .executeTakeFirst();
 
     if (!row) throw new NotFoundException(`利用者が見つかりません（ID: ${id}）`);
+
+    // 停止・再開・パスワード変更をすぐ効かせる
+    this.auth.invalidate(id);
     return { id: row.id };
   }
 

@@ -73,8 +73,21 @@ export class ReportDoc {
       info: { Title: title },
       autoFirstPage: true,
     });
-    this.doc.registerFont(JP, font.path, font.family);
-    this.doc.font(JP);
+    // 書体の登録は、名前が合わないと **status を持たない素の Error** を投げる
+    // （Not a supported font format or standard PDF font.）。そのまま上げると
+    // 500「処理中に問題が起きました」になり、原因が分からなくなる。
+    // ここで受け止めて、何が起きたのか読める 503 に変える。
+    try {
+      this.doc.registerFont(JP, font.path, font.family);
+      this.doc.font(JP);
+    } catch (e) {
+      throw new ServiceUnavailableException(
+        `帳票に使う日本語フォントを読み込めませんでした（${font.path}` +
+          `${font.family ? ` / ${font.family}` : ''}）。` +
+          'サーバーの .env の PDF_FONT_PATH と PDF_FONT_FAMILY をご確認ください。' +
+          `（${e instanceof Error ? e.message : String(e)}）`,
+      );
+    }
 
     this.done = new Promise<Buffer>((resolve, reject) => {
       this.doc.on('data', (c: Buffer) => this.chunks.push(c));

@@ -4,6 +4,7 @@ import { sql } from 'kysely';
 import { Public } from '../auth/guards';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { env } from '../config/env';
+import { findJapaneseFont, fontSearchTrace } from '../reports/pdf-font';
 
 interface DbHealth {
   status: 'ok' | 'ng';
@@ -15,6 +16,15 @@ interface DbHealth {
     system_settings: number;
     import_templates: number;
     warehouses: number;
+  };
+  /** 帳票PDFに使う日本語書体。稼働先によって入っているものが違うため、ここで見えるようにする。 */
+  pdf_font: {
+    status: 'ok' | 'ng';
+    path: string | null;
+    /** pdfkit に渡す名前（postscriptName）。単体ファイルのときは無し。 */
+    name: string | null;
+    /** 見つからなかったときに、どこを探したか。 */
+    looked: string[];
   };
   notes: string[];
 }
@@ -58,8 +68,17 @@ export class HealthController {
     if (tables !== 70) notes.push(`テーブル数が ${tables} 件です（期待 70 件）。02-schema.sql を適用してください。`);
     if (settings === 0) notes.push('システム設定が空です。03-seed-data.sql を適用してください。');
 
+    // 帳票の書体。無いと納品書・請求書が出せないので、稼働先で真っ先に確かめられるようにする。
+    const font = findJapaneseFont();
+    if (!font) {
+      notes.push(
+        '帳票PDFの日本語書体が見つかりません。納品書・請求書・ピッキングリストが出せません。' +
+          'PDF_FONT_PATH を設定するか、サーバーに日本語フォントを入れてください。',
+      );
+    }
+
     return {
-      status: tables === 70 && settings > 0 ? 'ok' : 'ng',
+      status: tables === 70 && settings > 0 && font ? 'ok' : 'ng',
       schema: env.DB_SCHEMA,
       tables,
       expected_tables: 70,
@@ -68,6 +87,12 @@ export class HealthController {
         system_settings: settings,
         import_templates: templates,
         warehouses,
+      },
+      pdf_font: {
+        status: font ? 'ok' : 'ng',
+        path: font?.path ?? null,
+        name: font?.family ?? null,
+        looked: font ? [] : fontSearchTrace(),
       },
       notes,
     };

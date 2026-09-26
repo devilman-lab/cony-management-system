@@ -189,13 +189,20 @@ export class ReportDoc {
     return this.done;
   }
 
+  /**
+   * 見出しの行。
+   *
+   * **見出しは列の揃え方にそのまま従わせる。**以前はここで中央を強制していたため、
+   * 左寄せの列（品名など）は見出しだけ右にずれ、右寄せの列（数量・金額）は
+   * 見出しだけ左にずれて、どの値がどの見出しのものか読み取りづらくなっていた。
+   */
   private tableHeader(columns: Column[]): void {
     this.rule();
-    this.tableRow(columns, columns.map((c) => c.label), 9, 'center');
+    this.tableRow(columns, columns.map((c) => c.label), 9);
     this.rule();
   }
 
-  private tableRow(columns: Column[], row: Cell[], size: number, forceAlign?: Column['align']): void {
+  private tableRow(columns: Column[], row: Cell[], size: number): void {
     const y = this.doc.y;
     let x = MARGIN;
     this.doc.fontSize(size);
@@ -204,7 +211,7 @@ export class ReportDoc {
       const text = row[i] === null || row[i] === undefined ? '' : String(row[i]);
       this.doc.text(text, x + 2, y + 3, {
         width: col.width - 4,
-        align: forceAlign ?? col.align ?? 'left',
+        align: col.align ?? 'left',
         lineBreak: false,
         ellipsis: true,
       });

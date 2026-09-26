@@ -147,7 +147,8 @@ export class ReportsService {
         ['出荷倉庫', sh.warehouse_name],
         ['納品希望日', ymd(sh.requested_delivery_date)],
       ]);
-      doc.line(`納品先住所　${this.addressOf(sh)}`);
+      const address = this.addressOf(sh);
+      if (address) doc.line(`納品先住所　${address}`);
       if (sh.work_instruction) doc.line(`作業指示　　${sh.work_instruction}`);
       if (sh.delivery_rule) doc.line(`納品ルール　${sh.delivery_rule}`);
       if (sh.shipping_remarks) doc.line(`出荷備考　　${sh.shipping_remarks}`);
@@ -299,7 +300,8 @@ export class ReportsService {
         ['納品先', sh.destination_name ?? '（直送）'],
         ['納品先No', sh.partner_delivery_no ?? ''],
       ]);
-      doc.line(`納品先住所　${this.addressOf(sh)}`);
+      const address = this.addressOf(sh);
+      if (address) doc.line(`納品先住所　${address}`);
       doc.line(company.line);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       if (sh.delivery_note_print1) doc.line(sh.delivery_note_print1);
@@ -398,9 +400,12 @@ export class ReportsService {
       if (iv.po_no) head.push(['発注番号', iv.po_no]);
       doc.keyValues(head);
 
-      doc.line(
-        `〒${iv.partner_postal_code ?? ''}　${iv.partner_address1 ?? ''}${iv.partner_address2 ?? ''}`,
-      );
+      // 住所が無いときに「〒」だけの行を出さない。
+      const billTo = [
+        iv.partner_postal_code ? `〒${iv.partner_postal_code}` : '',
+        `${iv.partner_address1 ?? ''}${iv.partner_address2 ?? ''}`.trim(),
+      ].filter(Boolean).join('　');
+      if (billTo) doc.line(billTo);
       doc.line(company.line);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       doc.y += 4;
@@ -729,8 +734,15 @@ export class ReportsService {
     const a1 = direct ? sh.direct_address1 : sh.dest_address1;
     const a2 = direct ? sh.direct_address2 : sh.dest_address2;
     const tel = direct ? sh.direct_tel : sh.dest_tel;
-    const name = direct && sh.direct_name ? `${sh.direct_name} 様　` : '';
-    return `${name}〒${zip ?? ''}　${a1 ?? ''}${a2 ?? ''}${tel ? `　TEL ${tel}` : ''}`;
+    // 空の項目は出さない。住所も郵便番号も無いときに「〒」だけが残ると、
+    // 印字漏れのように見えてしまうため。
+    const parts: string[] = [];
+    if (direct && sh.direct_name) parts.push(`${sh.direct_name} 様`);
+    if (zip) parts.push(`〒${zip}`);
+    const street = `${a1 ?? ''}${a2 ?? ''}`.trim();
+    if (street) parts.push(street);
+    if (tel) parts.push(`TEL ${tel}`);
+    return parts.join('　');
   }
 
   /**

@@ -150,6 +150,8 @@ export class ReportsService {
       const address = this.addressOf(sh);
       if (address) doc.line(`納品先住所　${address}`);
       if (sh.work_instruction) doc.line(`作業指示　　${sh.work_instruction}`);
+      // 納品ルールは納品先の編集画面から外したが（2026-10-01 のご指摘）、
+      // すでに値が入っている納品先のために印字は残す。設定が無ければ行ごと出ない。
       if (sh.delivery_rule) doc.line(`納品ルール　${sh.delivery_rule}`);
       if (sh.shipping_remarks) doc.line(`出荷備考　　${sh.shipping_remarks}`);
       doc.y += 4;
@@ -293,19 +295,27 @@ export class ReportsService {
       const lines = await this.deliveryLines(sh);
 
       doc.title('納 品 書');
+      // 宛名と納品先は、納品先マスタの「納品書 印字1／印字2」があればそちらを使う。
+      // 得意先名・納品先名をそのまま出すと先方の呼び方と合わないことがあるため（1001 ご要望）。
+      // 空欄のときは今まで通り取引先名・納品先名を出す。
+      const addressee = sh.delivery_note_print1?.trim()
+        ? sh.delivery_note_print1.trim()
+        : `${this.partnerLabel(sh)} 御中`;
+      const destination = sh.delivery_note_print2?.trim()
+        ? sh.delivery_note_print2.trim()
+        : (sh.destination_name ?? '（直送）');
+
       doc.keyValues([
         ['伝票番号', sh.shipment_no],
         ['納品日', ymd(sh.ship_date ?? sh.delivery_date ?? sh.planned_ship_date)],
-        ['得意先', `${this.partnerLabel(sh)} 御中`],
-        ['納品先', sh.destination_name ?? '（直送）'],
+        ['得意先', addressee],
+        ['納品先', destination],
         ['納品先No', sh.partner_delivery_no ?? ''],
       ]);
       const address = this.addressOf(sh);
       if (address) doc.line(`納品先住所　${address}`);
       doc.line(company.line);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
-      if (sh.delivery_note_print1) doc.line(sh.delivery_note_print1);
-      if (sh.delivery_note_print2) doc.line(sh.delivery_note_print2);
       doc.y += 4;
 
       const columns = this.deliveryColumns(chosen);
@@ -359,6 +369,9 @@ export class ReportsService {
         'p.address1 as partner_address1',
         'p.address2 as partner_address2',
         'p.invoice_note as invoice_note',
+        // 取引先マスタで宛名・担当者名を決めていればそちらを使う（1001 ご要望）
+        'p.invoice_addressee as invoice_addressee',
+        'p.invoice_contact_name as invoice_contact_name',
       ])
       .where('iv.id', 'in', invoiceIds)
       .orderBy('iv.invoice_no')
@@ -392,9 +405,17 @@ export class ReportsService {
       const head: [string, string][] = [
         ['請求番号', iv.invoice_no],
         ['締め日', ymd(iv.closing_date)],
-        ['請求先', `${iv.partner_name1}${iv.partner_name2 ? ' ' + iv.partner_name2 : ''} 御中`],
+        // 宛名は取引先マスタの「請求書の宛名」を優先する。空欄なら取引先名（1001 ご要望）。
+        [
+          '請求先',
+          iv.invoice_addressee?.trim()
+            ? iv.invoice_addressee.trim()
+            : `${iv.partner_name1}${iv.partner_name2 ? ' ' + iv.partner_name2 : ''} 御中`,
+        ],
         ['対象期間', `${ymd(iv.period_from)} 〜 ${ymd(iv.period_to)}`],
       ];
+      // 担当者名は入っているときだけ出す
+      if (iv.invoice_contact_name?.trim()) head.push(['ご担当者', iv.invoice_contact_name.trim()]);
       // 発行日は貴社ご指示により既定で印刷しない（設定 INVOICE_PRINT_ISSUE_DATE）。
       if (printIssueDate && iv.issued_at) head.push(['発行日', ymd(iv.issued_at)]);
       if (iv.po_no) head.push(['発注番号', iv.po_no]);

@@ -65,7 +65,7 @@ export class HealthController {
 
     const tables = Number(tableCount.rows[0]?.n ?? 0);
     const notes: string[] = [];
-    if (tables !== 70) notes.push(`テーブル数が ${tables} 件です（期待 70 件）。02-schema.sql を適用してください。`);
+    if (tables !== 71) notes.push(`テーブル数が ${tables} 件です（期待 71 件）。02-schema.sql を適用してください。`);
     if (settings === 0) notes.push('システム設定が空です。03-seed-data.sql を適用してください。');
 
     // 帳票の書体。無いと納品書・請求書が出せないので、稼働先で真っ先に確かめられるようにする。
@@ -78,10 +78,10 @@ export class HealthController {
     }
 
     return {
-      status: tables === 70 && settings > 0 && font ? 'ok' : 'ng',
+      status: tables === 71 && settings > 0 && font ? 'ok' : 'ng',
       schema: env.DB_SCHEMA,
       tables,
-      expected_tables: 70,
+      expected_tables: 71,
       seed: {
         code_categories: codeCategories,
         system_settings: settings,

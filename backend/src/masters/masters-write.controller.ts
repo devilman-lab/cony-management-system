@@ -88,9 +88,18 @@ const PartnerSchema = z.object({
   /** 既定の販売担当（販売担当マスタ）。受注に引き継ぐ。 */
   sales_staff_id: z.number().int().positive().nullish(),
   media_id: z.number().int().positive().nullish(),
+  /** 代表のカテゴリー。一覧の表示や既定値に使う。 */
   partner_category_id: z.number().int().positive().nullish(),
+  /**
+   * 取引先が持つカテゴリー（複数可）。1取引先で TV とカタログの両方を持つことがある（1001 ご要望）。
+   * 渡されたときだけ丸ごと入れ替える。省略したときは今のまま触らない。
+   */
+  category_ids: z.array(z.number().int().positive()).max(20).optional(),
   invoice_registration_no: z.string().trim().max(20).nullish(),
   invoice_note: z.string().nullish(),
+  /** 請求書の宛名・担当者名。空欄なら取引先名を使う（1001 ご要望）。 */
+  invoice_addressee: z.string().trim().max(120).nullish(),
+  invoice_contact_name: z.string().trim().max(120).nullish(),
   shipping_fee_threshold: decimal.nullish(),
   shipping_fee_amount: decimal.nullish(),
   default_trade_type: z.enum(['委託', '買取']).nullish(),
@@ -117,6 +126,11 @@ const DestinationSchema = z.object({
   delivery_note_print1: z.string().nullish(),
   delivery_note_print2: z.string().nullish(),
   work_instruction_id: z.number().int().positive().nullish(),
+  /**
+   * 納品ルール。2026-10-01 のご指摘で **画面からは外した**（不要とのこと）。
+   * API は今まで通り受け付ける。すでに入っている値を消さないため、また
+   * 使うことになったときに画面を戻すだけで済むようにするため。
+   */
   delivery_rule_id: z.number().int().positive().nullish(),
   default_warehouse_id: z.number().int().positive().nullish(),
   slip_issue_class_code_id: z.number().int().positive().nullish(),
@@ -140,6 +154,8 @@ const ProductSchema = z.object({
   product_class_id: z.number().int().positive().nullish(),
   carton_qty: z.number().int().min(0).nullish(),
   cost_price: decimal.default('0'),
+  /** 旧原価。原価を変えたときに前の値を残す（1001 ご要望）。 */
+  old_cost_price: decimal.nullish(),
   is_cost_undecided: z.boolean().default(false),
   tax_rate: tax.default('10.00'),
   is_set: z.boolean().default(false),
@@ -160,6 +176,14 @@ const SkuSchema = z.object({
     .trim()
     .regex(/^\d{8}$|^\d{13}$/, 'JANコードは8桁または13桁の数字で入力してください')
     .nullish(),
+  /** FBA専用のJAN。出荷依頼書・JAN発行でコニーJANの代わりに使う（1001 ご要望）。 */
+  fba_jan: z
+    .string()
+    .trim()
+    .regex(/^\d{8}$|^\d{13}$/, 'FBAのJANコードは8桁または13桁の数字で入力してください')
+    .nullish(),
+  /** ショップ側の商品コード（1001 ご要望）。 */
+  shop_product_code: z.string().trim().max(60).nullish(),
   sort_order: z.number().int().nullish(),
   note: z.string().nullish(),
 });
@@ -188,9 +212,14 @@ const PartnerProductSchema = z.object({
   partner_product_code: z.string().trim().max(60).nullish(),
   partner_jan: z.string().trim().max(20).nullish(),
   jan_code: z.string().trim().max(20).nullish(),
+  /** 出荷用のJAN。受注入力で先方JANから引く（1001 ご要望）。 */
+  shipping_jan: z.string().trim().max(20).nullish(),
   sales_name: z.string().trim().max(200).nullish(),
   sales_name2: z.string().trim().max(200).nullish(),
   unit_price: decimal.default('0'),
+  /** 旧単価と、単価を変えた日。値上げ・値下げの経緯を残すため（1001 ご要望）。 */
+  old_unit_price: decimal.nullish(),
+  price_changed_date: ymd.nullish(),
   /** 上代。納品書「上代あり」に印字する（9/15 ご回答で得意先別商品マスタに置くと確定）。 */
   retail_price: decimal.nullish(),
   cost_price: decimal.nullish(),
@@ -230,6 +259,8 @@ const PurchaseItemSchema = z.object({
   category_id: z.number().int().positive().nullish(),
   product_class_id: z.number().int().positive().nullish(),
   new_tax_rate: tax.nullish(),
+  /** 税区分（課税10%／軽減8%／非課税／不課税）。区分値 TAX_DIVISION（1001 ご要望）。 */
+  new_tax_class_code_id: z.number().int().positive().nullish(),
   sort_order: z.number().int().nullish(),
   note: z.string().nullish(),
 });
@@ -252,6 +283,8 @@ const RoyaltyRuleSchema = z
     brand_id: z.number().int().positive().nullish(),
     product_id: z.number().int().positive().nullish(),
     customer_partner_id: z.number().int().positive().nullish(),
+    /** 媒体。空欄ならすべての媒体（1001 ご要望）。 */
+    media_id: z.number().int().positive().nullish(),
     is_excluded: z.boolean().default(false),
     calc_base: z.enum(['売上', '出荷', '入金']).default('出荷'),
     rate: z.string().regex(/^\d(\.\d{1,4})?$/, '料率は 0.0500（5%）のような形で入力してください').nullish(),
@@ -291,7 +324,9 @@ export class MastersWriteController {
     const table = this.simpleTable(kind);
     return this.crud.list(table, {
       ...query,
-      searchColumns: ['code', 'name'],
+      // 作業指示は本文（出荷指示書に印字する文言）も検索できるようにする。
+      // 納品先マスタで中身から探せないと選べないため（1001 ご要望）。
+      searchColumns: table === 'work_instructions' ? ['code', 'name', 'instruction_body'] : ['code', 'name'],
       orderBy: ['sort_order', 'code'],
     });
   }
@@ -363,21 +398,44 @@ export class MastersWriteController {
   // ---- 取引先 ---------------------------------------------------------------
   @Post('partners')
   @RequirePermission('M-01', 'create')
-  createPartner(
+  async createPartner(
     @Body(new ZodValidationPipe(PartnerSchema)) body: PartnerBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.crud.create('partners', body, user.id);
+    const { category_ids, ...values } = body;
+    const row = await this.crud.create('partners', values, user.id);
+    await this.savePartnerCategories(Number(row.id), category_ids, user.id);
+    return { ...row, category_ids: category_ids ?? [] };
   }
 
   @Patch('partners/:id')
   @RequirePermission('M-01', 'update')
-  updatePartner(
+  async updatePartner(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ZodValidationPipe(PartnerSchema.partial().extend(Active))) body: Partial<PartnerBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.crud.update('partners', id, body, '取引先', user.id);
+    const { category_ids, ...values } = body;
+    const row = await this.crud.update('partners', id, values, '取引先', user.id);
+    await this.savePartnerCategories(id, category_ids, user.id);
+    return row;
+  }
+
+  /**
+   * 取引先のカテゴリー（複数）を入れ替える。
+   * undefined のときは触らない（カテゴリーを送っていない更新で、既存を消さないため）。
+   */
+  private async savePartnerCategories(partnerId: number, ids: number[] | undefined, userId: number): Promise<void> {
+    if (ids === undefined) return;
+    const unique = [...new Set(ids)];
+    await this.db.transaction().execute(async (trx) => {
+      await trx.deleteFrom('partner_category_links').where('partner_id', '=', partnerId).execute();
+      if (unique.length === 0) return;
+      await trx
+        .insertInto('partner_category_links')
+        .values(unique.map((cid) => ({ partner_id: partnerId, partner_category_id: cid, created_by: userId })))
+        .execute();
+    });
   }
 
   @Post('partners/:id/deactivate')
@@ -389,12 +447,15 @@ export class MastersWriteController {
 
   // ---- 納品先 ---------------------------------------------------------------
   /** 納品先の一覧。取引先で絞れ、取引先名も一緒に返す。 */
+  /** 納品先の一覧。作業指示は名前も返す（画面で検索して選ぶため）。 */
   @Get('delivery-destinations')
   @RequirePermission('M-05', 'view')
   async listDestinations(@Query(new ZodValidationPipe(DestinationListSchema)) query: DestinationListQuery) {
     let base = this.db
       .selectFrom('delivery_destinations as d')
-      .innerJoin('partners as p', 'p.id', 'd.partner_id');
+      .innerJoin('partners as p', 'p.id', 'd.partner_id')
+      // 作業指示は画面で検索して選ぶので、名前も返す（1001 ご要望）
+      .leftJoin('work_instructions as wi', 'wi.id', 'd.work_instruction_id');
     if (!query.include_inactive) base = base.where('d.is_active', '=', true);
     if (query.partner_id !== undefined) base = base.where('d.partner_id', '=', query.partner_id);
     if (query.q) {
@@ -411,7 +472,7 @@ export class MastersWriteController {
     const [items, total] = await Promise.all([
       base
         .selectAll('d')
-        .select(['p.partner_code as partner_code', 'p.name1 as partner_name'])
+        .select(['p.partner_code as partner_code', 'p.name1 as partner_name', 'wi.name as work_instruction_name'])
         .orderBy('p.partner_code')
         .orderBy('d.sort_order', sql`asc nulls last`)
         .orderBy('d.delivery_code')
@@ -540,10 +601,17 @@ export class MastersWriteController {
       .selectFrom('set_headers as h')
       .innerJoin('skus as s', 's.id', 'h.sku_id')
       .innerJoin('products as p', 'p.id', 's.product_id')
+      // 一覧にカラー・サイズ・商品分類を出すため（1001 のご指摘）。
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .leftJoin('product_classes as pc', 'pc.id', 'p.product_class_id')
       .select([
         'h.id as id',
         's.sku_code as sku_code',
         'p.product_name as product_name',
+        'cl.name as color_name',
+        'sz.name as size_name',
+        'pc.name as product_class_name',
         'h.is_active as is_active',
         (eb) =>
           eb
@@ -589,7 +657,11 @@ export class MastersWriteController {
       .selectFrom('partner_products as pp')
       .innerJoin('partners as p', 'p.id', 'pp.partner_id')
       .innerJoin('skus as s', 's.id', 'pp.sku_id')
-      .innerJoin('products as pr', 'pr.id', 's.product_id');
+      .innerJoin('products as pr', 'pr.id', 's.product_id')
+      // 一覧にカラー・サイズ・商品分類を出すため（1001 のご指摘）。
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .leftJoin('product_classes as pc', 'pc.id', 'pr.product_class_id');
     if (!query.include_inactive) base = base.where('pp.is_active', '=', true);
     if (query.partner_id !== undefined) base = base.where('pp.partner_id', '=', query.partner_id);
     if (query.sku_id !== undefined) base = base.where('pp.sku_id', '=', query.sku_id);
@@ -608,7 +680,15 @@ export class MastersWriteController {
     const [items, total] = await Promise.all([
       base
         .selectAll('pp')
-        .select(['p.partner_code as partner_code', 'p.name1 as partner_name', 's.sku_code as sku_code', 'pr.product_name as product_name'])
+        .select([
+          'p.partner_code as partner_code',
+          'p.name1 as partner_name',
+          's.sku_code as sku_code',
+          'pr.product_name as product_name',
+          'cl.name as color_name',
+          'sz.name as size_name',
+          'pc.name as product_class_name',
+        ])
         .orderBy('p.partner_code')
         .orderBy('s.sku_code')
         .limit(query.limit)
@@ -813,6 +893,7 @@ export class MastersWriteController {
       .leftJoin('brands as b', 'b.id', 'r.brand_id')
       .leftJoin('products as p', 'p.id', 'r.product_id')
       .leftJoin('partners as cust', 'cust.id', 'r.customer_partner_id')
+      .leftJoin('media as md', 'md.id', 'r.media_id')
       .select([
         'r.id as id',
         'r.payee_partner_id as payee_partner_id',
@@ -823,6 +904,8 @@ export class MastersWriteController {
         'p.product_name as product_name',
         'r.customer_partner_id as customer_partner_id',
         'cust.name1 as customer_name',
+        'r.media_id as media_id',
+        'md.name as media_name',
         'r.note as note',
         'r.is_excluded as is_excluded',
         'r.calc_base as calc_base',

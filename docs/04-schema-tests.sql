@@ -51,10 +51,10 @@ DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM information_schema.tables
    WHERE table_schema='cony' AND table_type='BASE TABLE';
-  IF n <> 70 THEN
-    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 70 件）', n USING ERRCODE='TF001';
+  IF n <> 71 THEN
+    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 71 件）', n USING ERRCODE='TF001';
   END IF;
-  RAISE NOTICE 'T01 OK  テーブル数 70';
+  RAISE NOTICE 'T01 OK  テーブル数 71';
 
   SELECT count(*) INTO n FROM pg_type t JOIN pg_namespace ns ON ns.oid=t.typnamespace
    WHERE ns.nspname='cony' AND t.typtype='d' AND t.typname IN ('money_amt','qty_num','tax_rate');
@@ -64,7 +64,7 @@ BEGIN
   RAISE NOTICE 'T02 OK  ドメイン money_amt / qty_num / tax_rate';
 
   SELECT count(*) INTO n FROM code_categories;
-  IF n <> 23 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 23 件）', n USING ERRCODE='TF001'; END IF;
+  IF n <> 24 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 24 件）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM sales_categories;
   IF n <> 3  THEN RAISE EXCEPTION 'T03 失敗: 販売カテゴリー % 件（期待 3 件）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM roles;
@@ -73,7 +73,7 @@ BEGIN
   IF n <> 4  THEN RAISE EXCEPTION 'T03 失敗: 倉庫 % 件（期待 4 件）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM numbering_rules;
   IF n <> 11 THEN RAISE EXCEPTION 'T03 失敗: 採番ルール % 件（期待 11 件）', n USING ERRCODE='TF001'; END IF;
-  RAISE NOTICE 'T03 OK  初期データ（区分23／販売カテゴリー3／ロール4／倉庫4／採番11）';
+  RAISE NOTICE 'T03 OK  初期データ（区分24／販売カテゴリー3／ロール4／倉庫4／採番11）';
 
   SELECT count(*) INTO n FROM codes c JOIN code_categories cc ON cc.id=c.code_category_id
    WHERE cc.code='QUALITY_DIVISION';

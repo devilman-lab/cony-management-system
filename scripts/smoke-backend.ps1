@@ -175,7 +175,7 @@ $login = Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'applicatio
            -Body (@{ login_id = 'admin'; password = $pass } | ConvertTo-Json)
 $H = @{ Authorization = "Bearer $($login.access_token)" }
 Check '管理者は権限151件（機能30×操作5＋機微項目1）' { @($login.user.permissions).Count -eq 151 }
-Check '接続先の照合（テーブル70）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 70 }
+Check '接続先の照合（テーブル71）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 71 }
 
 Check '既定の引当タイミングは受注登録時（9/15 ご確認）' {
   ((GetList "$B/masters/settings") | Where-Object { $_.setting_key -eq 'ALLOCATION_TIMING' }).value_text -eq 'order_entry'

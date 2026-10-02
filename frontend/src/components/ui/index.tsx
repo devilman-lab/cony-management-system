@@ -323,6 +323,7 @@ export function Modal({
   children,
   footer,
   width = 640,
+  dismissible = false,
 }: {
   open: boolean;
   title: ReactNode;
@@ -330,17 +331,29 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   width?: number;
+  /**
+   * 画面の外側のクリックと Esc で閉じてよいか。**既定は閉じない。**
+   *
+   * 以前は外側を押しただけで閉じており、入力中の内容ごと消えていた
+   * （1001 のご指摘「入力・編集画面を開いている最中に…画面がいなくなって見つからない」）。
+   * 閉じるのは右上の×か、下の「やめる」だけにしてある。
+   * 入力を伴わない確認ダイアログや明細の表示だけ true にする。
+   */
+  dismissible?: boolean;
 }) {
   useEffect(() => {
-    if (!open) return;
+    if (!open || !dismissible) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, dismissible]);
 
   if (!open) return null;
   return (
-    <div className="modal-backdrop fixed inset-0 z-[80] bg-[#12242d66] flex items-center justify-center no-print" onClick={onClose}>
+    <div
+      className="modal-backdrop fixed inset-0 z-[80] bg-[#12242d66] flex items-center justify-center no-print"
+      onClick={dismissible ? onClose : undefined}
+    >
       <div
         className="modal-panel card w-full flex flex-col max-h-[92vh]"
         style={{ maxWidth: width }}
@@ -371,6 +384,8 @@ export function useConfirm() {
       open
       title={state.title}
       width={420}
+      // 「はい／いいえ」を選ぶだけで入力が無いので、外側クリックと Esc で閉じてよい。
+      dismissible
       onClose={() => {
         state.resolve(false);
         setState(null);

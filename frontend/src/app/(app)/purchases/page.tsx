@@ -240,7 +240,7 @@ export default function PurchasesPage() {
         <div className="mt-2"><Button size="sm" icon="plus" onClick={() => setLines((s) => [...s, newLine()])}>行を追加</Button></div>
       </Modal>
 
-      <Modal open={detailId !== null} title={detail.data ? `${detail.data.purchase_no}　${detail.data.supplier_name}` : ''} onClose={() => setDetailId(null)} width={800}>
+      <Modal open={detailId !== null} title={detail.data ? `${detail.data.purchase_no}　${detail.data.supplier_name}` : ''} onClose={() => setDetailId(null)} width={800} dismissible>
         {detail.data && (
           <>
             <div className="text-[12px] text-[var(--color-ink-2)] mb-2">{detail.data.division}　{ymd(detail.data.purchase_date)}　<Badge status={detail.data.status} />　{detail.data.note ?? ''}</div>

@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { useCodes, useSimpleMaster, useWarehouses } from '@/lib/hooks';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
-import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
+import { SearchSelect, fetchPartners, fetchWorkInstructions, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { L, PostalLookup, Section } from '@/components/masters/Form';
 
@@ -20,6 +20,8 @@ interface DestRow extends Record<string, unknown> {
   delivery_note_print1: string | null;
   delivery_note_print2: string | null;
   work_instruction_id: number | null;
+  work_instruction_name: string | null;
+  /** 納品ルール。1001 のご指摘で納品先の編集画面からは外した。値は消していない。 */
   delivery_rule_id: number | null;
   default_warehouse_id: number | null;
   slip_issue_class_code_id: number | null;
@@ -41,8 +43,7 @@ interface Form {
   consignee: string;
   delivery_note_print1: string;
   delivery_note_print2: string;
-  work_instruction_id: string;
-  delivery_rule_id: string;
+  work_instruction: Option | null;
   default_warehouse_id: string;
   slip_issue_class_code_id: string;
   postal_code: string;
@@ -61,7 +62,6 @@ export default function ShiptosPage() {
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
   const [partner, setPartner] = useState<Option | null>(null);
   const warehouses = useWarehouses();
-  const rules = useSimpleMaster('delivery_rules');
   const instructions = useSimpleMaster('work_instructions');
   const slipClasses = useCodes('SLIP_ISSUE_CLASS');
 
@@ -76,7 +76,7 @@ export default function ShiptosPage() {
       modalWidth={760}
       toolbar={<SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchCustomers} placeholder="取引先で絞る" />}
       columns={[
-        { key: 'partner_name', label: '取引先', width: 180, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
+        { key: 'partner_name', label: '取引先', width: 280, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
         { key: 'delivery_code', label: 'コード', width: 100, render: (r) => <Num className="font-semibold">{r.delivery_code}</Num> },
         { key: 'name', label: '納品先名' },
         { key: 'partner_delivery_no', label: '先方の店番', width: 100, render: (r) => <Num>{r.partner_delivery_no ?? ''}</Num> },
@@ -86,14 +86,15 @@ export default function ShiptosPage() {
       rowKey={(r) => r.id}
       empty={() => ({
         partner: partner, delivery_code: '', name: '', partner_delivery_no: '', consignee: '', delivery_note_print1: '', delivery_note_print2: '',
-        work_instruction_id: '', delivery_rule_id: '', default_warehouse_id: '', slip_issue_class_code_id: '',
+        work_instruction: null, default_warehouse_id: '', slip_issue_class_code_id: '',
         postal_code: '', address1: '', address2: '', tel: '', fax: '', sort_order: '', note: '',
       })}
       toForm={(r) => ({
         partner: { id: r.partner_id, label: r.partner_name, sub: r.partner_code },
         delivery_code: r.delivery_code, name: r.name, partner_delivery_no: s(r.partner_delivery_no), consignee: s(r.consignee),
         delivery_note_print1: s(r.delivery_note_print1), delivery_note_print2: s(r.delivery_note_print2),
-        work_instruction_id: s(r.work_instruction_id), delivery_rule_id: s(r.delivery_rule_id), default_warehouse_id: s(r.default_warehouse_id), slip_issue_class_code_id: s(r.slip_issue_class_code_id),
+        work_instruction: r.work_instruction_id ? { id: r.work_instruction_id, label: s(r.work_instruction_name ?? `#${r.work_instruction_id}`) } : null,
+        default_warehouse_id: s(r.default_warehouse_id), slip_issue_class_code_id: s(r.slip_issue_class_code_id),
         postal_code: s(r.postal_code), address1: s(r.address1), address2: s(r.address2), tel: s(r.tel), fax: s(r.fax), sort_order: s(r.sort_order), note: s(r.note),
       })}
       toBody={(f) => ({
@@ -104,8 +105,7 @@ export default function ShiptosPage() {
         consignee: strOrNull(f.consignee),
         delivery_note_print1: strOrNull(f.delivery_note_print1),
         delivery_note_print2: strOrNull(f.delivery_note_print2),
-        work_instruction_id: numOrNull(f.work_instruction_id),
-        delivery_rule_id: numOrNull(f.delivery_rule_id),
+        work_instruction_id: f.work_instruction?.id ?? null,
         default_warehouse_id: numOrNull(f.default_warehouse_id),
         slip_issue_class_code_id: numOrNull(f.slip_issue_class_code_id),
         postal_code: strOrNull(f.postal_code),
@@ -133,11 +133,8 @@ export default function ShiptosPage() {
             <L label="伝票発行区分" hint="納品書に単価・上代を出すか">
               <Select value={f.slip_issue_class_code_id} onChange={(e) => set({ slip_issue_class_code_id: e.target.value })}><option value="">（既定）</option>{(slipClasses.data?.values ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
             </L>
-            <L label="納品ルール">
-              <Select value={f.delivery_rule_id} onChange={(e) => set({ delivery_rule_id: e.target.value })}><option value="">（なし）</option>{(rules.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select>
-            </L>
-            <L label="作業指示">
-              <Select value={f.work_instruction_id} onChange={(e) => set({ work_instruction_id: e.target.value })}><option value="">（なし）</option>{(instructions.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select>
+            <L label="作業指示" hint="コード・名称・本文のどれでも探せます">
+              <SearchSelect value={f.work_instruction} onChange={(o) => set({ work_instruction: o })} fetchOptions={fetchWorkInstructions} placeholder="キーワードで検索" width="100%" />
             </L>
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
             <L label="納品書 印字1" hint="納品書の欄外に印字する文言"><Input value={f.delivery_note_print1} onChange={(e) => set({ delivery_note_print1: e.target.value })} /></L>

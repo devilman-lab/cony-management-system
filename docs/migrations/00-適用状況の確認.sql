@@ -47,6 +47,27 @@ SELECT '④ 取消した請求を履歴として残す',
                  AND indexdef LIKE '%WHERE%'
             ) THEN '済' ELSE '未' END,
        '2026-09-25_invoice_cancel_history.sql'
+UNION ALL
+SELECT '⑤ マスタへのご要望（1001）',
+       -- 列を1つずつ見る。どれか欠けていたら「一部」と出す。
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony'
+                  AND ((table_name = 'products'         AND column_name = 'old_cost_price')
+                    OR (table_name = 'skus'             AND column_name IN ('fba_jan', 'shop_product_code'))
+                    OR (table_name = 'partner_products' AND column_name = 'shipping_jan')
+                    OR (table_name = 'partners'         AND column_name IN ('invoice_addressee', 'invoice_contact_name'))
+                    OR (table_name = 'royalty_rules'    AND column_name = 'media_id'))) = 7
+          AND (SELECT count(*) FROM information_schema.tables
+                WHERE table_schema = 'cony' AND table_name = 'partner_category_links') = 1
+          AND (SELECT count(*) FROM code_categories WHERE code = 'CURRENCY') = 1
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'products' AND column_name = 'old_cost_price') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-02_master_feedback.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。
@@ -60,6 +81,11 @@ SELECT count(*) AS 請求の一意の決まりの数_1なら正常
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'invoices'::regclass AND conname = 'invoices_partner_id_period_to_key'
   ) t;
+
+-- テーブルの数。⑤を当てたあとは 71（partner_category_links が増える）。
+SELECT count(*) AS テーブル数_71なら最新
+  FROM information_schema.tables
+ WHERE table_schema = 'cony' AND table_type = 'BASE TABLE';
 
 -- 同じく、① を途中で止めると JAN の索引が消えます。ここも 1 なら正常。
 SELECT count(*) AS JANの索引の数_1なら正常

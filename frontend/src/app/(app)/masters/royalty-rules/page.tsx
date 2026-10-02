@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import { useSimpleMaster } from '@/lib/hooks';
 import { money, today, ymd } from '@/lib/format';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
-import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
+import { SearchSelect, fetchPartners, fetchProducts, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { Check, L, Section } from '@/components/masters/Form';
 
@@ -19,6 +19,8 @@ interface RuleRow extends Record<string, unknown> {
   product_name: string | null;
   customer_partner_id: number | null;
   customer_name: string | null;
+  media_id: number | null;
+  media_name: string | null;
   is_excluded: boolean;
   calc_base: string;
   rate: string | null;
@@ -33,8 +35,9 @@ interface RuleRow extends Record<string, unknown> {
 interface Form {
   payee: Option | null;
   brand_id: string;
-  product_id: string;
+  product: Option | null;
   customer: Option | null;
+  media_id: string;
   is_excluded: boolean;
   calc_base: string;
   rate_pct: string;
@@ -54,6 +57,7 @@ export default function RoyaltyRulesPage() {
   const fetchAll = useMemo(() => fetchPartners(), []);
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
   const brands = useSimpleMaster('brands');
+  const medias = useSimpleMaster('media');
 
   return (
     <MasterPage<RuleRow, Form>
@@ -68,18 +72,20 @@ export default function RoyaltyRulesPage() {
         { key: 'payee_name', label: '支払先', width: 160, render: (r) => <b>{r.payee_name}</b> },
         { key: 'brand_name', label: 'ブランド／商品', render: (r) => r.product_name ?? r.brand_name ?? <span className="text-[var(--color-ink-3)]">すべて</span> },
         { key: 'customer_name', label: '販売先', render: (r) => r.customer_name ?? <span className="text-[var(--color-ink-3)]">すべて</span> },
+        { key: 'media_name', label: '媒体', width: 110, render: (r) => r.media_name ?? <span className="text-[var(--color-ink-3)]">すべて</span> },
         { key: 'rate', label: '料率／定額', r: true, width: 110, render: (r) => (r.is_excluded ? <Badge>対象外</Badge> : r.rate ? <Num>{pct(r.rate)}</Num> : `${money(r.fixed_amount)} 円`) },
         { key: 'calc_base', label: '基準', width: 60 },
         { key: 'valid_from', label: '適用期間', width: 190, render: (r) => <Num>{ymd(r.valid_from)} 〜 {r.valid_to ? ymd(r.valid_to) : ''}</Num> },
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
-      empty={() => ({ payee: null, brand_id: '', product_id: '', customer: null, is_excluded: false, calc_base: '出荷', rate_pct: '', fixed_amount: '', valid_from: today(), valid_to: '', note: '' })}
+      empty={() => ({ payee: null, brand_id: '', product: null, customer: null, media_id: '', is_excluded: false, calc_base: '出荷', rate_pct: '', fixed_amount: '', valid_from: today(), valid_to: '', note: '' })}
       toForm={(r) => ({
         payee: { id: r.payee_partner_id, label: r.payee_name },
         brand_id: s(r.brand_id),
-        product_id: s(r.product_id),
+        product: r.product_id ? { id: r.product_id, label: r.product_name ?? '' } : null,
         customer: r.customer_partner_id ? { id: r.customer_partner_id, label: r.customer_name ?? '' } : null,
+        media_id: s(r.media_id),
         is_excluded: r.is_excluded,
         calc_base: r.calc_base,
         rate_pct: r.rate ? String(Number(r.rate) * 100) : '',
@@ -91,8 +97,9 @@ export default function RoyaltyRulesPage() {
       toBody={(f) => ({
         payee_partner_id: f.payee?.id,
         brand_id: numOrNull(f.brand_id),
-        product_id: numOrNull(f.product_id),
+        product_id: f.product?.id ?? null,
         customer_partner_id: f.customer?.id ?? null,
+        media_id: numOrNull(f.media_id),
         is_excluded: f.is_excluded,
         calc_base: f.calc_base,
         rate: f.is_excluded || !f.rate_pct.trim() ? null : (Number(f.rate_pct) / 100).toFixed(4),
@@ -110,7 +117,8 @@ export default function RoyaltyRulesPage() {
           <Section title="対象の範囲（空欄は「すべて」）" />
           <div className="master-grid-2">
             <L label="ブランド"><Select value={f.brand_id} onChange={(e) => set({ brand_id: e.target.value })}><option value="">すべて</option>{(brands.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select></L>
-            <L label="商品 ID" hint="特定の商品だけに効かせるとき"><Input value={f.product_id} onChange={(e) => set({ product_id: e.target.value })} className="!w-[120px]" /></L>
+            <L label="商品" hint="特定の商品だけに効かせるとき。空欄ならブランド配下のすべて"><SearchSelect value={f.product} onChange={(o) => set({ product: o })} fetchOptions={fetchProducts} placeholder="すべて" width="100%" /></L>
+            <L label="媒体" hint="テレビ・カタログなど。空欄ならすべての媒体"><Select value={f.media_id} onChange={(e) => set({ media_id: e.target.value })}><option value="">すべて</option>{(medias.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select></L>
             <L label="販売先" hint="C社のように販売先で発生要否が分かれるとき"><SearchSelect value={f.customer} onChange={(o) => set({ customer: o })} fetchOptions={fetchCustomers} placeholder="すべて" width="100%" /></L>
           </div>
           <Section title="料率" />

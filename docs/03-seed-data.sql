@@ -31,6 +31,7 @@ INSERT INTO code_categories (code, name, sort_order) VALUES
   ('WAREHOUSE_DIVISION',     '倉庫区分',            50),
   ('TAX_DIVISION',           '税区分',              60),
   ('EXPENSE_DIVISION',       '経費区分',            61),
+  ('CURRENCY',               '通貨',                62),
   ('COST_DIVISION',          '費用区分',            62),
   ('SALES_PRICE_SETTING',    '売上単価設定区分',    63),
   ('PURCHASE_PRICE_SETTING', '仕入単価設定区分',    64),
@@ -135,6 +136,15 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
   ('FBA_FEE',    'FBA手数料',        60),
   ('OTHER',      'その他',           90)
 ) AS v(code, name, so) WHERE code_categories.code = 'EXPENSE_DIVISION';
+
+-- 通貨（売上・仕入で使う。増やすときは区分値の画面から足せる）
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('JPY', '円',     10),
+  ('USD', '米ドル', 20),
+  ('CNY', '中国元', 30),
+  ('EUR', 'ユーロ', 40)
+) AS v(code, name, so) WHERE code_categories.code = 'CURRENCY';
 
 -- 非課税区分
 INSERT INTO codes (code_category_id, code, name, sort_order)

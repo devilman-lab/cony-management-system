@@ -12,6 +12,10 @@ const ListQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+  /** 媒体・販売担当・カテゴリーで絞る（1001 ご要望「媒体別、担当者で絞れるようにしてほしい」）。 */
+  media_id: z.coerce.number().int().positive().optional(),
+  sales_staff_id: z.coerce.number().int().positive().optional(),
+  partner_category_id: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

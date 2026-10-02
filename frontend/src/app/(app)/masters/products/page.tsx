@@ -8,7 +8,7 @@ import { useSimpleMaster } from '@/lib/hooks';
 import { money } from '@/lib/format';
 import { Badge, Button, ErrorBox, Input, Num, Select, Textarea } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
-import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
+import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { Check, L, Section } from '@/components/masters/Form';
 
 interface ProductRow extends Record<string, unknown> {
@@ -22,6 +22,7 @@ interface ProductRow extends Record<string, unknown> {
   carton_qty: number | null;
   is_set: boolean;
   cost_price?: string;
+  old_cost_price?: string | null;
   is_cost_undecided: boolean;
   sku_count?: number;
   is_active: boolean;
@@ -31,6 +32,8 @@ interface Sku {
   id?: number;
   sku_code: string;
   jan: string;
+  fba_jan: string;
+  shop_product_code: string;
   color_id: string;
   size_id: string;
   pack_division: string;
@@ -47,6 +50,7 @@ interface Form {
   product_class_id: string;
   carton_qty: string;
   cost_price: string;
+  old_cost_price: string;
   is_cost_undecided: boolean;
   tax_rate: string;
   is_set: boolean;
@@ -75,7 +79,7 @@ export default function ProductsPage() {
   const saveSkus = async (productId: number, skus: Sku[]) => {
     for (const k of skus) {
       if (!k._dirty || !k.sku_code.trim()) continue;
-      const body = { product_id: productId, sku_code: k.sku_code.trim(), jan: strOrNull(k.jan), color_id: numOrNull(k.color_id), size_id: numOrNull(k.size_id), pack_division: strOrNull(k.pack_division) };
+      const body = { product_id: productId, sku_code: k.sku_code.trim(), jan: strOrNull(k.jan), fba_jan: strOrNull(k.fba_jan), shop_product_code: strOrNull(k.shop_product_code), color_id: numOrNull(k.color_id), size_id: numOrNull(k.size_id), pack_division: strOrNull(k.pack_division) };
       if (k.id) await api.patch(`/masters/skus/${k.id}`, { ...body, is_active: k.is_active });
       else await api.post('/masters/skus', body);
     }
@@ -108,15 +112,15 @@ export default function ProductsPage() {
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
-      empty={() => ({ product_code: '', product_name: '', set_product_name: '', brand_id: '', category_id: '', product_class_id: '', carton_qty: '', cost_price: '0', is_cost_undecided: false, tax_rate: '10.00', is_set: false, sort_order: '', note: '', skus: [] })}
+      empty={() => ({ product_code: '', product_name: '', set_product_name: '', brand_id: '', category_id: '', product_class_id: '', carton_qty: '', cost_price: '0', old_cost_price: '', is_cost_undecided: false, tax_rate: '10.00', is_set: false, sort_order: '', note: '', skus: [] })}
       toForm={async (r) => {
         const d = await api.get<Record<string, unknown> & { skus: Record<string, unknown>[]; brand_id?: number; category_id?: number; product_class_id?: number }>(`/masters/products/${r.id}`);
         return {
           product_code: s(d.product_code), product_name: s(d.product_name), set_product_name: s(d.set_product_name),
           brand_id: s(d.brand_id), category_id: s(d.category_id), product_class_id: s(d.product_class_id),
-          carton_qty: s(d.carton_qty), cost_price: dec(d.cost_price ?? '0'), is_cost_undecided: Boolean(d.is_cost_undecided),
+          carton_qty: s(d.carton_qty), cost_price: dec(d.cost_price ?? '0'), old_cost_price: dec(d.old_cost_price ?? ''), is_cost_undecided: Boolean(d.is_cost_undecided),
           tax_rate: s(d.tax_rate || '10.00'), is_set: Boolean(d.is_set), sort_order: s(d.sort_order), note: s(d.note),
-          skus: (d.skus ?? []).map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })),
+          skus: (d.skus ?? []).map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })),
         };
       }}
       toBody={(f) => ({
@@ -127,7 +131,7 @@ export default function ProductsPage() {
         category_id: numOrNull(f.category_id),
         product_class_id: numOrNull(f.product_class_id),
         carton_qty: numOrNull(f.carton_qty),
-        ...(canSeeSensitive ? { cost_price: f.cost_price.trim() || '0', is_cost_undecided: f.is_cost_undecided } : {}),
+        ...(canSeeSensitive ? { cost_price: f.cost_price.trim() || '0', old_cost_price: decOrNull(f.old_cost_price), is_cost_undecided: f.is_cost_undecided } : {}),
         tax_rate: f.tax_rate,
         is_set: f.is_set,
         sort_order: numOrNull(f.sort_order),
@@ -153,6 +157,11 @@ export default function ProductsPage() {
                 <Check checked={f.is_cost_undecided} onChange={(v) => set({ is_cost_undecided: v })} label="原価未定" />
               </L>
             )}
+            {canSeeSensitive && (
+              <L label="旧原価" hint="原価を変えたとき、前の値を残しておく欄">
+                <Input right value={f.old_cost_price} onChange={(e) => set({ old_cost_price: e.target.value })} className="!w-[120px]" />
+              </L>
+            )}
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
           </div>
           <Textarea rows={2} value={f.note} onChange={(e) => set({ note: e.target.value })} placeholder="備考" />
@@ -170,7 +179,7 @@ export default function ProductsPage() {
                 try {
                   await saveSkus(editing.id, f.skus);
                   const d = await api.get<{ skus: Record<string, unknown>[] }>(`/masters/products/${editing.id}`);
-                  set({ skus: d.skus.map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })) });
+                  set({ skus: d.skus.map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })) });
                   toast('SKU を保存しました', 'good');
                 } catch (e) {
                   setSkuError(e);
@@ -201,13 +210,15 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
       {error ? <ErrorBox error={error} /> : null}
       <div className="tbl-wrap">
         <table className="tbl">
-          <thead><tr><th style={{ width: 150 }}>SKUコード</th><th style={{ width: 140 }}>JAN</th><th>カラー</th><th>サイズ</th><th style={{ width: 90 }}>入数区分</th><th style={{ width: 60 }}>有効</th></tr></thead>
+          <thead><tr><th style={{ width: 150 }}>SKUコード</th><th style={{ width: 140 }}>JAN</th><th style={{ width: 140 }}>FBA用JAN</th><th style={{ width: 140 }}>ショップ商品コード</th><th>カラー</th><th>サイズ</th><th style={{ width: 90 }}>入数区分</th><th style={{ width: 60 }}>有効</th></tr></thead>
           <tbody>
-            {skus.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-[var(--color-ink-3)]">SKU がありません</td></tr>}
+            {skus.length === 0 && <tr><td colSpan={8} className="text-center py-4 text-[var(--color-ink-3)]">SKU がありません</td></tr>}
             {skus.map((k, i) => (
               <tr key={k.id ?? `new-${i}`}>
                 <td><Input value={k.sku_code} onChange={(e) => upd(i, { sku_code: e.target.value })} /></td>
                 <td><Input value={k.jan} onChange={(e) => upd(i, { jan: e.target.value })} placeholder="13桁" /></td>
+                <td><Input value={k.fba_jan} onChange={(e) => upd(i, { fba_jan: e.target.value })} placeholder="13桁" /></td>
+                <td><Input value={k.shop_product_code} onChange={(e) => upd(i, { shop_product_code: e.target.value })} /></td>
                 <td><Select value={k.color_id} onChange={(e) => upd(i, { color_id: e.target.value })}><option value="">（なし）</option>{colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
                 <td><Select value={k.size_id} onChange={(e) => upd(i, { size_id: e.target.value })}><option value="">（なし）</option>{sizes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
                 <td><Input value={k.pack_division} onChange={(e) => upd(i, { pack_division: e.target.value })} /></td>
@@ -218,7 +229,7 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
         </table>
       </div>
       <div className="flex gap-2">
-        <Button size="sm" icon="plus" onClick={() => onChange([...skus, { sku_code: '', jan: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true }])}>SKU を追加</Button>
+        <Button size="sm" icon="plus" onClick={() => onChange([...skus, { sku_code: '', jan: '', fba_jan: '', shop_product_code: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true }])}>SKU を追加</Button>
         <Button size="sm" variant="primary" disabled={!dirty} loading={busy} onClick={async () => { setBusy(true); try { await onSave(); } finally { setBusy(false); } }}>SKU を保存</Button>
         <span className="text-[10.5px] text-[var(--color-ink-3)] self-center">SKU は商品本体とは別に保存します</span>
       </div>

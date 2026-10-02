@@ -145,8 +145,17 @@ export function SearchSelect({
           }}
         />
       )}
+      {/*
+        候補の一覧は、入力欄より広く出す。
+        SKU は「品番-カラーサイズ-入数　商品名 カラー サイズ」と長く、欄の幅に合わせると
+        カラー・サイズが切れて見分けられなかった（1001 のご指摘）。
+        画面からはみ出さないよう上限を付けてある。
+      */}
       {open && !disabled && (
-        <div className="absolute z-30 mt-1 w-full min-w-[260px] card overflow-hidden" style={{ boxShadow: "0 10px 28px rgb(18 36 45 / .18)" }}>
+        <div
+          className="absolute z-30 mt-1 w-max min-w-full card overflow-hidden"
+          style={{ maxWidth: 'min(640px, 86vw)', boxShadow: '0 10px 28px rgb(18 36 45 / .18)' }}
+        >
           <div className="max-h-[260px] overflow-auto">
             {loading && options.length === 0 && <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">検索中…</div>}
             {!loading && options.length === 0 && <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">見つかりません</div>}
@@ -162,8 +171,9 @@ export function SearchSelect({
                   renderOption(o)
                 ) : (
                   <>
-                    <span className="truncate flex-1">{o.label}</span>
-                    {o.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] truncate">{o.sub}</span>}
+                    {/* 候補は切らずに全部見せる。カラー・サイズまで読めないと選べないため。 */}
+                    <span className="flex-1 whitespace-nowrap">{o.label}</span>
+                    {o.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] whitespace-nowrap">{o.sub}</span>}
                   </>
                 )}
               </button>
@@ -215,6 +225,56 @@ export const fetchSkus = async (q: string): Promise<Option[]> => {
     label: `${s.sku_code}　${s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`,
     sub: s.is_set ? 'セット' : (s.jan ?? ''),
     raw: s,
+  }));
+};
+
+export interface WorkInstructionRow {
+  id: number;
+  code: string;
+  name: string;
+  instruction_body: string | null;
+}
+
+/**
+ * 作業指示をキーワードで探して選ぶ。
+ *
+ * プルダウンだと件数が増えたときに中身で探せなかったため（1001 のご指摘）。
+ * コード・名称に加えて、出荷指示書に印字する本文も検索の対象にしてある。
+ */
+export const fetchWorkInstructions = async (q: string): Promise<Option[]> => {
+  const r = await api.get<Paged<WorkInstructionRow>>('/masters/simple/work_instructions', {
+    q: q || undefined,
+    limit: 20,
+  });
+  return r.items.map((w) => ({
+    id: w.id,
+    label: `${w.code}　${w.name}`,
+    sub: (w.instruction_body ?? '').replace(/\s+/g, ' ').slice(0, 40),
+    raw: w,
+  }));
+};
+
+export interface ProductRow {
+  id: number;
+  product_code: string;
+  product_name: string;
+  brand_name: string | null;
+  product_class_name: string | null;
+}
+
+/**
+ * 商品（品番）を検索して選ぶ。
+ *
+ * ロイヤリティ規定の「対象の商品」で使う。以前は内部の管理番号を直に打つ欄で、
+ * 品番を入れても数字にならず黙って消えていた（1001 のご指摘）。
+ */
+export const fetchProducts = async (q: string): Promise<Option[]> => {
+  const r = await api.get<Paged<ProductRow>>('/masters/products', { q: q || undefined, limit: 20 });
+  return r.items.map((p) => ({
+    id: p.id,
+    label: `${p.product_code}　${p.product_name}`,
+    sub: [p.brand_name, p.product_class_name].filter(Boolean).join(' / '),
+    raw: p,
   }));
 };
 

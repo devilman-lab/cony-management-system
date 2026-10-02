@@ -108,7 +108,11 @@ export class RoyaltyService {
            and (rr.brand_id is null or rr.brand_id = p.brand_id)
            and (rr.product_id is null or rr.product_id = p.id)
            and (rr.customer_partner_id is null or rr.customer_partner_id = o.partner_id)
-         order by rr.scope_priority desc, rr.valid_from desc
+           -- 媒体。取引先マスタの媒体と突き合わせる。空欄の規定はすべての媒体に当たる（1001 ご要望）
+           and (rr.media_id is null
+                or rr.media_id = (select pa.media_id from partners pa where pa.id = o.partner_id))
+         -- 媒体を指定した規定を、指定していないものより先に当てる
+         order by (rr.media_id is not null) desc, rr.scope_priority desc, rr.valid_from desc
          limit 1
       ) rule
     `;
@@ -157,7 +161,9 @@ export class RoyaltyService {
              and (rr.brand_id is null or rr.brand_id = p.brand_id)
              and (rr.product_id is null or rr.product_id = p.id)
              and (rr.customer_partner_id is null or rr.customer_partner_id = r.partner_id)
-           order by rr.scope_priority desc, rr.valid_from desc
+             and (rr.media_id is null
+                  or rr.media_id = (select pa.media_id from partners pa where pa.id = r.partner_id))
+           order by (rr.media_id is not null) desc, rr.scope_priority desc, rr.valid_from desc
            limit 1
         ) rule
       `;

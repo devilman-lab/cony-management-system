@@ -400,6 +400,10 @@ export interface PartnersTable {
   digitized_code_id: number | null;
   /** 請求書事項  [TEXT] */
   invoice_note: string | null;
+  /** 請求書の宛名・担当者名。空欄なら取引先名を使う（1001 ご要望）  [VARCHAR(120)] */
+  invoice_addressee: string | null;
+  /** [VARCHAR(120)] */
+  invoice_contact_name: string | null;
   /** 送料3万以下・直送  [-> codes / BIGINT] */
   shipping_fee_rule_code_id: number | null;
   /** この金額以下の出荷に送料を請求。NULL＝既定値  [money_amt] */
@@ -442,6 +446,23 @@ export interface PartnersTable {
 export type Partners = Selectable<PartnersTable>;
 export type NewPartners = Insertable<PartnersTable>;
 export type PartnersUpdate = Updateable<PartnersTable>;
+
+/** 取引先が持つカテゴリー（複数可） */
+export interface PartnerCategoryLinksTable {
+  /** [BIGINT] */
+  id: Generated<number>;
+  /** [-> partners / BIGINT] */
+  partner_id: number;
+  /** [-> partner_categories / BIGINT] */
+  partner_category_id: number;
+  /** [TIMESTAMPTZ] */
+  created_at: Generated<Date>;
+  /** [-> users / BIGINT] */
+  created_by: number | null;
+}
+export type PartnerCategoryLinks = Selectable<PartnerCategoryLinksTable>;
+export type NewPartnerCategoryLinks = Insertable<PartnerCategoryLinksTable>;
+export type PartnerCategoryLinksUpdate = Updateable<PartnerCategoryLinksTable>;
 
 /** 納品ルール */
 export interface DeliveryRulesTable {
@@ -766,6 +787,8 @@ export interface ProductsTable {
   carton_qty: number | null;
   /** 閲覧者には非表示  [money_amt] */
   cost_price: Generated<string>;
+  /** 旧原価。変更前の値を残す（1001 ご要望）  [money_amt] */
+  old_cost_price: string | null;
   /** [BOOLEAN] */
   is_cost_undecided: Generated<boolean>;
   /** ロイヤリティは royalty_rules に一本化したため、商品側では持たない（v1.5）  [tax_rate] */
@@ -811,6 +834,10 @@ export interface SkusTable {
   pack_division: string | null;
   /** [VARCHAR(20)] */
   jan: string | null;
+  /** コニーJANとは別に持つ。出荷依頼書・JAN発行で使う（1001 ご要望）  [VARCHAR(20)] */
+  fba_jan: string | null;
+  /** [VARCHAR(60)] */
+  shop_product_code: string | null;
   /** [INTEGER] */
   sort_order: number | null;
   /** [BOOLEAN] */
@@ -890,6 +917,8 @@ export interface PartnerProductsTable {
   partner_jan: string | null;
   /** [VARCHAR(20)] */
   jan_code: string | null;
+  /** 受注入力で先方JANを入れたときに出す、出荷用のJAN（1001 ご要望）  [VARCHAR(20)] */
+  shipping_jan: string | null;
   /** 販売名  [VARCHAR(200)] */
   sales_name: string | null;
   /** 販売名_2  [VARCHAR(200)] */
@@ -1900,6 +1929,8 @@ export interface RoyaltyRulesTable {
   product_id: number | null;
   /** 販売先。空欄にすると、すべての販売先が対象になる  [-> partners / BIGINT] */
   customer_partner_id: number | null;
+  /** 媒体。空欄＝すべての媒体（1001 ご要望）  [-> media / BIGINT] */
+  media_id: number | null;
   /** この組み合わせではロイヤリティが発生しないことを表す  [BOOLEAN] */
   is_excluded: Generated<boolean>;
   /** 売上／出荷／入金  [VARCHAR(20)] */
@@ -2468,6 +2499,7 @@ export interface DB {
   media: MediaTable;
   numbering_rules: NumberingRulesTable;
   partner_categories: PartnerCategoriesTable;
+  partner_category_links: PartnerCategoryLinksTable;
   partner_product_prices: PartnerProductPricesTable;
   partner_products: PartnerProductsTable;
   partners: PartnersTable;

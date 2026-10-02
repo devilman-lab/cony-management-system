@@ -324,6 +324,9 @@ CREATE TABLE partners (
   monthly_invoice_code_id     BIGINT REFERENCES codes(id),   -- 毎月請求書発行
   digitized_code_id           BIGINT REFERENCES codes(id),   -- 電子化
   invoice_note                TEXT,                          -- 請求書事項
+  -- 請求書の宛名・担当者名。空欄なら取引先名を使う（1001 ご要望）
+  invoice_addressee           VARCHAR(120),
+  invoice_contact_name        VARCHAR(120),
   shipping_fee_rule_code_id   BIGINT REFERENCES codes(id),   -- 送料3万以下・直送
   shipping_fee_threshold      money_amt,                     -- この金額以下の出荷に送料を請求。NULL＝既定値
   shipping_fee_amount         money_amt,                     -- 請求する送料額。NULL＝既定値
@@ -353,6 +356,19 @@ CREATE TABLE partners (
     default_trade_type IS NULL OR default_trade_type IN ('委託','買取'))
 );
 COMMENT ON TABLE partners IS '取引先（得意先・仕入先。Amazon等プラットフォームも1取引先として登録）';
+
+-- 取引先が持つカテゴリー。1取引先で複数持てる（TVとカタログ両方など。1001 ご要望）。
+-- partners.partner_category_id は「代表のカテゴリー」として残してある。
+CREATE TABLE partner_category_links (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  partner_id          BIGINT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  partner_category_id BIGINT NOT NULL REFERENCES partner_categories(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by BIGINT REFERENCES users(id),
+  UNIQUE (partner_id, partner_category_id)
+);
+COMMENT ON TABLE partner_category_links IS '取引先が持つカテゴリー（複数可）';
+CREATE INDEX ix_partner_category_links_partner ON partner_category_links (partner_id);
 
 -- (16) delivery_rules 納品ルール
 CREATE TABLE delivery_rules (
@@ -419,6 +435,8 @@ CREATE TABLE delivery_destinations (
   delivery_note_print1     TEXT,
   delivery_note_print2     TEXT,
   work_instruction_id      BIGINT REFERENCES work_instructions(id),
+  -- 納品ルール。2026-10-01 のご指摘で納品先の編集画面からは外した（不要とのこと）。
+  -- 列とマスタは残してある。また使うことになったら画面に戻すだけで済むため。
   delivery_rule_id         BIGINT REFERENCES delivery_rules(id),
   default_warehouse_id     BIGINT REFERENCES warehouses(id),
   postal_code VARCHAR(8), address1 VARCHAR(200), address2 VARCHAR(200),
@@ -502,6 +520,7 @@ CREATE TABLE products (
   product_class_id      BIGINT REFERENCES product_classes(id),
   carton_qty            INTEGER,
   cost_price            money_amt   NOT NULL DEFAULT 0,  -- 閲覧者には非表示
+  old_cost_price        money_amt,                        -- 旧原価。変更前の値を残す（1001 ご要望）
   is_cost_undecided     BOOLEAN     NOT NULL DEFAULT false,
   -- ロイヤリティは royalty_rules に一本化したため、商品側では持たない（v1.5）
   tax_rate              tax_rate    NOT NULL DEFAULT 10.00,
@@ -526,6 +545,9 @@ CREATE TABLE skus (
   size_id       BIGINT REFERENCES sizes(id),
   pack_division VARCHAR(10),                   -- 100＝単品 / 200＝2枚組
   jan           VARCHAR(20),
+  -- コニーJANとは別に持つ。出荷依頼書・JAN発行で使う（1001 ご要望）
+  fba_jan           VARCHAR(20),
+  shop_product_code VARCHAR(60),
   sort_order INTEGER,
   is_active  BOOLEAN NOT NULL DEFAULT true,
   note       TEXT,
@@ -572,6 +594,8 @@ CREATE TABLE partner_products (
   partner_product_code VARCHAR(60),   -- 取引先専用コード（例：Amazon TO-GXZN-60W8）
   partner_jan          VARCHAR(20),
   jan_code             VARCHAR(20),
+  -- 受注入力で先方JANを入れたときに出す、出荷用のJAN（1001 ご要望）
+  shipping_jan         VARCHAR(20),
   sales_name           VARCHAR(200),  -- 販売名
   sales_name2          VARCHAR(200),  -- 販売名_2
   unit_price           money_amt   NOT NULL DEFAULT 0,
@@ -1194,6 +1218,7 @@ CREATE TABLE royalty_rules (
   brand_id            BIGINT REFERENCES brands(id),      -- 空欄＝支払先に紐づく全ブランド
   product_id          BIGINT REFERENCES products(id),    -- 空欄＝ブランド配下の全商品
   customer_partner_id BIGINT REFERENCES partners(id),    -- 販売先。空欄＝すべての販売先
+  media_id            BIGINT REFERENCES media(id),       -- 媒体。空欄＝すべての媒体（1001 ご要望）
   is_excluded         BOOLEAN     NOT NULL DEFAULT false,-- true＝この組み合わせは発生しない
   calc_base           VARCHAR(20) NOT NULL DEFAULT '出荷',   -- 売上／出荷／入金
   rate                NUMERIC(7,4),

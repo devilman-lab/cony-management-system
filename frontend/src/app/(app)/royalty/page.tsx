@@ -99,7 +99,7 @@ export default function RoyaltyPage() {
         />
       </Card>
 
-      <Modal open={detailId !== null} title={detail.data ? `${detail.data.payee_name}　${detail.data.target_month.slice(0, 7)} 分` : ''} onClose={() => setDetailId(null)} width={900}>
+      <Modal open={detailId !== null} title={detail.data ? `${detail.data.payee_name}　${detail.data.target_month.slice(0, 7)} 分` : ''} onClose={() => setDetailId(null)} width={900} dismissible>
         {detail.data && (
           <div className="flex flex-col gap-3">
             <div className="text-[12px] text-[var(--color-ink-2)]">

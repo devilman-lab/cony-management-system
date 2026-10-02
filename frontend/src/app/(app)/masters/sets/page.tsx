@@ -15,6 +15,9 @@ interface SetRow extends Record<string, unknown> {
   id: number;
   sku_code: string;
   product_name: string;
+  color_name: string | null;
+  size_name: string | null;
+  product_class_name: string | null;
   is_active: boolean;
   component_count: number;
 }
@@ -93,8 +96,11 @@ export default function SetsPage() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<SetRow>
           columns={[
-            { key: 'sku_code', label: 'セット SKU', width: 140, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
+            { key: 'sku_code', label: 'セット SKU', width: 160, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
             { key: 'product_name', label: '商品名' },
+            { key: 'product_class_name', label: '商品分類', width: 110, render: (r) => r.product_class_name ?? '' },
+            { key: 'color_name', label: 'カラー', width: 110, render: (r) => r.color_name ?? '' },
+            { key: 'size_name', label: 'サイズ', width: 80, render: (r) => r.size_name ?? '' },
             { key: 'component_count', label: '構成品', r: true, width: 80, render: (r) => `${r.component_count} 点` },
             { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
             { key: '_act', label: '', width: 80, render: (r) => can('M-10', 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button> },

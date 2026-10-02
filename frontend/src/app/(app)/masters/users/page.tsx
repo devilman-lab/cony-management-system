@@ -332,7 +332,7 @@ function AuditTab() {
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
-      <Modal open={!!detail} title={detail ? `${AUDIT_TARGET_LABEL[detail.ref_table] ?? detail.ref_table}${detail.ref_id === null ? '' : ' #' + detail.ref_id}　${AUDIT_ACTION_LABEL[detail.action] ?? detail.action}` : ''} onClose={() => setDetail(null)} width={760}>
+      <Modal open={!!detail} title={detail ? `${AUDIT_TARGET_LABEL[detail.ref_table] ?? detail.ref_table}${detail.ref_id === null ? '' : ' #' + detail.ref_id}　${AUDIT_ACTION_LABEL[detail.action] ?? detail.action}` : ''} onClose={() => setDetail(null)} width={760} dismissible>
         {detail && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Card><CardHead title="変更前" /><pre className="p-3 text-[11px] overflow-auto max-h-[400px] whitespace-pre-wrap">{JSON.stringify(detail.before_data ?? null, null, 2)}</pre></Card>

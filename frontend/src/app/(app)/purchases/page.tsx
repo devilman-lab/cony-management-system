@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useFetch, useList, useSimpleMaster } from '@/lib/hooks';
+import { useCodes, useFetch, useList, useSimpleMaster } from '@/lib/hooks';
 import { money, qty, today, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
@@ -71,13 +71,16 @@ export default function PurchasesPage() {
   const items = useFetch<{ items: PurchaseItem[] }>('/masters/purchase-items', { limit: 200 });
   const brands = useSimpleMaster('brands');
   const classes = useSimpleMaster('product_classes');
+  // 通貨と経費区分。どちらも「分類・区分・設定 ＞ 区分値」から増やせる（1001 ご要望）。
+  const currencies = useCodes('CURRENCY');
+  const expenses = useCodes('EXPENSE_DIVISION');
 
   const [division, setDivision] = useState('');
   const [supplier, setSupplier] = useState<Option | null>(null);
   const list = useList<PurchaseRow>('/purchases', { division: division || undefined, supplier_partner_id: supplier?.id });
 
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ division: '仕入', supplier: null as Option | null, date: today(), delivery_date: '', payment_date1: '', note: '' });
+  const [f, setF] = useState({ division: '仕入', supplier: null as Option | null, date: today(), delivery_date: '', payment_date1: '', currency: 'JPY', expense_code_id: '', note: '' });
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -114,6 +117,8 @@ export default function PurchasesPage() {
     try {
       await api.post('/purchases', {
         division: f.division,
+        currency: f.currency || undefined,
+        expense_code_id: f.expense_code_id ? Number(f.expense_code_id) : null,
         supplier_partner_id: f.supplier?.id,
         purchase_date: f.date,
         delivery_date: f.delivery_date || null,
@@ -189,6 +194,17 @@ export default function PurchasesPage() {
           <FormRow label="日付" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="!w-[150px]" /></FormRow>
           <FormRow label="仕入先" required><SearchSelect value={f.supplier} onChange={(o) => setF({ ...f, supplier: o })} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" /></FormRow>
           <FormRow label="支払予定日"><Input type="date" value={f.payment_date1} onChange={(e) => setF({ ...f, payment_date1: e.target.value })} className="!w-[150px]" /></FormRow>
+          <FormRow label="通貨" hint="海外からの仕入に使います">
+            <Select value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} className="!w-[140px]">
+              {(currencies.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
+            </Select>
+          </FormRow>
+          <FormRow label="経費区分" hint="勘定科目にあたるもの。区分値の画面で増やせます">
+            <Select value={f.expense_code_id} onChange={(e) => setF({ ...f, expense_code_id: e.target.value })} className="!w-[180px]">
+              <option value="">（なし）</option>
+              {(expenses.data?.values ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </FormRow>
         </div>
         <div className="mt-2"><Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="備考" /></div>
         <div className="mt-3 tbl-wrap">

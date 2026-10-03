@@ -34,6 +34,10 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
   modalWidth?: number;
   /** 無効化 POST のパス（省略時は writePath/:id/deactivate。null で機能なし） */
   deactivatePath?: ((r: T) => string) | null;
+  /** 削除 DELETE のパス（省略時は writePath/:id。null で機能なし） */
+  deletePath?: ((r: T) => string) | null;
+  /** 削除の確認で出す名前。「○○を完全に消します」の○○。 */
+  rowLabel?: (r: T) => string;
   isActive?: (r: T) => boolean;
   headRight?: ReactNode;
   toolbar?: ReactNode;
@@ -105,6 +109,38 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
       toast(e instanceof Error ? e.message : '失敗しました', 'bad');
     }
   };
+  /**
+   * 一覧から消す。
+   *
+   * サーバー側は、どこからも使われていないものだけ消す。使われているものは
+   * 409 で断られるので、その文言をそのまま出して「使わない」に誘導する
+   * （1001 のご要望「入力後に、一覧から削除ができるようにしてほしい」）。
+   */
+  const remove = async (r: T) => {
+    const label = p.rowLabel ? p.rowLabel(r) : '';
+    if (
+      !(await confirm(
+        'このデータを削除しますか',
+        <>
+          {label ? <b>{label}</b> : null}
+          {label ? 'を' : 'このデータを'}完全に消します。元に戻せません。
+          <br />
+          伝票などで使われているものは消せません。その場合は「使わない」をお使いください。
+        </>,
+        true,
+      ))
+    ) {
+      return;
+    }
+    try {
+      const path = p.deletePath ? p.deletePath(r) : `${p.writePath}/${p.rowKey(r)}`;
+      await api.delete(path);
+      toast('削除しました', 'good');
+      await list.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
+    }
+  };
   const reactivate = async (r: T) => {
     try {
       await api.patch(`${p.writePath}/${p.rowKey(r)}`, { is_active: true });
@@ -119,12 +155,13 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   const actionCol: Column<T> = {
     key: '_act',
     label: '',
-    width: p.deactivatePath === null ? 70 : 130,
+    width: p.deactivatePath === null ? 70 : 200,
     render: (r) => (
       <span className="flex gap-1 justify-end">
         {can(p.functionId, 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
         {p.deactivatePath !== null && can(p.functionId, 'delete') && isActive(r) && <Button size="sm" variant="danger" onClick={() => deactivate(r)}>使わない</Button>}
         {p.deactivatePath !== null && can(p.functionId, 'update') && !isActive(r) && <Button size="sm" onClick={() => reactivate(r)}>有効に戻す</Button>}
+        {p.deletePath !== null && can(p.functionId, 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
       </span>
     ),
   };

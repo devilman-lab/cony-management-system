@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { sql } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
@@ -148,5 +148,38 @@ export class MastersCrudService {
 
     if (!row) throw new NotFoundException(`${label}が見つかりません（ID: ${id}）`);
     return row;
+  }
+
+  /**
+   * 一覧から消す。
+   *
+   * **どこからも使われていないものだけ消せる。**伝票から参照されているマスタを
+   * 消すと過去の伝票が読めなくなるため、使われているものは断って「使わない」に
+   * 誘導する（1001 のご要望「入力後に、一覧から削除ができるようにしてほしい」）。
+   *
+   * 使われているかどうかは外部キーに任せる。参照元を1つずつ数えると、
+   * 新しいテーブルが増えたときに数え漏れるため。
+   */
+  async remove(table: WritableTable, id: number, label: string): Promise<{ id: number; deleted: true }> {
+    const exists = await this.db
+      .selectFrom(table as never)
+      .select(sql<number>`id`.as('id'))
+      .where(sql`id`, '=', id)
+      .executeTakeFirst();
+    if (!exists) throw new NotFoundException(`${label}が見つかりません（ID: ${id}）`);
+
+    try {
+      await this.db.deleteFrom(table as never).where(sql`id`, '=', id).execute();
+    } catch (e) {
+      // 23503 ＝ 外部キー違反。どこかの伝票・マスタから使われている。
+      if ((e as { code?: string }).code === '23503') {
+        throw new ConflictException(
+          `この${label}はすでに伝票などで使われているため、削除できません。` +
+            `一覧から外したいときは「使わない」をお使いください`,
+        );
+      }
+      throw e;
+    }
+    return { id, deleted: true };
   }
 }

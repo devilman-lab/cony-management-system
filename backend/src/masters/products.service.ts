@@ -206,6 +206,9 @@ export class ProductsService {
       .select([
         's.sku_code as sku_code',
         's.jan as jan',
+        // FBA・ショップの出荷依頼で使うコード（1001 ご要望）
+        's.fba_jan as fba_jan',
+        's.shop_product_code as shop_product_code',
         'p.product_code as product_code',
         'p.product_name as product_name',
         'b.name as brand_name',
@@ -220,6 +223,8 @@ export class ProductsService {
     const header = [
       'SKUコード',
       'JANコード',
+      'FBA用JANコード',
+      'ショップ商品コード',
       '商品コード',
       '商品名',
       'ブランド',
@@ -236,6 +241,8 @@ export class ProductsService {
         [
           esc(r.sku_code),
           r.jan ? `"=""${r.jan}"""` : '""',
+          r.fba_jan ? `"=""${r.fba_jan}"""` : '""',
+          esc(r.shop_product_code),
           esc(r.product_code),
           esc(r.product_name),
           esc(r.brand_name),

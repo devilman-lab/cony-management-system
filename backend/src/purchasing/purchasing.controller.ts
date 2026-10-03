@@ -38,7 +38,10 @@ const CreatePurchaseSchema = z.object({
   delivery_date: ymd.nullish(),
   payment_date1: ymd.nullish(),
   payment_date2: ymd.nullish(),
+  /** 通貨。区分値 CURRENCY から選ぶ（1001 ご要望「売上仕入用の通貨追加」）。 */
   currency: z.string().length(3).optional(),
+  /** 経費区分（勘定科目にあたるもの）。区分値 EXPENSE_DIVISION（1001 ご要望）。 */
+  expense_code_id: z.number().int().positive().nullish(),
   note: z.string().nullish(),
   lines: z
     .array(

@@ -416,7 +416,17 @@ export class MastersWriteController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const { category_ids, ...values } = body;
-    const row = await this.crud.update('partners', id, values, '取引先', user.id);
+
+    // カテゴリーだけを直すこともある。そのときは取引先そのものに書くことが無いので、
+    // crud.update を呼ぶと「更新する項目がありません」で弾かれてしまう。
+    const hasOther = Object.values(values).some((v) => v !== undefined);
+    if (!hasOther && category_ids === undefined) {
+      throw new BadRequestException('更新する項目がありません');
+    }
+    const row = hasOther
+      ? await this.crud.update('partners', id, values, '取引先', user.id)
+      : await this.crud.findOne('partners', id, '取引先');
+
     await this.savePartnerCategories(id, category_ids, user.id);
     return row;
   }

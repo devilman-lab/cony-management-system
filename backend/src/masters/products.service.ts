@@ -17,7 +17,7 @@ export interface ProductListQuery {
 /** 原価の欄を落とす。項目そのものを返さないので、画面側で消し忘れることがない。 */
 function stripCost<T extends Record<string, unknown>>(row: T, showCost: boolean): T {
   if (showCost) return row;
-  const { cost_price: _cost, is_cost_undecided: _undecided, ...rest } = row;
+  const { cost_price: _cost, old_cost_price: _old, is_cost_undecided: _undecided, ...rest } = row;
   return rest as unknown as T;
 }
 
@@ -58,6 +58,7 @@ export class ProductsService {
           'p.carton_qty as carton_qty',
           'p.is_set as is_set',
           'p.cost_price as cost_price',
+          'p.old_cost_price as old_cost_price',
           'p.is_cost_undecided as is_cost_undecided',
           'p.is_active as is_active',
           // SKU が何件ぶら下がっているか。一覧から展開するかの判断に使う。
@@ -104,6 +105,7 @@ export class ProductsService {
         'p.sort_order as sort_order',
         'p.carton_qty as carton_qty',
         'p.cost_price as cost_price',
+        'p.old_cost_price as old_cost_price',
         'p.is_cost_undecided as is_cost_undecided',
         'p.tax_rate as tax_rate',
         'p.is_set as is_set',

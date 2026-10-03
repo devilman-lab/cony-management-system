@@ -278,25 +278,62 @@ const CodeSchema = z.object({
 type CodeBody = z.infer<typeof CodeSchema>;
 
 // ---- ロイヤリティ規定 -------------------------------------------------------
-const RoyaltyRuleSchema = z
-  .object({
-    payee_partner_id: z.number().int().positive(),
-    brand_id: z.number().int().positive().nullish(),
-    product_id: z.number().int().positive().nullish(),
-    customer_partner_id: z.number().int().positive().nullish(),
-    /** 媒体。空欄ならすべての媒体（1001 ご要望）。 */
-    media_id: z.number().int().positive().nullish(),
-    is_excluded: z.boolean().default(false),
-    calc_base: z.enum(['売上', '出荷', '入金']).default('出荷'),
-    rate: z.string().regex(/^\d(\.\d{1,4})?$/, '料率は 0.0500（5%）のような形で入力してください').nullish(),
-    fixed_amount: decimal.nullish(),
-    valid_from: ymd,
-    valid_to: ymd.nullish(),
-    sort_order: z.number().int().nullish(),
-    note: z.string().nullish(),
+/**
+ * 販売先の指定のしかた（1001 ご要望）。
+ *   媒体全体 … 販売先を選ばない。媒体の全販売先が対象
+ *   対象     … 選んだ販売先だけが対象
+ *   対象外   … 選んだ販売先だけが対象から外れ、残りが対象
+ * 「どちらかを入力して反映させる」形にする。対象と対象外を同時には入れない。
+ */
+const CUSTOMER_MODES = ['媒体全体', '対象', '対象外'] as const;
+type CustomerMode = (typeof CUSTOMER_MODES)[number];
+/** 1件の規定で選べる販売先の上限。ご要望の「20社まで」。 */
+const MAX_RULE_CUSTOMERS = 20;
+
+/** 絞り込みを重ねると .innerType() で素の形に戻せないため、素の形は名前を付けて持つ。 */
+const RoyaltyRuleBase = z.object({
+  payee_partner_id: z.number().int().positive(),
+  brand_id: z.number().int().positive().nullish(),
+  product_id: z.number().int().positive().nullish(),
+  customer_partner_id: z.number().int().positive().nullish(),
+  /** 媒体。空欄ならすべての媒体（1001 ご要望）。 */
+  media_id: z.number().int().positive().nullish(),
+  customer_mode: z.enum(CUSTOMER_MODES).default('媒体全体'),
+  /** 上の指定で選んだ販売先。媒体全体のときは空。 */
+  customer_partner_ids: z
+    .array(z.number().int().positive())
+    .max(MAX_RULE_CUSTOMERS, `販売先は${MAX_RULE_CUSTOMERS}社までです`)
+    .default([]),
+  is_excluded: z.boolean().default(false),
+  calc_base: z.enum(['売上', '出荷', '入金']).default('出荷'),
+  rate: z.string().regex(/^\d(\.\d{1,4})?$/, '料率は 0.0500（5%）のような形で入力してください').nullish(),
+  fixed_amount: decimal.nullish(),
+  valid_from: ymd,
+  valid_to: ymd.nullish(),
+  sort_order: z.number().int().nullish(),
+  note: z.string().nullish(),
+});
+
+const RoyaltyRuleSchema = RoyaltyRuleBase
+  .refine((v) => !(v.is_excluded && (v.rate || v.fixed_amount)), {
+    message: '対象外の規定には料率・定額を入力しません',
   })
-  .refine((v) => (v.is_excluded ? !v.rate && !v.fixed_amount : Boolean(v.rate || v.fixed_amount)), {
-    message: '対象の規定は料率か定額のどちらかが必要です。対象外の規定には入力しないでください',
+  /**
+   * 料率は「対象外だけを入れるとき」以外は必ず要る。
+   * 対象外のときに料率も入れると「媒体全体にこの料率、ただしこの数社は対象外」の1枚になる。
+   * 料率を入れなければ「この数社は対象外」だけを足す形になり、料率は別の規定が受け持つ。
+   */
+  .refine((v) => v.customer_mode === '対象外' || v.is_excluded || Boolean(v.rate || v.fixed_amount), {
+    message: '料率か定額のどちらかを入力してください',
+  })
+  .refine((v) => v.customer_mode === '媒体全体' || v.customer_partner_ids.length > 0, {
+    message: '販売先を1社以上選んでください。媒体の全販売先を対象にするときは「媒体全体」を選びます',
+  })
+  .refine((v) => v.customer_mode !== '媒体全体' || v.customer_partner_ids.length === 0, {
+    message: '「媒体全体」を選んだときは販売先を選びません',
+  })
+  .refine((v) => new Set(v.customer_partner_ids).size === v.customer_partner_ids.length, {
+    message: '同じ販売先が重なっています',
   });
 type RoyaltyRuleBody = z.infer<typeof RoyaltyRuleSchema>;
 
@@ -967,10 +1004,44 @@ export class MastersWriteController {
    * ブランド・商品・販売先を空欄にすると「すべて」になる。
    * 料率を変えるときは、既存の行を書き換えず新しい適用開始日で行を足す。
    */
+  /**
+   * 一覧。1枚のフォームから作った行のまとまりを **1件** として返す。
+   *
+   * 「媒体テレビ・5%・20社のうち2社だけ対象外」は中では3行だが、画面には1件に見せる。
+   * まとまりの鍵は COALESCE(rule_group_id, id)。昔から入っている1行だけの規定も
+   * rule_group_id が空欄なので「自分1行だけのまとまり」として同じ扱いになる。
+   */
   @Get('royalty-rules')
   @RequirePermission('Y-02', 'view')
   async listRoyaltyRules(@Query(new ZodValidationPipe(ListSchema)) query: ListQuery) {
-    const items = await this.db
+    const gid = sql<number>`coalesce(r.rule_group_id, r.id)`;
+
+    // 件数の区切り（limit/offset）は「まとまり」に掛ける。行に掛けると、まとまりが
+    // 途中で切れて販売先が欠けたまま表示されてしまう。
+    const groups = await this.db
+      .selectFrom('royalty_rules as r')
+      .innerJoin('partners as payee', 'payee.id', 'r.payee_partner_id')
+      .select([
+        gid.as('gid'),
+        sql<string>`min(payee.name1)`.as('payee_sort'),
+        sql<string>`max(r.valid_from)`.as('valid_sort'),
+      ])
+      .groupBy(gid)
+      .orderBy('payee_sort', 'asc')
+      .orderBy('valid_sort', 'desc')
+      .orderBy('gid', 'asc')
+      .limit(query.limit)
+      .offset(query.offset)
+      .execute();
+
+    const counted = await this.db
+      .selectFrom('royalty_rules as r')
+      .select(sql<number>`count(distinct coalesce(r.rule_group_id, r.id))`.as('n'))
+      .executeTakeFirst();
+    const total = Number(counted?.n ?? 0);
+    if (groups.length === 0) return { items: [], total, limit: query.limit, offset: query.offset };
+
+    const rows = await this.db
       .selectFrom('royalty_rules as r')
       .innerJoin('partners as payee', 'payee.id', 'r.payee_partner_id')
       .leftJoin('brands as b', 'b.id', 'r.brand_id')
@@ -979,6 +1050,8 @@ export class MastersWriteController {
       .leftJoin('media as md', 'md.id', 'r.media_id')
       .select([
         'r.id as id',
+        gid.as('gid'),
+        'r.rule_group_id as rule_group_id',
         'r.payee_partner_id as payee_partner_id',
         'payee.name1 as payee_name',
         'r.brand_id as brand_id',
@@ -999,33 +1072,194 @@ export class MastersWriteController {
         'r.scope_priority as scope_priority',
         'r.is_active as is_active',
       ])
-      .orderBy('payee.name1', 'asc')
-      .orderBy('r.scope_priority', 'desc')
-      .orderBy('r.valid_from', 'desc')
-      .limit(query.limit)
-      .offset(query.offset)
+      .where(
+        gid,
+        'in',
+        groups.map((g) => Number(g.gid)),
+      )
+      // 代表行（料率を持つ行）を先に、対象外の行を後に並べる
+      .orderBy('r.is_excluded', 'asc')
+      .orderBy('r.id', 'asc')
       .execute();
-    return { items, total: items.length, limit: query.limit, offset: query.offset };
+
+    const byGroup = new Map<number, typeof rows>();
+    for (const row of rows) {
+      const key = Number(row.gid);
+      const bucket = byGroup.get(key);
+      if (bucket) bucket.push(row);
+      else byGroup.set(key, [row]);
+    }
+
+    const items = groups
+      .map((g) => {
+        const bucket = byGroup.get(Number(g.gid)) ?? [];
+        // 代表行＝まとまりを指していない行
+        const head = bucket.find((r) => r.rule_group_id === null) ?? bucket[0];
+        if (!head) return null;
+        const customers = bucket
+          .filter((r) => r.customer_partner_id !== null)
+          .map((r) => ({
+            id: r.customer_partner_id as number,
+            name: r.customer_name ?? '',
+            is_excluded: r.is_excluded,
+          }));
+        const excluded = customers.filter((c) => c.is_excluded);
+        const customer_mode: CustomerMode = excluded.length > 0 ? '対象外' : customers.length > 0 ? '対象' : '媒体全体';
+        // 画面に出す販売先。対象外のときは「外した社」、対象のときは「対象の社」
+        const shown = customer_mode === '対象外' ? excluded : customers;
+        const { gid: _gid, ...rest } = head;
+        return {
+          ...rest,
+          customer_mode,
+          customers: shown.map((c) => ({ id: c.id, name: c.name })),
+          customer_count: shown.length,
+          /** このまとまりが中では何行か */
+          row_count: bucket.length,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    return { items, total, limit: query.limit, offset: query.offset };
   }
 
+  /**
+   * 登録。販売先を複数選んだときは、1枚のフォームから複数行を作って1つのまとまりにする。
+   *
+   *   対象   … 選んだ販売先ぶんの行を作る（それぞれ料率を持つ）
+   *   対象外 … 「販売先=すべて・料率あり」の代表行＋「選んだ販売先・対象外」の行。
+   *            計算のときは指定の細かい行が勝つので、選んだ社だけが外れる。
+   *            料率を入れなければ対象外の行だけを作る（料率は別の規定が受け持つ）。
+   */
   @Post('royalty-rules')
   @RequirePermission('Y-02', 'create')
-  createRoyaltyRule(
+  async createRoyaltyRule(
     @Body(new ZodValidationPipe(RoyaltyRuleSchema)) body: RoyaltyRuleBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.crud.create('royalty_rules', body, user.id);
+    const { customer_mode, customer_partner_ids, ...values } = body;
+    // 販売先を選んでいないときは、今までどおり1行だけ作る。
+    if (customer_partner_ids.length === 0) return this.crud.create('royalty_rules', values, user.id);
+    return this.db
+      .transaction()
+      .execute((trx) => this.writeRoyaltyGroup(trx, null, customer_mode, customer_partner_ids, values, user.id));
   }
 
+  /**
+   * 更新。:id はまとまりの代表行。
+   * 販売先の指定が送られてきたときは、このまとまりの販売先の行を作り直す。
+   */
   @Patch('royalty-rules/:id')
   @RequirePermission('Y-02', 'update')
-  updateRoyaltyRule(
+  async updateRoyaltyRule(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(RoyaltyRuleSchema.innerType().partial().extend(Active)))
+    @Body(new ZodValidationPipe(RoyaltyRuleBase.partial().extend(Active)))
     body: Partial<RoyaltyRuleBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.crud.update('royalty_rules', id, body, 'ロイヤリティ規定', user.id);
+    const { customer_mode, customer_partner_ids, ...values } = body;
+    // 販売先の指定が来ていなければ、今までどおりその行だけを直す。
+    if (customer_mode === undefined && customer_partner_ids === undefined) {
+      return this.crud.update('royalty_rules', id, values, 'ロイヤリティ規定', user.id);
+    }
+
+    const head = await this.db.selectFrom('royalty_rules').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!head) throw new NotFoundException(`ロイヤリティ規定が見つかりません（ID: ${id}）`);
+    if (head.rule_group_id !== null) {
+      throw new BadRequestException('このまとまりの代表の行を開いてから直してください');
+    }
+
+    const mode: CustomerMode = customer_mode ?? '媒体全体';
+    const ids = customer_partner_ids ?? [];
+    if (mode !== '媒体全体' && ids.length === 0) throw new BadRequestException('販売先を1社以上選んでください');
+    if (ids.length > MAX_RULE_CUSTOMERS) throw new BadRequestException(`販売先は${MAX_RULE_CUSTOMERS}社までです`);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('同じ販売先が重なっています');
+
+    return this.db.transaction().execute(async (trx) => {
+      // 配下の行はいったん消して作り直す。代表行は残す（画面が持っている :id を変えないため）。
+      await trx.deleteFrom('royalty_rules').where('rule_group_id', '=', id).execute();
+      return this.writeRoyaltyGroup(trx, id, mode, ids, { ...head, ...values }, user.id);
+    });
+  }
+
+  /**
+   * まとまりを書き込む。headId が null なら代表行も新しく作り、あれば中身だけ直す。
+   * 料率は代表行だけが持つ。対象外の行は料率を持てない（DB の制約 ck_royalty_excl）。
+   */
+  private async writeRoyaltyGroup(
+    trx: ConyDatabase,
+    headId: number | null,
+    mode: CustomerMode,
+    customerIds: number[],
+    values: Record<string, unknown>,
+    userId: number,
+  ) {
+    const rate = (values.rate ?? null) as string | null;
+    const fixed = (values.fixed_amount ?? null) as string | null;
+    const shared = {
+      payee_partner_id: values.payee_partner_id as number,
+      brand_id: (values.brand_id ?? null) as number | null,
+      product_id: (values.product_id ?? null) as number | null,
+      media_id: (values.media_id ?? null) as number | null,
+      calc_base: (values.calc_base ?? '出荷') as string,
+      valid_from: values.valid_from as string,
+      valid_to: (values.valid_to ?? null) as string | null,
+      sort_order: (values.sort_order ?? null) as number | null,
+      note: (values.note ?? null) as string | null,
+    };
+
+    // 対象外で料率も入れたときだけ、「販売先=すべて・料率あり」の代表行を立てる。
+    // 料率が無いときは外す社の行だけを作る（料率は別の規定が受け持つ）。
+    const hasAmount = Boolean(rate || fixed);
+    const headIsAll = mode === '対象外' && hasAmount;
+    const headCustomer = headIsAll ? null : (customerIds[0] ?? null);
+    const children = headIsAll ? customerIds : customerIds.slice(1);
+    const headExcluded = mode === '対象外' && !headIsAll;
+
+    const headRow = {
+      ...shared,
+      customer_partner_id: headCustomer,
+      is_excluded: headExcluded,
+      rate: headExcluded ? null : rate,
+      fixed_amount: headExcluded ? null : fixed,
+    };
+    const saved = headId
+      ? await trx
+          .updateTable('royalty_rules')
+          .set({ ...headRow, updated_by: userId, updated_at: new Date() })
+          .where('id', '=', headId)
+          .returning('id')
+          .executeTakeFirstOrThrow()
+      : await trx
+          .insertInto('royalty_rules')
+          .values({ ...headRow, created_by: userId, updated_by: userId })
+          .returning('id')
+          .executeTakeFirstOrThrow();
+
+    if (children.length > 0) {
+      await trx
+        .insertInto('royalty_rules')
+        .values(
+          children.map((cid) => ({
+            ...shared,
+            customer_partner_id: cid,
+            is_excluded: mode === '対象外',
+            // 対象外の行は料率を持たない。代表行の料率が効いたうえで、この社だけ外れる。
+            rate: mode === '対象外' ? null : rate,
+            fixed_amount: mode === '対象外' ? null : fixed,
+            rule_group_id: saved.id,
+            created_by: userId,
+            updated_by: userId,
+          })),
+        )
+        .execute();
+    }
+
+    return {
+      id: saved.id,
+      customer_mode: mode,
+      customer_count: customerIds.length,
+      row_count: 1 + children.length,
+    };
   }
 
   @Post('royalty-rules/:id/deactivate')
@@ -1038,6 +1272,8 @@ export class MastersWriteController {
   /**
    * 一覧から消す。どこからも使われていないものだけ消せる。
    * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   *
+   * 代表行を消すと、そこに属する販売先の行も一緒に消える（rule_group_id の ON DELETE CASCADE）。
    */
   @Delete('royalty-rules/:id')
   @RequirePermission('Y-02', 'delete')

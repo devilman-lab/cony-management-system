@@ -185,6 +185,168 @@ export function SearchSelect({
   );
 }
 
+/**
+ * 文字を打って候補から**複数**選ぶ入力。選んだものは札（チップ）で並べる。
+ *
+ * ロイヤリティ規定の「販売先を20社まで」で使う（1001 ご要望）。
+ * 1社ずつ行を足していく形だと、20社のうち2社を外すだけでも大量に入力が要るため。
+ */
+export function MultiSearchSelect({
+  values,
+  onChange,
+  fetchOptions,
+  placeholder = '検索して追加…',
+  width = '100%',
+  max,
+  disabled,
+  emptyLabel,
+}: {
+  values: Option[];
+  onChange: (o: Option[]) => void;
+  fetchOptions: (q: string) => Promise<Option[]>;
+  placeholder?: string;
+  width?: number | string;
+  /** 選べる上限。達すると入力欄を閉じる */
+  max?: number;
+  disabled?: boolean;
+  /** 1つも選んでいないときに出す説明 */
+  emptyLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const dq = useDebounce(q, 250);
+  const [options, setOptions] = useState<Option[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [active, setActive] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  const full = max !== undefined && values.length >= max;
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setLoading(true);
+    fetchOptions(dq)
+      .then((o) => alive && setOptions(o))
+      .catch(() => alive && setOptions([]))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [dq, open, fetchOptions]);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  // すでに選んだものは候補から外す
+  const picked = new Set(values.map((v) => v.id));
+  const left = options.filter((o) => !picked.has(o.id));
+
+  const add = (o: Option) => {
+    if (full) return;
+    onChange([...values, o]);
+    setQ('');
+    setActive(0);
+  };
+  const drop = (id: number) => onChange(values.filter((v) => v.id !== id));
+
+  return (
+    <div ref={box} className="relative flex flex-col gap-1.5" style={{ width }}>
+      {values.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {values.map((v) => (
+            <span
+              key={v.id}
+              className="inline-flex items-center gap-1 rounded bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[11.5px]"
+              title={v.sub ? `${v.label}（${v.sub}）` : v.label}
+            >
+              <span className="whitespace-nowrap">{v.label}</span>
+              {!disabled && (
+                <button
+                  type="button"
+                  onClick={() => drop(v.id)}
+                  className="text-[var(--color-ink-3)] hover:text-[var(--color-crit-500)]"
+                  aria-label={`${v.label} を外す`}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      ) : (
+        emptyLabel && <div className="text-[11px] text-[var(--color-ink-3)]">{emptyLabel}</div>
+      )}
+
+      {/*
+        使えないときも欄は出しておく。欄ごと消すと「なぜ追加できないのか」が
+        画面から分からなくなるため、灰色の欄に理由（先に媒体を選ぶ、など）を出す。
+      */}
+      {!full && (
+        <input
+          className="inp"
+          disabled={disabled}
+          placeholder={placeholder}
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setActive(0);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') setActive((a) => Math.min(a + 1, left.length - 1));
+            else if (e.key === 'ArrowUp') setActive((a) => Math.max(a - 1, 0));
+            else if (e.key === 'Enter') {
+              e.preventDefault();
+              if (left[active]) add(left[active]);
+            } else if (e.key === 'Escape') setOpen(false);
+            else if (e.key === 'Backspace' && q === '' && values.length > 0) drop(values[values.length - 1].id);
+          }}
+        />
+      )}
+
+      {max !== undefined && (
+        <div className="text-[11px] text-[var(--color-ink-3)]">
+          {values.length} ／ {max} 社{full && '（上限です）'}
+        </div>
+      )}
+
+      {open && !disabled && !full && (
+        <div
+          className="absolute z-30 top-full w-max min-w-full card overflow-hidden"
+          style={{ maxWidth: 'min(640px, 86vw)', boxShadow: '0 10px 28px rgb(18 36 45 / .18)' }}
+        >
+          <div className="max-h-[260px] overflow-auto">
+            {loading && left.length === 0 && (
+              <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">検索中…</div>
+            )}
+            {!loading && left.length === 0 && (
+              <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">見つかりません</div>
+            )}
+            {left.map((o, i) => (
+              <button
+                type="button"
+                key={o.id}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => add(o)}
+                className={`w-full text-left px-3 py-1.5 text-[12.5px] flex items-center gap-2 ${i === active ? 'bg-[var(--color-brand-50)]' : 'hover:bg-[#f4f7f8]'}`}
+              >
+                <span className="flex-1 whitespace-nowrap">{o.label}</span>
+                {o.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] whitespace-nowrap">{o.sub}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- よく使う候補の取り方 ---------- */
 
 export interface PartnerRow {
@@ -203,6 +365,29 @@ export const fetchPartners =
   async (q: string): Promise<Option[]> => {
     const r = await api.get<Paged<PartnerRow>>('/masters/partners', { q: q || undefined, role, limit: 20 });
     return r.items.map((p) => ({ id: p.id, label: p.name1, sub: p.partner_code, raw: p }));
+  };
+
+/**
+ * 販売先を探す。媒体を渡すと「その媒体の販売先」だけに絞る（1001 ご要望）。
+ *
+ * 媒体は取引先マスタの欄から取る。1社が複数の媒体で売る場合に取りこぼさないよう、
+ * 呼び手の側で「媒体で絞らない」を選べるようにしてある（mediaId を渡さない）。
+ */
+export const fetchCustomers =
+  (mediaId?: number | null) =>
+  async (q: string): Promise<Option[]> => {
+    const r = await api.get<Paged<PartnerRow & { media_name?: string | null }>>('/masters/partners', {
+      q: q || undefined,
+      role: 'customer',
+      media_id: mediaId ?? undefined,
+      limit: 50,
+    });
+    return r.items.map((p) => ({
+      id: p.id,
+      label: p.name1,
+      sub: [p.partner_code, p.media_name].filter(Boolean).join(' / '),
+      raw: p,
+    }));
   };
 
 export interface SkuRow {

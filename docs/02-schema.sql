@@ -1230,6 +1230,10 @@ CREATE TABLE royalty_rules (
                         (CASE WHEN customer_partner_id IS NULL THEN 0 ELSE 4 END) +
                         (CASE WHEN product_id          IS NULL THEN 0 ELSE 2 END) +
                         (CASE WHEN brand_id            IS NULL THEN 0 ELSE 1 END)) STORED,
+  -- 1枚の入力フォームから作られた行のまとまり。先頭の行を代表にして、残りの行がそこを指す。
+  -- 「媒体内の20社のうち2社だけ対象外」を 1行＋2行 で持ちつつ、画面には1件として見せるため。
+  -- まとまりの鍵は COALESCE(rule_group_id, id)。代表行を消すと配下も一緒に消える。
+  rule_group_id BIGINT REFERENCES royalty_rules(id) ON DELETE CASCADE,
   is_active    BOOLEAN NOT NULL DEFAULT true,
   sort_order   INTEGER,
   note         TEXT,
@@ -1248,13 +1252,18 @@ COMMENT ON TABLE royalty_rules IS
 COMMENT ON COLUMN royalty_rules.payee_partner_id IS 'ロイヤリティを受け取る相手。取引先マスタに登録する';
 COMMENT ON COLUMN royalty_rules.customer_partner_id IS '販売先。空欄にすると、すべての販売先が対象になる';
 COMMENT ON COLUMN royalty_rules.is_excluded IS 'この組み合わせではロイヤリティが発生しないことを表す';
+COMMENT ON COLUMN royalty_rules.rule_group_id IS
+  '同じ入力フォームから作られた行のまとまり。空欄＝この行が代表。一覧で1件にまとめて見せるために使う';
 COMMENT ON COLUMN royalty_rules.scope_priority IS
   '同じ出荷に複数の規定が当てはまるとき、この値が大きい行を採用する';
 
 -- 同じ範囲・同じ開始日の規定を二重登録できないようにする（空欄も1つの値として扱う）
+-- 媒体も鍵に入れる。同じブランドでも「テレビは5%・カタログは3%」のように
+-- 媒体で料率が分かれるため（1001 ご要望で媒体を必須にしたのに伴う）。
 CREATE UNIQUE INDEX ux_royalty_rules_scope ON royalty_rules
   (payee_partner_id, COALESCE(brand_id, 0), COALESCE(product_id, 0),
-   COALESCE(customer_partner_id, 0), valid_from);
+   COALESCE(customer_partner_id, 0), COALESCE(media_id, 0), valid_from);
+CREATE INDEX ix_royalty_rules_group ON royalty_rules (rule_group_id) WHERE rule_group_id IS NOT NULL;
 CREATE INDEX ix_royalty_rules_lookup
   ON royalty_rules (brand_id, customer_partner_id, valid_from DESC) WHERE is_active;
 

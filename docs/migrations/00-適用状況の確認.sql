@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 4本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 6本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -68,6 +68,26 @@ SELECT '⑤ マスタへのご要望（1001）',
          ELSE '一部'
        END,
        '2026-10-02_master_feedback.sql'
+UNION ALL
+SELECT '⑥ ロイヤリティを1枚のフォームで',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'royalty_rules'
+                  AND column_name = 'rule_group_id') = 1
+          AND (SELECT count(*) FROM pg_constraint
+                WHERE conrelid = 'cony.royalty_rules'::regclass
+                  AND conname = 'fk_royalty_rules_group') = 1
+          AND (SELECT count(*) FROM pg_indexes
+                WHERE schemaname = 'cony' AND indexname = 'ux_royalty_rules_scope'
+                  AND indexdef LIKE '%media_id%') = 1
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'royalty_rules'
+                  AND column_name = 'rule_group_id') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-03_royalty_group.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。
@@ -91,3 +111,9 @@ SELECT count(*) AS テーブル数_71なら最新
 SELECT count(*) AS JANの索引の数_1なら正常
   FROM pg_indexes
  WHERE schemaname = 'cony' AND tablename = 'skus' AND indexdef LIKE '%(jan)%';
+
+-- ⑥ も索引を張り替えます。ここが 0 なら、同じ範囲のロイヤリティ規定が
+-- 二重に登録できてしまう状態です（⑥ をもう一度流せば直ります）。
+SELECT count(*) AS ロイヤリティの一意の索引_1なら正常
+  FROM pg_indexes
+ WHERE schemaname = 'cony' AND indexname = 'ux_royalty_rules_scope';

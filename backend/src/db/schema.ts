@@ -1945,6 +1945,8 @@ export interface RoyaltyRulesTable {
   valid_to: string | null;
   /** 同じ出荷に複数の規定が当てはまるとき、この値が大きい行を採用する  [INTEGER] */
   scope_priority: Computed<number | null>;
+  /** 同じ入力フォームから作られた行のまとまり。空欄＝この行が代表。一覧で1件にまとめて見せるために使う  [-> royalty_rules / BIGINT] */
+  rule_group_id: number | null;
   /** [BOOLEAN] */
   is_active: Generated<boolean>;
   /** [INTEGER] */

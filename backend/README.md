@@ -329,6 +329,25 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 
 権限は `@RequirePermission('M-01', 'view')` の形で、データベースの `permissions` / `role_permissions` をそのまま参照します。権限マトリクスを画面から変えれば、コードを触らずに反映されます（最大1分の反映遅れがあります）。
 
+### ロイヤリティ規定は「1枚のフォーム＝複数行」
+
+画面で1件に見えるものが、`royalty_rules` では複数行になります。
+
+```
+媒体テレビ・ブランドα・5%・20社のうち2社だけ対象外
+  → 代表行（販売先=空欄・5%）        rule_group_id = NULL
+     対象外の行（販売先=A・対象外）   rule_group_id = 代表行の id
+     対象外の行（販売先=B・対象外）   rule_group_id = 代表行の id
+```
+
+まとまりの鍵は `COALESCE(rule_group_id, id)`。昔からある1行だけの規定は `rule_group_id` が空欄なので「自分1行だけのまとまり」として同じ扱いになります。
+
+**計算側（`royalty.service.ts`）は何も知りません。**どの行を当てるかは今までどおり `scope_priority`（販売先4＋商品2＋ブランド1）が決めます。販売先を指定した対象外の行のほうが代表行より優先度が高いので、その社だけが計算から外れます。この形は実機で確かめてあります（5社に各1万円出荷 → 2社を対象外 → 課税基礎3万円・5%で1,500円）。
+
+- 代表行を消すと配下も消えます（`rule_group_id` の `ON DELETE CASCADE`）
+- `PATCH /masters/royalty-rules/:id` の `:id` は**代表行**。配下の行はいったん消して作り直します
+- 二重登録を止める索引 `ux_royalty_rules_scope` には**媒体も入っています**。同じブランドで「テレビは5%・カタログは3%」を別々に入れられるようにするためです
+
 ### 金額は文字列で受け取る
 
 `NUMERIC` は `string` として扱います。node-postgres が文字列で返すのをそのまま活かし、**金額を float に通さない**ためです。合計や按分は SQL 側で計算します。

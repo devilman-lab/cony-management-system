@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { useCodes, useSimpleMaster, useWarehouses } from '@/lib/hooks';
+import { useCodes, useWarehouses } from '@/lib/hooks';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchWorkInstructions, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
@@ -62,7 +62,6 @@ export default function ShiptosPage() {
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
   const [partner, setPartner] = useState<Option | null>(null);
   const warehouses = useWarehouses();
-  const instructions = useSimpleMaster('work_instructions');
   const slipClasses = useCodes('SLIP_ISSUE_CLASS');
 
   return (

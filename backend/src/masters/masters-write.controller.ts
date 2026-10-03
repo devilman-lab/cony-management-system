@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -366,6 +367,17 @@ export class MastersWriteController {
     return this.crud.setActive(table, id, false, SIMPLE_MASTERS[table], user.id);
   }
 
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('simple/:kind/:id')
+  @RequirePermission('M-16', 'delete')
+  removeSimple(@Param('kind') kind: string, @Param('id', ParseIntPipe) id: number) {
+    const table = this.simpleTable(kind);
+    return this.crud.remove(table, id, SIMPLE_MASTERS[table]);
+  }
+
   private simpleTable(kind: string): SimpleMaster {
     if (!(kind in SIMPLE_MASTERS)) {
       throw new NotFoundException(
@@ -455,6 +467,16 @@ export class MastersWriteController {
     return this.crud.setActive('partners', id, false, '取引先', user.id);
   }
 
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('partners/:id')
+  @RequirePermission('M-01', 'delete')
+  removePartner(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('partners', id, '取引先');
+  }
+
   // ---- 納品先 ---------------------------------------------------------------
   /** 納品先の一覧。取引先で絞れ、取引先名も一緒に返す。 */
   /** 納品先の一覧。作業指示は名前も返す（画面で検索して選ぶため）。 */
@@ -520,6 +542,16 @@ export class MastersWriteController {
     return this.crud.setActive('delivery_destinations', id, false, '納品先', user.id);
   }
 
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('delivery-destinations/:id')
+  @RequirePermission('M-05', 'delete')
+  removeDestination(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('delivery_destinations', id, '納品先');
+  }
+
   // ---- 商品 -----------------------------------------------------------------
   @Post('products')
   @RequirePermission('M-08', 'create')
@@ -545,6 +577,16 @@ export class MastersWriteController {
   @RequirePermission('M-08', 'delete')
   deactivateProduct(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
     return this.crud.setActive('products', id, false, '商品', user.id);
+  }
+
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('products/:id')
+  @RequirePermission('M-08', 'delete')
+  removeProduct(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('products', id, '商品');
   }
 
   // ---- SKU ------------------------------------------------------------------
@@ -718,7 +760,8 @@ export class MastersWriteController {
   async lookupPartnerProduct(@Query(new ZodValidationPipe(PartnerProductLookupSchema)) query: PartnerProductLookupQuery) {
     const row = await this.db
       .selectFrom('partner_products')
-      .select(['id', 'partner_product_code', 'sales_name', 'unit_price', 'retail_price'])
+      // 先方JAN・出荷JANも返す。受注入力で「先方のJANを入れたら出荷用のJANを出す」ため（1001 ご要望）。
+      .select(['id', 'partner_product_code', 'partner_jan', 'shipping_jan', 'sales_name', 'unit_price', 'retail_price'])
       .where('partner_id', '=', query.partner_id)
       .where('sku_id', '=', query.sku_id)
       .where('is_active', '=', true)
@@ -753,6 +796,16 @@ export class MastersWriteController {
     return this.crud.setActive('partner_products', id, false, '得意先別商品', user.id);
   }
 
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('partner-products/:id')
+  @RequirePermission('M-11', 'delete')
+  removePartnerProduct(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('partner_products', id, '得意先別商品');
+  }
+
   // ---- 倉庫 -----------------------------------------------------------------
   @Post('warehouses')
   @RequirePermission('M-14', 'create')
@@ -778,6 +831,16 @@ export class MastersWriteController {
   @RequirePermission('M-14', 'delete')
   deactivateWarehouse(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
     return this.crud.setActive('warehouses', id, false, '倉庫', user.id);
+  }
+
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('warehouses/:id')
+  @RequirePermission('M-13', 'delete')
+  removeWarehouse(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('warehouses', id, '倉庫');
   }
 
   // ---- 仕入マスタ -----------------------------------------------------------
@@ -815,6 +878,16 @@ export class MastersWriteController {
   @RequirePermission('M-15', 'delete')
   deactivatePurchaseItem(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
     return this.crud.setActive('purchase_items', id, false, '仕入品目', user.id);
+  }
+
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('purchase-items/:id')
+  @RequirePermission('M-15', 'delete')
+  removePurchaseItem(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('purchase_items', id, '仕入項目');
   }
 
   // ---- 汎用区分 -------------------------------------------------------------
@@ -960,5 +1033,15 @@ export class MastersWriteController {
   @RequirePermission('Y-02', 'delete')
   deactivateRoyaltyRule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
     return this.crud.setActive('royalty_rules', id, false, 'ロイヤリティ規定', user.id);
+  }
+
+  /**
+   * 一覧から消す。どこからも使われていないものだけ消せる。
+   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
+   */
+  @Delete('royalty-rules/:id')
+  @RequirePermission('Y-02', 'delete')
+  removeRoyaltyRule(@Param('id', ParseIntPipe) id: number) {
+    return this.crud.remove('royalty_rules', id, 'ロイヤリティ規定');
   }
 }

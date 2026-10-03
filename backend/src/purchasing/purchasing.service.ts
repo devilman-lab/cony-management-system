@@ -33,6 +33,7 @@ export interface CreatePurchaseInput {
   payment_date1?: string | null;
   payment_date2?: string | null;
   currency?: string;
+  expense_code_id?: number | null;
   note?: string | null;
   lines: PurchaseLineInput[];
 }
@@ -151,6 +152,7 @@ export class PurchasingService {
           payment_date1: input.payment_date1 ?? null,
           payment_date2: input.payment_date2 ?? null,
           currency: input.currency ?? undefined,
+          expense_code_id: input.expense_code_id ?? null,
           note: input.note ?? null,
           created_by: userId,
           updated_by: userId,

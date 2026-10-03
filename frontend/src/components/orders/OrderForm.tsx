@@ -200,7 +200,14 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     });
     if (d.partner) {
       try {
-        const pp = await api.get<{ id: number; partner_product_code: string | null; sales_name: string | null; unit_price: string } | null>(
+        const pp = await api.get<{
+          id: number;
+          partner_product_code: string | null;
+          partner_jan: string | null;
+          shipping_jan: string | null;
+          sales_name: string | null;
+          unit_price: string;
+        } | null>(
           '/masters/partner-products/lookup',
           { partner_id: d.partner.id, sku_id: o.id },
         );
@@ -211,7 +218,15 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
             // 販売名が未登録（null）なら空にする。undefined を入れると品名が失われ、
             // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
             item_name: pp.sales_name ?? '',
-            note: pp.partner_product_code ? `専用コード ${pp.partner_product_code}` : '得意先別単価',
+            // 出荷JANが登録されていれば、倉庫がそれを見られるよう備考に出す。
+            // 先方JANしか無いときは先方JANを出す（1001 ご要望）。
+            note:
+              [
+                pp.partner_product_code ? `専用コード ${pp.partner_product_code}` : '',
+                pp.shipping_jan ? `出荷JAN ${pp.shipping_jan}` : pp.partner_jan ? `先方JAN ${pp.partner_jan}` : '',
+              ]
+                .filter(Boolean)
+                .join('　') || '得意先別単価',
           });
         }
       } catch {

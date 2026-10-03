@@ -156,16 +156,32 @@ export class ReportsService {
       if (sh.shipping_remarks) doc.line(`出荷備考　　${sh.shipping_remarks}`);
       doc.y += 4;
 
-      const columns: Column[] = [
-        { label: '行', width: 26, align: 'right' },
-        { label: '商品コード', width: 110 },
-        { label: '品名', width: 225 },
-        { label: '区分', width: 56, align: 'center' },
-        { label: '数量', width: 60, align: 'right' },
-      ];
+      // FBA用JANは、設定されている行が1つでもあるときだけ列を出す。
+      // 常に出すと、使っていない取引先の依頼書に空の列が並ぶため（1001 ご要望）。
+      const hasFbaJan = lines.some((l) => (l.fba_jan ?? '').trim() !== '');
+      const columns: Column[] = hasFbaJan
+        ? [
+            { label: '行', width: 26, align: 'right' },
+            { label: '商品コード', width: 100 },
+            { label: 'FBA用JAN', width: 110 },
+            { label: '品名', width: 171 },
+            { label: '区分', width: 56, align: 'center' },
+            { label: '数量', width: 60, align: 'right' },
+          ]
+        : [
+            { label: '行', width: 26, align: 'right' },
+            { label: '商品コード', width: 110 },
+            { label: '品名', width: 225 },
+            { label: '区分', width: 56, align: 'center' },
+            { label: '数量', width: 60, align: 'right' },
+          ];
       doc.table(
         columns,
-        lines.map((l) => [l.line_no, l.sku_code ?? '', l.item_name, l.line_type, qty(l.qty)]),
+        lines.map((l) =>
+          hasFbaJan
+            ? [l.line_no, l.sku_code ?? '', l.fba_jan ?? '', l.item_name, l.line_type, qty(l.qty)]
+            : [l.line_no, l.sku_code ?? '', l.item_name, l.line_type, qty(l.qty)],
+        ),
       );
       doc.totals([['合計数量', qty(this.goodsQty(lines))]]);
     }
@@ -579,6 +595,8 @@ export class ReportsService {
         'l.is_stock_target as is_stock_target',
         's.sku_code as sku_code',
         's.jan as jan',
+        // FBA・ショップへの出荷依頼では、コニーのJANではなくこちらを使う（1001 ご要望）
+        's.fba_jan as fba_jan',
         this.retailPriceExpr('l', 'o').as('retail_price'),
       ])
       .where('l.sales_order_id', '=', orderId)

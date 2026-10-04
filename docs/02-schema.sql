@@ -330,7 +330,9 @@ CREATE TABLE partners (
   shipping_fee_rule_code_id   BIGINT REFERENCES codes(id),   -- 送料3万以下・直送
   shipping_fee_threshold      money_amt,                     -- この金額以下の出荷に送料を請求。NULL＝既定値
   shipping_fee_amount         money_amt,                     -- 請求する送料額。NULL＝既定値
-  default_trade_type          VARCHAR(10),                   -- 既定の取引条件（委託／買取）。受注で自動表示し変更可
+  default_trade_type          VARCHAR(10),                   -- 既定の取引条件（委託／買取／仕入）。受注で自動表示し変更可
+  -- ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る（1001 ご要望）
+  is_royalty_payee            BOOLEAN NOT NULL DEFAULT false,
   -- ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。
   -- 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。
   closing_day                 SMALLINT,                      -- 締め日（99＝月末）
@@ -353,7 +355,7 @@ CREATE TABLE partners (
     (shipping_fee_threshold IS NULL OR shipping_fee_threshold >= 0) AND
     (shipping_fee_amount    IS NULL OR shipping_fee_amount    >= 0)),
   CONSTRAINT ck_partners_trade CHECK (
-    default_trade_type IS NULL OR default_trade_type IN ('委託','買取'))
+    default_trade_type IS NULL OR default_trade_type IN ('委託','買取','仕入'))
 );
 COMMENT ON TABLE partners IS '取引先（得意先・仕入先。Amazon等プラットフォームも1取引先として登録）';
 
@@ -548,6 +550,8 @@ CREATE TABLE skus (
   -- コニーJANとは別に持つ。出荷依頼書・JAN発行で使う（1001 ご要望）
   fba_jan           VARCHAR(20),
   shop_product_code VARCHAR(60),
+  -- このSKUだけの原価。空欄なら商品の原価を使う（大きいサイズだけ原価が違う。1001 ご要望）
+  cost_price    money_amt,
   sort_order INTEGER,
   is_active  BOOLEAN NOT NULL DEFAULT true,
   note       TEXT,
@@ -558,7 +562,44 @@ COMMENT ON TABLE skus IS 'SKU（品番-カラー2桁+サイズ2桁-入数区分�
 CREATE INDEX ix_skus_product ON skus (product_id);
 -- JAN は空欄を許すが、入っているものは全社で1つに限る。
 -- 重複を許すと、JANで引き当てる販社CSV（白鳩）の取込がどちらの商品に付くか定まらない。
-CREATE UNIQUE INDEX ux_skus_jan ON skus (jan) WHERE jan IS NOT NULL;
+-- JAN は「品番の左6桁が同じ商品の中でなら重複してよい」（1001 ご要望）。
+-- 「ある JAN に対して品番の左6桁はただ1つ」という決まりは、ふつうの一意索引では
+-- 表せないため、引き金で確かめる。引き当てに使うので索引そのものは残す。
+CREATE INDEX ix_skus_jan ON skus (jan) WHERE jan IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION fn_check_sku_jan() RETURNS trigger AS $$
+DECLARE
+  v_code6 text;
+  v_other text;
+BEGIN
+  IF NEW.jan IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT left(p.product_code, 6) INTO v_code6
+    FROM cony.products p WHERE p.id = NEW.product_id;
+
+  SELECT left(p.product_code, 6) INTO v_other
+    FROM cony.skus s
+    JOIN cony.products p ON p.id = s.product_id
+   WHERE s.jan = NEW.jan
+     AND s.id <> COALESCE(NEW.id, -1)
+     AND left(p.product_code, 6) <> v_code6
+   LIMIT 1;
+
+  IF v_other IS NOT NULL THEN
+    RAISE EXCEPTION
+      'この JAN コードは品番 % の商品で使われています。品番の左6桁が違う商品に同じ JAN は付けられません',
+      v_other
+      USING ERRCODE = '23505', CONSTRAINT = 'ux_skus_jan';
+  END IF;
+
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_skus_jan
+  BEFORE INSERT OR UPDATE OF jan, product_id ON skus
+  FOR EACH ROW EXECUTE FUNCTION fn_check_sku_jan();
 
 -- (25) set_headers セット
 CREATE TABLE set_headers (

@@ -7,6 +7,8 @@ import { useAuth } from '@/lib/auth';
 import { useDebounce, useList } from '@/lib/hooks';
 import { Button, Card, type Column, DataTable, ErrorBox, Input, Modal, PageHead, Pager, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
+import { MasterCsv } from './MasterCsv';
+import { MasterGrid } from './MasterGrid';
 
 /**
  * マスタ画面の共通部品。一覧＋検索＋「無効も表示」＋登録・編集モーダル＋無効化。
@@ -44,6 +46,11 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
   limit?: number;
   /** 一覧の並び順など、検索欄を隠す場合 */
   noSearch?: boolean;
+  /**
+   * CSV の書き出し・取り込みに使う名前（backend の masters-csv.ts の slug）。
+   * 指定すると見出しの右にボタンが出る（1001 のご要望）。
+   */
+  csvSlug?: string;
   onSaved?: (row: Record<string, unknown>, editing: T | null) => void;
 }
 
@@ -54,6 +61,8 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   const [q, setQ] = useState('');
   const dq = useDebounce(q, 300);
   const [inactive, setInactive] = useState(false);
+  // 一覧の中で直接編集するか（1001 ご要望）。csvSlug がある画面だけ使える
+  const [gridMode, setGridMode] = useState(false);
   const list = useList<T>(p.listPath, { q: dq || undefined, include_inactive: inactive ? 'true' : undefined, ...(p.extraFilters ?? {}) }, p.limit ?? 50);
 
   const [open, setOpen] = useState(false);
@@ -169,8 +178,39 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   return (
     <div className="page-body">
       {element}
-      <PageHead title={p.title} sub={p.sub} right={<>{p.headRight}{can(p.functionId, 'create') && <Button variant="primary" icon="plus" onClick={openNew}>新規登録</Button>}</>} />
+      <PageHead
+        title={p.title}
+        sub={p.sub}
+        right={
+          <>
+            {p.headRight}
+            {p.csvSlug && (
+              <Button icon={gridMode ? 'list' : 'edit'} onClick={() => setGridMode((v) => !v)}>
+                {gridMode ? '通常の一覧に戻す' : '一覧で編集'}
+              </Button>
+            )}
+            {p.csvSlug && (
+              <MasterCsv
+                slug={p.csvSlug}
+                functionId={p.functionId}
+                includeInactive={inactive}
+                onImported={() => list.reload()}
+              />
+            )}
+            {can(p.functionId, 'create') && <Button variant="primary" icon="plus" onClick={openNew}>新規登録</Button>}
+          </>
+        }
+      />
       <Card>
+        {/*
+          一覧で編集するときは、CSV と同じ欄をそのまま並べて直接打てるようにする
+          （1001 ご要望「一覧に全ての項目を表示し、一覧内で編集ができるようにしてほしい」）。
+          保存は CSV取込と同じ経路を通るので、検査のしかたも同じになる。
+        */}
+        {gridMode && p.csvSlug ? (
+          <MasterGrid slug={p.csvSlug} canEdit={can(p.functionId, 'update')} />
+        ) : (
+        <>
         <Toolbar right={<label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={inactive} onChange={(e) => setInactive(e.target.checked)} />使わないものも表示</label>}>
           {!p.noSearch && <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="コード・名前で検索" className="!w-[240px]" />}
           {p.toolbar}
@@ -184,6 +224,8 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
           rowClassName={(r) => (isActive(r) ? '' : 'opacity-50')}
         />
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
+        </>
+        )}
       </Card>
 
       <Modal open={open} title={editing ? `${p.title}の編集` : `${p.title}の登録`} onClose={() => setOpen(false)} width={p.modalWidth ?? 640} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!form} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>

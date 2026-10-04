@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 6本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 7本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -15,13 +15,18 @@
 SET client_encoding = 'UTF8';
 SET search_path = cony, public;
 
+-- ① は ⑦ で決まりが変わりました（全体で1つ → 品番の左6桁が同じならOK）。
+-- ⑦ を当てたあとは一意索引が無くなり、代わりに引き金が守ります。どちらかがあれば「済」。
 SELECT '① JANの重複を禁止' AS 移行,
        CASE WHEN EXISTS (
               SELECT 1 FROM pg_indexes
                WHERE schemaname = 'cony' AND tablename = 'skus'
                  AND indexname = 'ux_skus_jan' AND indexdef LIKE '%UNIQUE%'
+            ) OR EXISTS (
+              SELECT 1 FROM pg_trigger
+               WHERE tgrelid = 'cony.skus'::regclass AND tgname = 'trg_skus_jan'
             ) THEN '済' ELSE '未' END AS 状態,
-       '2026-09-25_jan_unique.sql' AS ファイル
+       '2026-09-25_jan_unique.sql（⑦で決まりが変わります）' AS ファイル
 UNION ALL
 SELECT '② Amazonの二重登録を止める',
        CASE WHEN EXISTS (
@@ -88,6 +93,26 @@ SELECT '⑥ ロイヤリティを1枚のフォームで',
          ELSE '一部'
        END,
        '2026-10-03_royalty_group.sql'
+UNION ALL
+SELECT '⑦ マスタご要望の残り（仕入区分・支払先・SKU原価・JAN）',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony'
+                  AND ((table_name = 'partners' AND column_name = 'is_royalty_payee')
+                    OR (table_name = 'skus'     AND column_name = 'cost_price'))) = 2
+          AND (SELECT count(*) FROM pg_trigger
+                WHERE tgrelid = 'cony.skus'::regclass AND tgname = 'trg_skus_jan') = 1
+          AND (SELECT count(*) FROM pg_constraint
+                WHERE conrelid = 'cony.partners'::regclass AND conname = 'ck_partners_trade'
+                  AND pg_get_constraintdef(oid) LIKE '%仕入%') = 1
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'partners'
+                  AND column_name = 'is_royalty_payee') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-04_master_feedback2.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。
@@ -107,7 +132,8 @@ SELECT count(*) AS テーブル数_71なら最新
   FROM information_schema.tables
  WHERE table_schema = 'cony' AND table_type = 'BASE TABLE';
 
--- 同じく、① を途中で止めると JAN の索引が消えます。ここも 1 なら正常。
+-- JAN の索引。⑦ のあとは一意ではなくなりますが（左6桁が同じなら重複OK）、
+-- 引き当てに使うので索引そのものは残ります。ここも 1 なら正常。
 SELECT count(*) AS JANの索引の数_1なら正常
   FROM pg_indexes
  WHERE schemaname = 'cony' AND tablename = 'skus' AND indexdef LIKE '%(jan)%';

@@ -46,6 +46,8 @@ type ListQuery = z.infer<typeof ListSchema>;
 const PartnerProductListSchema = ListSchema.extend({
   partner_id: z.coerce.number().int().positive().optional(),
   sku_id: z.coerce.number().int().positive().optional(),
+  /** 販売先カテゴリーで絞る（1001 ご要望）。取引先は複数のカテゴリーを持てる。 */
+  partner_category_id: z.coerce.number().int().positive().optional(),
 });
 type PartnerProductListQuery = z.infer<typeof PartnerProductListSchema>;
 
@@ -103,7 +105,9 @@ const PartnerSchema = z.object({
   invoice_contact_name: z.string().trim().max(120).nullish(),
   shipping_fee_threshold: decimal.nullish(),
   shipping_fee_amount: decimal.nullish(),
-  default_trade_type: z.enum(['委託', '買取']).nullish(),
+  default_trade_type: z.enum(['委託', '買取', '仕入']).nullish(),
+  /** ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る（1001 ご要望）。 */
+  is_royalty_payee: z.boolean().optional(),
   closing_day: z.number().int().min(1).max(99).nullish(),
   payment_month_offset: z.number().int().min(0).max(12).nullish(),
   payment_day: z.number().int().min(1).max(99).nullish(),
@@ -185,6 +189,8 @@ const SkuSchema = z.object({
     .nullish(),
   /** ショップ側の商品コード（1001 ご要望）。 */
   shop_product_code: z.string().trim().max(60).nullish(),
+  /** このSKUだけの原価。空欄なら商品の原価を使う（サイズ別原価。1001 ご要望）。 */
+  cost_price: decimal.nullish(),
   sort_order: z.number().int().nullish(),
   note: z.string().nullish(),
 });
@@ -754,6 +760,19 @@ export class MastersWriteController {
     if (!query.include_inactive) base = base.where('pp.is_active', '=', true);
     if (query.partner_id !== undefined) base = base.where('pp.partner_id', '=', query.partner_id);
     if (query.sku_id !== undefined) base = base.where('pp.sku_id', '=', query.sku_id);
+    // 販売先カテゴリーで絞る。取引先は複数のカテゴリーを持てるのでひも付けの表で見る（1001 ご要望）
+    if (query.partner_category_id !== undefined) {
+      const categoryId = query.partner_category_id;
+      base = base.where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom('partner_category_links as pcl')
+            .select(sql`1`.as('x'))
+            .whereRef('pcl.partner_id', '=', 'pp.partner_id')
+            .where('pcl.partner_category_id', '=', categoryId),
+        ),
+      );
+    }
     if (query.q) {
       const like = `%${query.q}%`;
       base = base.where((eb) =>
@@ -777,6 +796,13 @@ export class MastersWriteController {
           'cl.name as color_name',
           'sz.name as size_name',
           'pc.name as product_class_name',
+          // 販売先カテゴリー（複数持てるので、まとめて1つの文字列にする。1001 ご要望）
+          sql<string | null>`(
+            select string_agg(c2.name, '、' order by c2.name)
+              from partner_category_links l2
+              join partner_categories c2 on c2.id = l2.partner_category_id
+             where l2.partner_id = pp.partner_id
+          )`.as('partner_category_names'),
         ])
         .orderBy('p.partner_code')
         .orderBy('s.sku_code')

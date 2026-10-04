@@ -9,6 +9,7 @@ import { money } from '@/lib/format';
 import { Badge, Button, ErrorBox, Input, Num, Select, Textarea } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
+import { MasterCsv } from '@/components/masters/MasterCsv';
 import { Check, L, Section } from '@/components/masters/Form';
 
 interface ProductRow extends Record<string, unknown> {
@@ -34,6 +35,8 @@ interface Sku {
   jan: string;
   fba_jan: string;
   shop_product_code: string;
+  /** このSKUだけの原価。空欄なら商品の原価を使う（1001 ご要望） */
+  cost_price: string;
   color_id: string;
   size_id: string;
   pack_division: string;
@@ -79,7 +82,7 @@ export default function ProductsPage() {
   const saveSkus = async (productId: number, skus: Sku[]) => {
     for (const k of skus) {
       if (!k._dirty || !k.sku_code.trim()) continue;
-      const body = { product_id: productId, sku_code: k.sku_code.trim(), jan: strOrNull(k.jan), fba_jan: strOrNull(k.fba_jan), shop_product_code: strOrNull(k.shop_product_code), color_id: numOrNull(k.color_id), size_id: numOrNull(k.size_id), pack_division: strOrNull(k.pack_division) };
+      const body = { product_id: productId, sku_code: k.sku_code.trim(), jan: strOrNull(k.jan), fba_jan: strOrNull(k.fba_jan), shop_product_code: strOrNull(k.shop_product_code), cost_price: strOrNull(k.cost_price), color_id: numOrNull(k.color_id), size_id: numOrNull(k.size_id), pack_division: strOrNull(k.pack_division) };
       if (k.id) await api.patch(`/masters/skus/${k.id}`, { ...body, is_active: k.is_active });
       else await api.post('/masters/skus', body);
     }
@@ -90,11 +93,27 @@ export default function ProductsPage() {
       title="商品"
       sub="商品（品番）と、その下の SKU（色・サイズ・JAN）。原価は権限のある方にだけ表示されます"
       functionId="M-08"
+      csvSlug="products"
       listPath="/masters/products"
       writePath="/masters/products"
       extraFilters={{ brand_id: brandId || undefined }}
       modalWidth={860}
-      headRight={can('M-09', 'print') && <Button icon="download" onClick={() => api.download('/masters/skus/jan-export').catch((e) => toast(e instanceof Error ? e.message : '失敗しました', 'bad'))}>JANコード一覧CSV</Button>}
+      headRight={
+        <>
+          {/* SKU は専用の画面が無いので、商品マスタからまとめて出し入れする（JAN・FBA用JANの一括修正用） */}
+          <MasterCsv slug="skus" name="SKU" functionId="M-09" includeInactive={false} onImported={() => location.reload()} />
+          {can('M-09', 'print') && (
+            <Button
+              icon="download"
+              onClick={() =>
+                api.download('/masters/skus/jan-export').catch((e) => toast(e instanceof Error ? e.message : '失敗しました', 'bad'))
+              }
+            >
+              JANコード一覧CSV
+            </Button>
+          )}
+        </>
+      }
       toolbar={
         <Select value={brandId} onChange={(e) => setBrandId(e.target.value)} className="!w-[160px]">
           <option value="">ブランド：すべて</option>
@@ -120,7 +139,7 @@ export default function ProductsPage() {
           brand_id: s(d.brand_id), category_id: s(d.category_id), product_class_id: s(d.product_class_id),
           carton_qty: s(d.carton_qty), cost_price: dec(d.cost_price ?? '0'), old_cost_price: dec(d.old_cost_price ?? ''), is_cost_undecided: Boolean(d.is_cost_undecided),
           tax_rate: s(d.tax_rate || '10.00'), is_set: Boolean(d.is_set), sort_order: s(d.sort_order), note: s(d.note),
-          skus: (d.skus ?? []).map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })),
+          skus: (d.skus ?? []).map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), cost_price: s(k.cost_price), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })),
         };
       }}
       toBody={(f) => ({
@@ -170,6 +189,7 @@ export default function ProductsPage() {
           {!editing && <div className="text-[11.5px] text-[var(--color-ink-3)]">商品を登録したあと、もう一度「編集」を開くと SKU を追加できます。</div>}
           {editing && (
             <SkuEditor
+              showCost={canSeeSensitive}
               skus={f.skus}
               colors={colors.data?.items ?? []}
               sizes={sizes.data?.items ?? []}
@@ -179,7 +199,7 @@ export default function ProductsPage() {
                 try {
                   await saveSkus(editing.id, f.skus);
                   const d = await api.get<{ skus: Record<string, unknown>[] }>(`/masters/products/${editing.id}`);
-                  set({ skus: d.skus.map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })) });
+                  set({ skus: d.skus.map((k) => ({ id: Number(k.id), sku_code: s(k.sku_code), jan: s(k.jan), fba_jan: s(k.fba_jan), shop_product_code: s(k.shop_product_code), cost_price: s(k.cost_price), color_id: s(k.color_id), size_id: s(k.size_id), pack_division: s(k.pack_division), is_active: k.is_active !== false })) });
                   toast('SKU を保存しました', 'good');
                 } catch (e) {
                   setSkuError(e);
@@ -194,13 +214,15 @@ export default function ProductsPage() {
   );
 }
 
-function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
+function SkuEditor({ skus, colors, sizes, onChange, onSave, error, showCost }: {
   skus: Sku[];
   colors: { id: number; name: string }[];
   sizes: { id: number; name: string }[];
   onChange: (skus: Sku[]) => void;
   onSave: () => Promise<void>;
   error: unknown;
+  /** 原価を見てよい人か。見せない人には欄ごと出さない */
+  showCost: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const upd = (i: number, patch: Partial<Sku>) => onChange(skus.map((k, idx) => (idx === i ? { ...k, ...patch, _dirty: true } : k)));
@@ -210,9 +232,9 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
       {error ? <ErrorBox error={error} /> : null}
       <div className="tbl-wrap">
         <table className="tbl">
-          <thead><tr><th style={{ width: 150 }}>SKUコード</th><th style={{ width: 140 }}>JAN</th><th style={{ width: 140 }}>FBA用JAN</th><th style={{ width: 140 }}>ショップ商品コード</th><th>カラー</th><th>サイズ</th><th style={{ width: 90 }}>入数区分</th><th style={{ width: 60 }}>有効</th></tr></thead>
+          <thead><tr><th style={{ width: 150 }}>SKUコード</th><th style={{ width: 140 }}>JAN</th><th style={{ width: 140 }}>FBA用JAN</th><th style={{ width: 140 }}>ショップ商品コード</th><th>カラー</th><th>サイズ</th><th style={{ width: 90 }}>入数区分</th>{showCost && <th style={{ width: 100 }}>原価</th>}<th style={{ width: 60 }}>有効</th></tr></thead>
           <tbody>
-            {skus.length === 0 && <tr><td colSpan={8} className="text-center py-4 text-[var(--color-ink-3)]">SKU がありません</td></tr>}
+            {skus.length === 0 && <tr><td colSpan={showCost ? 9 : 8} className="text-center py-4 text-[var(--color-ink-3)]">SKU がありません</td></tr>}
             {skus.map((k, i) => (
               <tr key={k.id ?? `new-${i}`}>
                 <td><Input value={k.sku_code} onChange={(e) => upd(i, { sku_code: e.target.value })} /></td>
@@ -222,6 +244,8 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
                 <td><Select value={k.color_id} onChange={(e) => upd(i, { color_id: e.target.value })}><option value="">（なし）</option>{colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
                 <td><Select value={k.size_id} onChange={(e) => upd(i, { size_id: e.target.value })}><option value="">（なし）</option>{sizes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
                 <td><Input value={k.pack_division} onChange={(e) => upd(i, { pack_division: e.target.value })} /></td>
+                {/* サイズで原価が変わるとき用。空欄なら商品の原価を使う（1001 ご要望） */}
+                {showCost && <td><Input right value={k.cost_price} onChange={(e) => upd(i, { cost_price: e.target.value })} placeholder="商品と同じ" /></td>}
                 <td className="c"><input type="checkbox" checked={k.is_active} onChange={(e) => upd(i, { is_active: e.target.checked })} disabled={!k.id} /></td>
               </tr>
             ))}
@@ -229,7 +253,7 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, error }: {
         </table>
       </div>
       <div className="flex gap-2">
-        <Button size="sm" icon="plus" onClick={() => onChange([...skus, { sku_code: '', jan: '', fba_jan: '', shop_product_code: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true }])}>SKU を追加</Button>
+        <Button size="sm" icon="plus" onClick={() => onChange([...skus, { sku_code: '', jan: '', fba_jan: '', shop_product_code: '', cost_price: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true }])}>SKU を追加</Button>
         <Button size="sm" variant="primary" disabled={!dirty} loading={busy} onClick={async () => { setBusy(true); try { await onSave(); } finally { setBusy(false); } }}>SKU を保存</Button>
         <span className="text-[10.5px] text-[var(--color-ink-3)] self-center">SKU は商品本体とは別に保存します</span>
       </div>

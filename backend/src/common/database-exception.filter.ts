@@ -27,7 +27,7 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   ck_sol_type: '明細の種別が定義されていない値です',
   ck_sol_sku: 'この種別の明細には商品の指定が必要です',
   ck_partners_role: '得意先か仕入先のどちらかには該当させてください',
-  ck_partners_trade: '取引条件は 委託／買取 のいずれかです',
+  ck_partners_trade: '取引条件は 委託／買取／仕入 のいずれかです',
   ck_partners_shipfee: '送料と閾値にマイナスは入れられません',
   ck_cash_div: '入出金の区分は 入金／出金 のいずれかです',
   ck_stkadjline_qty: '増減が 0 の調整明細は登録できません',
@@ -54,7 +54,11 @@ const UNIQUE_MESSAGES: Record<string, string> = {
   postal_codes_postal_code_town_key: 'この郵便番号と町域の組み合わせはすでに登録されています',
   ux_reservations_scope:
     'この取引先・販売カテゴリー・商品・期間の確保数はすでに登録されています',
-  ux_skus_jan: 'この JAN コードは別の SKU で使われています。JAN は1つの商品にだけ登録してください',
+  // 2026-10-01 ご要望で「品番の左6桁が同じ商品の中でなら同じ JAN でよい」に変わった。
+  // 実際の判定は引き金 fn_check_sku_jan が行う（表の決まりだけでは表せないため）。
+  ux_skus_jan:
+    'この JAN コードは、品番の左6桁が違う商品で使われています。' +
+    '同じ品番グループ（左6桁が同じ）の中でなら、同じ JAN を付けられます',
   skus_sku_code_key: 'この SKU コードはすでに登録されています',
   partners_partner_code_key: 'この取引先コードはすでに登録されています',
   products_product_code_key: 'この品番はすでに登録されています',

@@ -7,7 +7,7 @@ import { PartnersService } from './partners.service';
 
 const ListQuerySchema = z.object({
   q: z.string().trim().min(1).max(60).optional(),
-  role: z.enum(['customer', 'supplier']).optional(),
+  role: z.enum(['customer', 'supplier', 'royalty_payee']).optional(),
   include_inactive: z
     .enum(['true', 'false'])
     .optional()

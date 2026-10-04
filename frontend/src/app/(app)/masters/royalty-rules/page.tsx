@@ -92,7 +92,9 @@ function CustomerCell({ r }: { r: RuleRow }) {
 
 /** ロイヤリティ規定（Y-02 の設定側）。支払先 × ブランド／商品 × 媒体 × 販売先 × 期間で料率を決める。 */
 export default function RoyaltyRulesPage() {
-  const fetchAll = useMemo(() => fetchPartners(), []);
+  // 支払先は「ロイヤリティ支払先」の印が付いた取引先だけ出す（1001 ご要望）。
+  // 得意先として登録されていることがあるため、得意先／仕入先では絞れない。
+  const fetchAll = useMemo(() => fetchPartners('royalty_payee'), []);
   const brands = useSimpleMaster('brands');
   const medias = useSimpleMaster('media');
 
@@ -207,7 +209,7 @@ export default function RoyaltyRulesPage() {
                   value={f.payee}
                   onChange={(o) => set({ payee: o })}
                   fetchOptions={fetchAll}
-                  placeholder="ロイヤリティの支払先"
+                  placeholder="ロイヤリティの支払先（取引先マスタで印を付けた先）"
                   width="100%"
                 />
               </L>

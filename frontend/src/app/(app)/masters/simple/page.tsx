@@ -79,6 +79,7 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
       title={label}
       sub={kind === 'sales_staff' ? '受注の「販売担当」として選ぶ人。ログインする利用者とは別に管理します（9/17 ご確認）' : kind === 'sales_categories' ? '引当在庫（確保数）の単位になります' : undefined}
       functionId="M-16"
+      csvSlug={kind.replace(/_/g, "-")}
       listPath={`/masters/simple/${kind}`}
       writePath={`/masters/simple/${kind}`}
       modalWidth={560}

@@ -361,7 +361,7 @@ export interface PartnerRow {
 }
 
 export const fetchPartners =
-  (role?: 'customer' | 'supplier') =>
+  (role?: 'customer' | 'supplier' | 'royalty_payee') =>
   async (q: string): Promise<Option[]> => {
     const r = await api.get<Paged<PartnerRow>>('/masters/partners', { q: q || undefined, role, limit: 20 });
     return r.items.map((p) => ({ id: p.id, label: p.name1, sub: p.partner_code, raw: p }));

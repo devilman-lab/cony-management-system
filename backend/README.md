@@ -159,6 +159,9 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | 2 | `2026-09-25_amazon_unique.sql` | Amazon 決済レポートの二重登録を止める。**先に 2-a で行番号から作った注文番号を空欄に戻すこと** |
 | 3 | `2026-09-25_import_type_postal.sql` | 取込履歴に「郵便番号データ」を残せるようにする |
 | 4 | `2026-09-25_invoice_cancel_history.sql` | 取り消した請求を履歴として残せるようにする（一意制約を部分索引に入れ替え） |
+| 5 | `2026-10-02_master_feedback.sql` | マスタへのご要望（1001）の列を足す |
+| 6 | `2026-10-03_royalty_group.sql` | ロイヤリティ規定を1枚のフォームで入れられるようにする |
+| 7 | `2026-10-04_master_feedback2.sql` | 取引区分に「仕入」／ロイヤリティ支払先の印／SKUの原価／JANの重複の決まり |
 
 どのファイルも、先頭の 1) で件数を確かめてから 2) 以降を流す作りにしてあります。
 
@@ -188,6 +191,10 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 | `PATCH` | `/api/sales-schedules/:id` | S-08:update |
 | `DELETE` | `/api/sales-schedules/:id` | S-08:delete |
 | `GET` | `/api/masters/skus/jan-export` | M-09:print |
+| `GET` | `/api/masters/csv` | （ログインのみ） |
+| `GET` | `/api/masters/csv/:slug/columns` | そのマスタの print |
+| `GET` | `/api/masters/csv/:slug/export` | そのマスタの print |
+| `POST` | `/api/masters/csv/:slug/import` | そのマスタの update |
 | `PATCH` | `/api/billing/invoices/:id` | B-02:update |
 | `POST` | `/api/shipments/consolidate` | D-01:update |
 | `DELETE` | `/api/shipments/:id/consolidation` | D-01:update |
@@ -347,6 +354,37 @@ curl http://localhost:3001/api/masters/partners -H "Authorization: Bearer <token
 - 代表行を消すと配下も消えます（`rule_group_id` の `ON DELETE CASCADE`）
 - `PATCH /masters/royalty-rules/:id` の `:id` は**代表行**。配下の行はいったん消して作り直します
 - 二重登録を止める索引 `ux_royalty_rules_scope` には**媒体も入っています**。同じブランドで「テレビは5%・カタログは3%」を別々に入れられるようにするためです
+
+### 一覧内編集は CSV と同じ土台で動く
+
+2026-10-01 のご要望「一覧に全ての項目を表示し、一覧内で編集ができるようにしてほしい」。
+
+画面の「一覧で編集」を押すと、`masters-csv.ts` に書いた欄がそのまま編集できる表になります。**欄の定義も保存の道も CSV取込と同じ**です。
+
+- 読む … `GET /api/masters/csv/:slug/rows`（CSV と同じ欄。相手のマスタはコードで返す）
+- 書く … 直した行だけを CSV の形にして `POST /api/masters/csv/:slug/import` へ送る
+
+こうしてあるので、検査・コードの引き直し・権限・操作履歴が CSV取込とまったく同じになります。別々に作ると、片方だけ検査が緩いといった食い違いが必ず出ます。
+
+### マスタの CSV は「書き出し → 直す → 取り込み」で往復できる
+
+2026-10-01 のご要望「原価変更などは編集が大変なので、CSV取り込みで全ての内容を更新できるように。逆にCSV書き出しも」への答えです。対象は16種（取引先・納品先・商品・SKU・得意先別商品＋分類マスタ11種）。どれを出し入れできるかは `masters-csv.ts` の表1枚で決まります。
+
+往復できることを第一に置いた結果、次の形にしてあります。
+
+- **見出しは日本語**。書き出した見出し行をそのまま残せば取り込める
+- **相手のマスタはコードで書き出す**（`brand_id` ではなく `ブランドコード`）。内部の番号を出すと直して戻せない
+- **JAN は `="..."` の形**で書く。素のままだと Excel が数値に直して頭の 0 を落とす
+- **BOM 付き・CRLF**。Excel がそのまま開ける。取り込みは Shift-JIS でも UTF-8 でも読む（`decodeAuto`）
+
+取り込みの決めごと（原価をまとめて書き換えられる操作なので、壊れにくい側に倒しています）。
+
+- **必ず下見（`dry_run: true`）を先に通す。**画面は下見なしに確定できない作りです
+- **CSV に載っている列だけ**を書き換える。載っていない列には触らない
+- 鍵（取引先コードなど）が一致すれば更新、無ければ追加
+- **1行でも読めなければ、1件も書き換えない**（途中まで入った状態を作らない）
+- 原価は `SENSITIVE:view` が無い人には**列ごと出さず、取り込みも受け付けない**
+- 権限は `@RequirePermission` では書けない（URL でマスタが変わる）ため、**各経路の先頭で明示的に確かめています**
 
 ### 金額は文字列で受け取る
 

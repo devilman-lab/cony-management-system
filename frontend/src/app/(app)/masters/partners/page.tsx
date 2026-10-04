@@ -15,6 +15,7 @@ interface PartnerRow extends Record<string, unknown> {
   short_name: string | null;
   is_customer: boolean;
   is_supplier: boolean;
+  is_royalty_payee: boolean;
   closing_day: number | null;
   default_trade_type: string | null;
   media_name: string | null;
@@ -30,6 +31,7 @@ interface Form {
   short_name: string;
   is_customer: boolean;
   is_supplier: boolean;
+  is_royalty_payee: boolean;
   sales_staff_id: string;
   media_id: string;
   partner_category_id: string;
@@ -59,7 +61,7 @@ const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 const dec = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
 
 const EMPTY: Form = {
-  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false,
+  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false, is_royalty_payee: false,
   sales_staff_id: '', media_id: '', partner_category_id: '', category_ids: [] as number[], invoice_registration_no: '', invoice_note: '', invoice_addressee: '', invoice_contact_name: '',
   shipping_fee_threshold: '', shipping_fee_amount: '', default_trade_type: '', closing_day: '', payment_month_offset: '', payment_day: '',
   postal_code: '', address1: '', address2: '', tel: '', fax: '', sort_order: '', note: '',
@@ -80,6 +82,7 @@ export default function PartnersPage() {
       title="取引先"
       sub="得意先・仕入先。締め日・支払条件・既定の販売担当・送料の特別条件はここで決めます"
       functionId="M-01"
+      csvSlug="partners"
       listPath="/masters/partners"
       writePath="/masters/partners"
       extraFilters={{
@@ -114,7 +117,7 @@ export default function PartnersPage() {
         { key: 'partner_code', label: 'コード', width: 100, render: (r) => <Num className="font-semibold">{r.partner_code}</Num> },
         { key: 'name1', label: '名称' },
         { key: 'short_name', label: '略称', width: 140, render: (r) => r.short_name ?? '' },
-        { key: '_role', label: '区分', width: 120, render: (r) => <span className="flex gap-1">{r.is_customer && <Badge>得意先</Badge>}{r.is_supplier && <Badge>仕入先</Badge>}</span> },
+        { key: '_role', label: '区分', width: 120, render: (r) => <span className="flex gap-1">{r.is_customer && <Badge>得意先</Badge>}{r.is_supplier && <Badge>仕入先</Badge>}{r.is_royalty_payee && <Badge>ロイヤリティ</Badge>}</span> },
         { key: 'category_names', label: 'カテゴリー', width: 150, render: (r) => r.category_names ?? '' },
         { key: 'media_name', label: '媒体', width: 100, render: (r) => r.media_name ?? '' },
         { key: 'sales_staff_name', label: '販売担当', width: 110, render: (r) => r.sales_staff_name ?? '' },
@@ -144,6 +147,7 @@ export default function PartnersPage() {
         short_name: strOrNull(f.short_name),
         is_customer: f.is_customer,
         is_supplier: f.is_supplier,
+        is_royalty_payee: f.is_royalty_payee,
         sales_staff_id: numOrNull(f.sales_staff_id),
         media_id: numOrNull(f.media_id),
         partner_category_id: numOrNull(f.partner_category_id),
@@ -173,6 +177,8 @@ export default function PartnersPage() {
             <L label="区分" required>
               <label className="flex items-center gap-1 text-[12px] mr-3"><input type="checkbox" checked={f.is_customer} onChange={(e) => set({ is_customer: e.target.checked })} />得意先</label>
               <label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={f.is_supplier} onChange={(e) => set({ is_supplier: e.target.checked })} />仕入先</label>
+              {/* ロイヤリティ規定の「支払先」の候補をこの印で絞る（1001 ご要望） */}
+              <label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={f.is_royalty_payee} onChange={(e) => set({ is_royalty_payee: e.target.checked })} />ロイヤリティ支払先</label>
             </L>
             <L label="名称1" required><Input value={f.name1} onChange={(e) => set({ name1: e.target.value })} /></L>
             <L label="名称2"><Input value={f.name2} onChange={(e) => set({ name2: e.target.value })} /></L>
@@ -202,7 +208,7 @@ export default function PartnersPage() {
               <Select value={f.sales_staff_id} onChange={(e) => set({ sales_staff_id: e.target.value })}><option value="">（なし）</option>{(staff.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select>
             </L>
             <L label="既定の取引区分">
-              <Select value={f.default_trade_type} onChange={(e) => set({ default_trade_type: e.target.value })} className="!w-[120px]"><option value="">（なし）</option><option>買取</option><option>委託</option></Select>
+              <Select value={f.default_trade_type} onChange={(e) => set({ default_trade_type: e.target.value })} className="!w-[120px]"><option value="">（なし）</option><option>買取</option><option>委託</option><option>仕入</option></Select>
             </L>
             <L label="媒体">
               <Select value={f.media_id} onChange={(e) => set({ media_id: e.target.value })}><option value="">（なし）</option>{(media.data?.items ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select>
@@ -223,7 +229,7 @@ export default function PartnersPage() {
               </Select>
             </L>
             <L label="支払">
-              <Select value={f.payment_month_offset} onChange={(e) => set({ payment_month_offset: e.target.value })} className="!w-[110px]"><option value="">（なし）</option><option value="0">当月</option><option value="1">翌月</option><option value="2">翌々月</option><option value="3">3か月後</option></Select>
+              <Select value={f.payment_month_offset} onChange={(e) => set({ payment_month_offset: e.target.value })} className="!w-[110px]"><option value="">（なし）</option><option value="0">当月</option><option value="1">翌月</option><option value="2">翌々月</option><option value="3">3か月後</option><option value="4">4か月後</option><option value="5">5か月後</option><option value="6">6か月後</option></Select>
               <Select value={f.payment_day} onChange={(e) => set({ payment_day: e.target.value })} className="!w-[100px]"><option value="">日</option>{[5, 10, 15, 20, 25].map((d) => <option key={d} value={d}>{d}日</option>)}<option value="99">末日</option></Select>
             </L>
             <L label="登録番号" hint="インボイス T+13桁"><Input value={f.invoice_registration_no} onChange={(e) => set({ invoice_registration_no: e.target.value })} className="!w-[180px]" /></L>

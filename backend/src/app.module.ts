@@ -34,6 +34,8 @@ import { PartnerOrderImportService } from './imports/partner-order-import.servic
 import { StocksService } from './inventory/stocks.service';
 import { LookupsController } from './masters/lookups.controller';
 import { MastersCrudService } from './masters/masters-crud.service';
+import { MastersCsvController } from './masters/masters-csv.controller';
+import { MastersCsvService } from './masters/masters-csv.service';
 import { MastersWriteController } from './masters/masters-write.controller';
 import { PartnersController } from './masters/partners.controller';
 import { PartnersService } from './masters/partners.service';
@@ -59,6 +61,7 @@ import { ShipmentsService } from './shipping/shipments.service';
     ProductsController,
     LookupsController,
     MastersWriteController,
+    MastersCsvController,
     StocksController,
     InventoryController,
     ReturnsController,
@@ -90,6 +93,7 @@ import { ShipmentsService } from './shipping/shipments.service';
     PartnersService,
     ProductsService,
     MastersCrudService,
+    MastersCsvService,
     StocksService,
     StockLedgerService,
     ReceiptsService,

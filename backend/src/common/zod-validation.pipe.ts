@@ -71,6 +71,7 @@ const FIELD_LABELS: Record<string, string> = {
   shop_product_code: 'ショップ商品コード',
   shipping_jan: '出荷JAN',
   old_cost_price: '旧原価',
+  is_royalty_payee: 'ロイヤリティ支払先',
   old_unit_price: '旧単価',
   price_changed_date: '単価の変更日',
   invoice_addressee: '請求書の宛名',

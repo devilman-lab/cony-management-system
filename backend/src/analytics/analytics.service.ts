@@ -37,12 +37,13 @@ const IS_GOODS = sql`(sl.line_type in ('商品', 'セット商品')
  *
  * セット商品はそれ自体が在庫を持たないため（商品マスタの原価も 0 のまま）、
  * 実際に倉庫から出た構成品の原価を合計する。それ以外の行は
- * 得意先別商品 → 商品マスタ の順に原価を取る。送料・値引のような
- * 商品でない行は原価 0 になる。
+ * **得意先別商品 → SKU → 商品マスタ** の順に、細かいものを先に見る。
+ * SKU の原価は「大きいサイズだけ原価が違う」ときに入れる（1001 ご要望）。
+ * 送料・値引のような商品でない行は原価 0 になる。
  */
 const COST_PER_LINE = sql`(
   case when sl.line_type = 'セット商品' then (
-    select coalesce(sum(coalesce(cpr.cost_price, 0) * a.qty), 0)
+    select coalesce(sum(coalesce(cs.cost_price, cpr.cost_price, 0) * a.qty), 0)
       from allocations a
       join skus cs on cs.id = a.sku_id
       join products cpr on cpr.id = cs.product_id
@@ -50,7 +51,7 @@ const COST_PER_LINE = sql`(
        and a.status in ('引当中', '出荷済')
   )
   -- 在庫が動く行だけ原価を持つ。販促品・非商品は倉庫から出ないので 0。
-  when sl.is_stock_target then coalesce(pp.cost_price, pr.cost_price, 0) * sl.qty
+  when sl.is_stock_target then coalesce(pp.cost_price, s.cost_price, pr.cost_price, 0) * sl.qty
   else 0 end
 )`;
 

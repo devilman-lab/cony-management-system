@@ -3,8 +3,9 @@
 import { useMemo, useState } from 'react';
 
 import { useAuth } from '@/lib/auth';
+import { useSimpleMaster } from '@/lib/hooks';
 import { money } from '@/lib/format';
-import { Badge, Input, Num, Textarea } from '@/components/ui';
+import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { L, Section } from '@/components/masters/Form';
@@ -33,6 +34,8 @@ interface PpRow extends Record<string, unknown> {
   color_name: string | null;
   size_name: string | null;
   product_class_name: string | null;
+  /** 販売先カテゴリー（複数持てるので読点でつないだ文字列。1001 ご要望） */
+  partner_category_names: string | null;
   memo: string | null;
   sort_order: number | null;
   note: string | null;
@@ -71,19 +74,34 @@ export default function PartnerProductsPage() {
   const { canSeeSensitive } = useAuth();
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
   const [partner, setPartner] = useState<Option | null>(null);
+  const [categoryId, setCategoryId] = useState('');
+  const categories = useSimpleMaster('partner_categories');
 
   return (
     <MasterPage<PpRow, Form>
       title="得意先別商品"
       sub="取引先ごとの専用商品コード・卸単価・上代です。受注入力で取引先と SKU を選ぶと、ここの単価と上代が自動で入ります。販社CSVの取込でも突き合わせに使います"
       functionId="M-11"
+      csvSlug="partner-products"
       listPath="/masters/partner-products"
       writePath="/masters/partner-products"
-      extraFilters={{ partner_id: partner?.id }}
+      extraFilters={{ partner_id: partner?.id, partner_category_id: categoryId || undefined }}
       modalWidth={760}
-      toolbar={<SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchCustomers} placeholder="取引先で絞る" />}
+      toolbar={
+        <>
+          <SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchCustomers} placeholder="取引先で絞る" />
+          {/* 販売先カテゴリーで絞る（1001 ご要望） */}
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="!w-[190px]">
+            <option value="">販売先カテゴリー：すべて</option>
+            {(categories.data?.items ?? []).map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </Select>
+        </>
+      }
       columns={[
         { key: 'partner_name', label: '取引先', width: 280, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
+        { key: 'partner_category_names', label: '販売先カテゴリー', width: 140, render: (r) => r.partner_category_names ?? <span className="text-[var(--color-ink-3)]">（なし）</span> },
         { key: 'sku_code', label: 'SKU', width: 150, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
         { key: 'product_name', label: '商品名', render: (r) => r.sales_name || r.product_name },
         { key: 'product_class_name', label: '商品分類', width: 110, render: (r) => r.product_class_name ?? '' },

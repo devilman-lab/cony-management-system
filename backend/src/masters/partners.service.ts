@@ -5,7 +5,8 @@ import { KYSELY, type ConyDatabase } from '../db/database.module';
 
 export interface PartnerListQuery {
   q?: string;
-  role?: 'customer' | 'supplier';
+  /** customer＝得意先、supplier＝仕入先、royalty_payee＝ロイヤリティの支払先 */
+  role?: 'customer' | 'supplier' | 'royalty_payee';
   include_inactive?: boolean;
   /** 媒体・販売担当・カテゴリーで絞る（1001 ご要望）。 */
   media_id?: number;
@@ -55,6 +56,10 @@ export class PartnersService {
       base = base.where('is_customer', '=', true);
     } else if (query.role === 'supplier') {
       base = base.where('is_supplier', '=', true);
+    } else if (query.role === 'royalty_payee') {
+      // ロイヤリティの支払先は得意先として登録されていることがあるため、
+      // 得意先／仕入先ではなく専用の印で絞る（1001 ご要望）
+      base = base.where('is_royalty_payee', '=', true);
     }
     // 媒体・販売担当・カテゴリーで絞る（1001 ご要望「媒体別、担当者で絞れるようにしてほしい」）
     if (query.media_id !== undefined) {
@@ -100,6 +105,7 @@ export class PartnersService {
           'closing_day',
           'default_trade_type',
           'sales_staff_id',
+          'is_royalty_payee',
           'media_id',
           'partner_category_id',
           'is_active',

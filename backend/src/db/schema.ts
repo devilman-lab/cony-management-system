@@ -412,6 +412,8 @@ export interface PartnersTable {
   shipping_fee_amount: string | null;
   /** 既定の取引条件（委託／買取）。受注で自動表示し変更可  [VARCHAR(10)] */
   default_trade_type: string | null;
+  /** ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る  [BOOLEAN] */
+  is_royalty_payee: Generated<boolean>;
   /** ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。 締め日（99＝月末）  [SMALLINT] */
   closing_day: number | null;
   /** [SMALLINT] */
@@ -838,6 +840,8 @@ export interface SkusTable {
   fba_jan: string | null;
   /** [VARCHAR(60)] */
   shop_product_code: string | null;
+  /** このSKUだけの原価。空欄なら商品の原価を使う  [money_amt] */
+  cost_price: string | null;
   /** [INTEGER] */
   sort_order: number | null;
   /** [BOOLEAN] */

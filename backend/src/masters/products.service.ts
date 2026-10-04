@@ -126,6 +126,8 @@ export class ProductsService {
         's.sku_code as sku_code',
         's.jan as jan',
         's.pack_division as pack_division',
+        // このSKUだけの原価（サイズ別原価。1001 ご要望）。権限が無い人には下で落とす
+        's.cost_price as cost_price',
         's.color_id as color_id',
         's.size_id as size_id',
         'c.code as color_code',
@@ -138,7 +140,11 @@ export class ProductsService {
       .orderBy('s.sku_code', 'asc')
       .execute();
 
-    return { ...stripCost(product as Record<string, unknown>, showCost), skus };
+    return {
+      ...stripCost(product as Record<string, unknown>, showCost),
+      // SKU の原価も同じ扱い。項目そのものを返さないので、画面側で消し忘れることがない
+      skus: skus.map((r) => stripCost(r as Record<string, unknown>, showCost)),
+    };
   }
 
   /**

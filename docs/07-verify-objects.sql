@@ -26,9 +26,10 @@ WITH expected(sort_key, category, item, actual, expect) AS (
          (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
            WHERE n.nspname = 'cony' AND t.typtype = 'd'), 3
   UNION ALL
+  -- JAN の決まりを確かめる fn_check_sku_jan を足して 9（1001 ご要望）
   SELECT 130, '構造', '関数',
          (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-           WHERE n.nspname = 'cony'), 8
+           WHERE n.nspname = 'cony'), 9
   UNION ALL
   SELECT 140, '構造', '生成列（有効在庫・引当対象・ロイヤリティ適用優先度）',
          (SELECT count(*) FROM information_schema.columns

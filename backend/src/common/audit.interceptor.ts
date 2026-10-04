@@ -6,6 +6,7 @@ import { map, mergeMap } from 'rxjs/operators';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { RequestWithUser } from '../auth/guards';
 import { SIMPLE_MASTERS } from '../masters/masters-crud.service';
+import { MASTER_CSV } from '../masters/masters-csv';
 
 /**
  * 操作履歴（audit_logs）を残す。
@@ -26,8 +27,12 @@ import { SIMPLE_MASTERS } from '../masters/masters-crud.service';
 type IdFrom = 'param' | 'response' | 'none';
 
 interface Rule {
-  /** 実在のテーブル名。'kind' のときは URL の :kind（分類マスタ）を使う。 */
-  table: string | 'kind';
+  /**
+   * 実在のテーブル名。
+   *   'kind' … URL の :kind（分類マスタ）を使う
+   *   'slug' … URL の :slug（CSV 取り込みの対象マスタ）を使う
+   */
+  table: string | 'kind' | 'slug';
   action: 'insert' | 'update' | 'delete';
   idFrom: IdFrom;
   /** idFrom が param のときの、URL の変数名。既定は id。 */
@@ -83,6 +88,9 @@ const RULES: Record<string, Rule> = {
   'POST masters/simple/:kind': { table: 'kind', action: 'insert', idFrom: 'response' },
   'PATCH masters/simple/:kind/:id': { table: 'kind', action: 'update', idFrom: 'param' },
   'POST masters/simple/:kind/:id/deactivate': { table: 'kind', action: 'update', idFrom: 'param' },
+  // CSV 取り込み。まとめて書き換えるので、どの行かではなく「どのマスタを取り込んだか」を残す。
+  // 下見（dry_run=true）は何も変えないので残らない。CSV の中身そのものも残さない（BULKY）。
+  'POST masters/csv/:slug/import': { table: 'slug', action: 'update', idFrom: 'none' },
   'POST masters/partners': { table: 'partners', action: 'insert', idFrom: 'response' },
   'PATCH masters/partners/:id': { table: 'partners', action: 'update', idFrom: 'param' },
   'POST masters/partners/:id/deactivate': { table: 'partners', action: 'update', idFrom: 'param' },
@@ -229,6 +237,12 @@ export class AuditInterceptor implements NestInterceptor {
 
   /** :kind（分類マスタ）は URL の文字だが、SIMPLE_MASTERS に載っているものしか通さない。 */
   private resolveTable(rule: Rule, req: RequestWithUser): string | null {
+    // CSV 取り込みは、どのマスタを書き換えたかが URL の :slug で決まる。
+    // 表に載っている slug しか通さない（URL の文字をそのまま表名にしない）。
+    if (rule.table === 'slug') {
+      const slug = String(req.params?.slug ?? '');
+      return MASTER_CSV[slug]?.table ?? null;
+    }
     if (rule.table !== 'kind') return rule.table;
     const kind = String(req.params?.kind ?? '');
     return kind in SIMPLE_MASTERS ? kind : null;

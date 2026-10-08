@@ -7,7 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { useSalesCategories, useSimpleMaster, useWarehouses } from '@/lib/hooks';
 import { money, today } from '@/lib/format';
 import { Button, Card, CardHead, ErrorBox, FormRow, Input, Select, Textarea } from '@/components/ui';
-import { SearchSelect, fetchDestinations, fetchPartners, fetchSkus, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
+import { SearchSelect, fetchDestinations, fetchPartners, fetchSkusFor, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
 const LINE_TYPES = ['商品', 'セット商品', '販促品', '送料', '値引', '非商品'] as const;
@@ -163,7 +163,8 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     const p = o.raw as PartnerRow;
     setD((s) => ({
       ...s,
-      trade_type: (p.default_trade_type as '委託' | '買取' | null) ?? s.trade_type,
+      // 受注の取引条件は委託・買取の2つ。取引先の既定値が仕入先向けの「仕入」のときは持ち込まない
+      trade_type: p.default_trade_type === '委託' || p.default_trade_type === '買取' ? p.default_trade_type : s.trade_type,
       // 取引先を変えたら販売担当も必ずその取引先の既定にそろえる（前の取引先の担当を残さない）
       sales_staff_id: p.sales_staff_id ? String(p.sales_staff_id) : '',
     }));
@@ -184,6 +185,10 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
   }, [initial]);
 
   // 商品を選んだら得意先別商品の単価を引く
+  // 選んでいる取引先の先方JAN・出荷JANでも商品を引けるようにする（取引先が変わったときだけ作り直す）
+  const partnerId = d.partner?.id ?? null;
+  const fetchSkusForPartner = useMemo(() => fetchSkusFor(partnerId), [partnerId]);
+
   const onSku = async (key: number, o: Option | null) => {
     if (!o) {
       setLine(key, { sku: null, partner_product_id: null, note: undefined });
@@ -424,14 +429,15 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                         </td>
                         <td>
                           {needsSku ? (
-                            <SearchSelect value={l.sku} onChange={(o) => onSku(l.key, o)} fetchOptions={fetchSkus} placeholder="SKU・JAN・商品名で検索" width="100%" />
+                            <SearchSelect value={l.sku} onChange={(o) => onSku(l.key, o)} fetchOptions={fetchSkusForPartner} placeholder={d.partner ? 'SKU・JAN・先方JAN・商品名で検索' : 'SKU・JAN・商品名で検索'} width="100%" />
                           ) : (
                             <span className="text-[11px] text-[var(--color-ink-3)]">—</span>
                           )}
                         </td>
-                        <td className="truncate">
+                        <td>
                           <Input value={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder={needsSku ? '（商品名）' : l.line_type} />
-                          {l.note && <span className="text-[10.5px] text-[var(--color-brand-600)] ml-1">{l.note}</span>}
+                          {/* 専用コード・出荷JAN は欄の下に出す（欄の右に並べると、はみ出して「…」になり読めなかった） */}
+                          {l.note && <div className="text-[10.5px] text-[var(--color-brand-600)] mt-0.5 whitespace-normal">{l.note}</div>}
                         </td>
                         <td className="r">
                           <Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" />

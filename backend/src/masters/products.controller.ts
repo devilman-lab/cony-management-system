@@ -21,6 +21,8 @@ type ListQuery = z.infer<typeof ListQuerySchema>;
 
 const SkuSearchSchema = z.object({
   q: z.string().trim().min(1).max(60).optional(),
+  /** 受注入力で取引先を選んでいるとき。その取引先の先方JAN・出荷JAN・専用コードでも引けるようにする */
+  partner_id: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 type SkuSearchQuery = z.infer<typeof SkuSearchSchema>;

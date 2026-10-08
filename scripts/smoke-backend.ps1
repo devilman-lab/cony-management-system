@@ -112,16 +112,17 @@ Write-Host '=== 1. 使い捨てデータベースを用意 ===' -ForegroundColor
 Cleanup
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 & "$PG\initdb.exe" -D $data -U postgres -A trust -E UTF8 --locale=C | Out-Null
-# pg_ctl はコンソールを掴んだまま返らないことがあるため、postgres を直接起動する
-$pgProc = Start-Process -FilePath "$PG\postgres.exe" `
-  -ArgumentList @('-D', "`"$data`"", '-p', "$PgPort", '-c', 'listen_addresses=localhost') `
-  -PassThru -WindowStyle Hidden `
-  -RedirectStandardOutput "$work\pg.log" -RedirectStandardError "$work\pg.err"
-$pgProc.Id | Out-File (Join-Path $work 'pg.pid') -Encoding ascii
-for ($i = 0; $i -lt 30; $i++) {
+# postgres.exe を直接起動すると、管理者権限のユーザー（Administrator）では
+# 「Execution of PostgreSQL by a user with administrative permissions is not permitted」で起動しない。
+# pg_ctl は権限を落として起動できるため、こちらを使う。pg_ctl は待たずに切り離し
+# （コンソールを掴んだまま返らないことがあるため）、起動したかは pg_isready で確かめる。
+Start-Process -FilePath "$PG\pg_ctl.exe" -ArgumentList @('start', '-D', "`"$data`"", '-o', "`"-p $PgPort -c listen_addresses=localhost`"", '-l', "`"$work\pg.log`"") -WindowStyle Hidden
+for ($i = 0; $i -lt 60; $i++) {
   Start-Sleep -Milliseconds 500
-  if ((Test-NetConnection -ComputerName localhost -Port $PgPort -WarningAction SilentlyContinue).TcpTestSucceeded) { break }
+  & "$PG\pg_isready.exe" -h localhost -p $PgPort -q
+  if ($LASTEXITCODE -eq 0) { break }
 }
+(Get-Content (Join-Path $data 'postmaster.pid') -TotalCount 1).Trim() | Out-File (Join-Path $work 'pg.pid') -Encoding ascii
 cmd /c ('"{0}\createdb.exe" -h localhost -p {1} -U postgres cony_test 2>&1' -f $PG, $PgPort) | Out-Null
 
 Write-Host '=== 2. スキーマと初期データ、受入テスト ===' -ForegroundColor Cyan
@@ -1036,27 +1037,33 @@ Check '存在しない設定は 404' {
 Write-Host '=== 23. ロイヤリティ規定の登録 ===' -ForegroundColor Cyan
 $payee = PostJson "$B/masters/partners" @{ partner_code='LIC9'; name1='新ライセンサー'; is_supplier=$true }
 $brandForRule = PostJson "$B/masters/simple/brands" @{ code='RULEBRAND'; name='規定用ブランド' }
+# 媒体は入力必須（1001 ご要望）
+$mediaForRule = PostJson "$B/masters/simple/media" @{ code='RULEMEDIA'; name='規定用媒体' }
 $rule = PostJson "$B/masters/royalty-rules" @{
-  payee_partner_id=$payee.id; brand_id=$brandForRule.id; calc_base='出荷'; rate='0.0300'; valid_from="$month-01"
+  payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id; calc_base='出荷'; rate='0.0300'; valid_from="$month-01"
 }
 Check 'ロイヤリティ規定を登録できる' { [decimal]$rule.rate -eq 0.03 }
 Check '優先度が自動で計算される（ブランド指定=1）' { [int]$rule.scope_priority -eq 1 }
 $excl = PostJson "$B/masters/royalty-rules" @{
-  payee_partner_id=$payee.id; brand_id=$brandForRule.id; customer_partner_id=$newPartner.id
+  payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id; customer_partner_id=$newPartner.id
   is_excluded=$true; calc_base='出荷'; valid_from="$month-01"
 }
 Check '対象外の規定を登録できる' { $excl.is_excluded -eq $true }
 Check '販売先を指定すると優先度が上がる（1+4=5）' { [int]$excl.scope_priority -eq 5 }
-Check '対象外に料率を入れると 400' {
+Check '媒体を選ばない規定は 400' {
   (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; brand_id=$brandForRule.id
+    calc_base='出荷'; rate='0.0300'; valid_from="$month-02" } }) -eq 400
+}
+Check '対象外に料率を入れると 400' {
+  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id
     is_excluded=$true; rate='0.0100'; calc_base='出荷'; valid_from="$month-01" } }) -eq 400
 }
 Check '対象なのに料率も定額もないと 400' {
-  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; brand_id=$brandForRule.id
+  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id
     is_excluded=$false; calc_base='出荷'; valid_from="$month-01" } }) -eq 400
 }
 Check '同じ範囲・同じ開始日の二重登録は 409' {
-  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; brand_id=$brandForRule.id
+  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id
     calc_base='出荷'; rate='0.0500'; valid_from="$month-01" } }) -eq 409
 }
 Check '規定の一覧に支払先・販売先の名前が出る' {
@@ -1065,7 +1072,7 @@ Check '規定の一覧に支払先・販売先の名前が出る' {
   $row.payee_name -eq '新ライセンサー' -and $row.customer_name -eq '新規取引先'
 }
 Check '料率改定は新しい適用開始日で行を足す' {
-  $next = PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; brand_id=$brandForRule.id
+  $next = PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id
     calc_base='出荷'; rate='0.0400'; valid_from='2027-01-01' }
   [decimal]$next.rate -eq 0.04
 }
@@ -1682,6 +1689,27 @@ Check '無効にしたマスタを PATCH is_active=true で有効に戻せる' {
 }
 
 
+Write-Host '=== 31. マスタ編フィードバック（1001）の受入テストで見つかった不具合の回帰確認 ===' -ForegroundColor Cyan
+# 確認の中身は scripts\verify-master-feedback.mjs。1行に1項目「OK/NG<TAB>項目名」で返ってくる。
+$env:CONY_API  = $B
+$env:CONY_PASS = $pass
+# node の出力（UTF-8）を化けずに受け取る
+$prevEnc = [Console]::OutputEncoding
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try {
+  $mfLines = & node (Join-Path $root 'scripts\verify-master-feedback.mjs') 2>&1
+} catch {
+  # node が途中で落ちると stderr への出力で例外になる。理由を NG として残し、smoke は最後まで流す
+  $mfLines = @("NG`tverify-master-feedback.mjs が途中で止まりました`t$($_.Exception.Message)")
+}
+try { [Console]::OutputEncoding = $prevEnc } catch {}
+if (-not $mfLines) { Check 'verify-master-feedback.mjs が結果を返す' { $false } }
+foreach ($ln in @($mfLines)) {
+  $parts = ([string]$ln) -split "`t"
+  if ($parts[0] -eq 'OK') { Check $parts[1] { $true } }
+  elseif ($parts[0] -eq 'NG') { $detail = ($parts[2..($parts.Length - 1)] -join ' '); Check ($parts[1] + '  -> ' + $detail) { $false } }
+  else { Check ('verify-master-feedback.mjs: ' + [string]$ln) { $false } }
+}
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

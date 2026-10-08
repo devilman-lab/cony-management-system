@@ -24,6 +24,8 @@ function stripCost<T extends Record<string, unknown>>(row: T, showCost: boolean)
 export interface SkuSearchQuery {
   q?: string;
   limit: number;
+  /** 取引先を渡すと、その取引先の先方JAN・出荷JAN・専用コードでも引く */
+  partner_id?: number;
 }
 
 @Injectable()
@@ -125,6 +127,10 @@ export class ProductsService {
         's.id as id',
         's.sku_code as sku_code',
         's.jan as jan',
+        // 画面はこの詳細の値を起点に保存し直すため、編集できる欄はすべて返す。
+        // 返していなかった2項目が、SKU を保存するたびに空で上書きされて消えていた。
+        's.fba_jan as fba_jan',
+        's.shop_product_code as shop_product_code',
         's.pack_division as pack_division',
         // このSKUだけの原価（サイズ別原価。1001 ご要望）。権限が無い人には下で落とす
         's.cost_price as cost_price',
@@ -153,11 +159,17 @@ export class ProductsService {
    * 現場は JAN を読み取ることも商品名で探すこともあるため、入口を分けない。
    */
   async searchSkus(query: SkuSearchQuery) {
+    // 取引先が分かっているときは、その取引先の得意先別商品（先方JAN・出荷JAN・専用コード）も一緒に引く。
+    // 受注入力で先方JANを打つと出荷JANが出るようにするため（1001 ご要望）。取引先×SKU は1件まで（一意）。
+    const partnerId = query.partner_id ?? 0;
     let q = this.db
       .selectFrom('skus as s')
       .innerJoin('products as p', 'p.id', 's.product_id')
       .leftJoin('colors as c', 'c.id', 's.color_id')
       .leftJoin('sizes as z', 'z.id', 's.size_id')
+      .leftJoin('partner_products as pp', (j) =>
+        j.onRef('pp.sku_id', '=', 's.id').on('pp.partner_id', '=', partnerId).on('pp.is_active', '=', true),
+      )
       .where('s.is_active', '=', true)
       .where('p.is_active', '=', true);
 
@@ -169,6 +181,9 @@ export class ProductsService {
           eb('s.jan', 'ilike', like),
           eb('p.product_code', 'ilike', like),
           eb('p.product_name', 'ilike', like),
+          eb('pp.partner_jan', 'ilike', like),
+          eb('pp.shipping_jan', 'ilike', like),
+          eb('pp.partner_product_code', 'ilike', like),
         ]),
       );
     }
@@ -185,6 +200,9 @@ export class ProductsService {
         'p.tax_rate as tax_rate',
         'c.name as color_name',
         'z.name as size_name',
+        'pp.partner_jan as partner_jan',
+        'pp.shipping_jan as shipping_jan',
+        'pp.partner_product_code as partner_product_code',
       ])
       .orderBy('s.sku_code', 'asc')
       .limit(query.limit)

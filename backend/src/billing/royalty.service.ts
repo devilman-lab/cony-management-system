@@ -32,25 +32,55 @@ export class RoyaltyService {
     const roundingMode = await this.settings.text('ROYALTY_ROUNDING_MODE', 'floor');
     const includeReturns = await this.settings.bool('ROYALTY_INCLUDE_RETURNS', true);
 
+    // 有効な規定を持つ支払先に加えて、この月に確定前の計算表がある支払先も計算し直す。
+    // 規定をすべて「使わない」にした支払先の計算表が、古い金額のまま残らないようにするため。
     const payees = await this.db
-      .selectFrom('royalty_rules as r')
-      .innerJoin('partners as p', 'p.id', 'r.payee_partner_id')
-      .select(['r.payee_partner_id as id', 'p.name1 as name'])
-      .where('r.is_active', '=', true)
-      .groupBy(['r.payee_partner_id', 'p.name1'])
+      .selectFrom('partners as p')
+      .select(['p.id as id', 'p.name1 as name'])
+      .where((eb) =>
+        eb.or([
+          eb.exists(
+            eb.selectFrom('royalty_rules as r').select('r.id').whereRef('r.payee_partner_id', '=', 'p.id').where('r.is_active', '=', true),
+          ),
+          eb.exists(
+            eb
+              .selectFrom('royalty_calculations as c')
+              .select('c.id')
+              .whereRef('c.payee_partner_id', '=', 'p.id')
+              .where('c.target_month', '=', monthStart)
+              .where('c.status', '<>', '確定'),
+          ),
+        ]),
+      )
+      .orderBy('p.id')
       .execute();
 
     if (payees.length === 0) throw new BadRequestException('ロイヤリティ規定が登録されていません');
 
+    // 確定済みの支払先は計算し直さずに飛ばし、ほかの支払先は計算する。
+    // 以前は1社でも確定していると途中で 409 になり、それより前の支払先だけ計算し直された状態で止まっていた。
+    const confirmed = await this.db
+      .selectFrom('royalty_calculations')
+      .select('payee_partner_id')
+      .where('target_month', '=', monthStart)
+      .where('status', '=', '確定')
+      .execute();
+    const confirmedIds = new Set(confirmed.map((c) => Number(c.payee_partner_id)));
+    const skipped = payees.filter((p) => confirmedIds.has(Number(p.id))).map((p) => p.name);
+    const targets = payees.filter((p) => !confirmedIds.has(Number(p.id)));
+    if (targets.length === 0) {
+      throw new ConflictException(`${monthStart} 分は、すべての支払先がすでに確定しています`);
+    }
+
     const results = [];
-    for (const payee of payees) {
+    for (const payee of targets) {
       results.push(
         await this.db
           .transaction()
           .execute((trx) => this.calculateOne(trx, payee.id, payee.name, monthStart, roundingMode, includeReturns, userId)),
       );
     }
-    return { target_month: targetMonth, payees: results.length, calculations: results };
+    return { target_month: targetMonth, payees: results.length, calculations: results, skipped_confirmed: skipped };
   }
 
   private async calculateOne(

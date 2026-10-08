@@ -41,9 +41,15 @@ export default function RoyaltyPage() {
     if (!(await confirm(`${month} のロイヤリティを計算しますか`, '出荷済みの明細に規定を当てて、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
     setBusy(true);
     try {
-      const r = await api.post<{ calculations?: unknown[] } | unknown[]>('/billing/royalties/calculate', { target_month: month });
+      const r = await api.post<{ calculations?: unknown[]; skipped_confirmed?: string[] } | unknown[]>('/billing/royalties/calculate', { target_month: month });
       const n = Array.isArray(r) ? r.length : (r as { calculations?: unknown[] }).calculations?.length ?? 0;
-      toast(`計算しました（支払先 ${n} 件）`, 'good');
+      const skipped = Array.isArray(r) ? [] : (r.skipped_confirmed ?? []);
+      toast(
+        skipped.length > 0
+          ? `計算しました（支払先 ${n} 件。確定済みの ${skipped.join('、')} は計算し直していません）`
+          : `計算しました（支払先 ${n} 件）`,
+        'good',
+      );
       await list.reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : '失敗しました', 'bad');

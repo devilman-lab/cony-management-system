@@ -5,10 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { sql } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
+import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
 
 export interface PurchaseLineInput {
@@ -22,8 +23,18 @@ export interface PurchaseLineInput {
   target_brand_id?: number | null;
   target_product_class_id?: number | null;
   tax_rate?: string;
+  /** 税区分（区分値 TAX_DIVISION）。省略時は仕入項目マスタの税区分を使う（1001 ご要望） */
+  tax_division_code_id?: number | null;
   note?: string | null;
 }
+
+/** 税区分ごとの税率。区分と税率が食い違ったまま保存されないようにする。 */
+const TAX_RATE_BY_DIVISION: Record<string, string> = {
+  TAX10: '10.00',
+  TAX8: '8.00',
+  EXEMPT: '0.00',
+  NON_TAX: '0.00',
+};
 
 export interface CreatePurchaseInput {
   division: '仕入' | '経費';
@@ -125,6 +136,59 @@ export class PurchasingService {
     private readonly numbering: NumberingService,
   ) {}
 
+  /**
+   * 明細ごとの税区分と税率を決める（1001 ご要望「仕入項目に税区分」）。
+   *  - 明細で税区分を指定していればそれを使い、税率は税区分から決める（食い違いは 400）。
+   *  - 指定がなく仕入項目を選んでいれば、仕入項目マスタの税区分・税率を使う。
+   *  - どちらもなければ、明細の税率（省略時は DB の既定 10%）のまま税区分は空。
+   */
+  private async resolveLineTax(
+    db: Transaction<DB>,
+    lines: PurchaseLineInput[],
+  ): Promise<Array<{ tax_rate: string | undefined; tax_division_code_id: number | null }>> {
+    const divisions = await db
+      .selectFrom('codes as c')
+      .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
+      .select(['c.id as id', 'c.code as code', 'c.name as name'])
+      .where('cc.code', '=', 'TAX_DIVISION')
+      .execute();
+    const byId = new Map(divisions.map((d) => [Number(d.id), d]));
+
+    const itemIds = [...new Set(lines.map((l) => l.purchase_item_id).filter((v): v is number => !!v))];
+    const items = itemIds.length
+      ? await db
+          .selectFrom('purchase_items')
+          .select(['id', 'new_tax_rate', 'new_tax_class_code_id'])
+          .where('id', 'in', itemIds)
+          .execute()
+      : [];
+    const itemById = new Map(items.map((x) => [Number(x.id), x]));
+
+    return lines.map((l) => {
+      let divisionId = l.tax_division_code_id ?? null;
+      let rate = l.tax_rate;
+      if (divisionId === null && l.purchase_item_id) {
+        const item = itemById.get(l.purchase_item_id);
+        if (item?.new_tax_class_code_id) divisionId = Number(item.new_tax_class_code_id);
+        if (rate === undefined && item?.new_tax_rate != null) rate = Number(item.new_tax_rate).toFixed(2);
+      }
+      if (divisionId !== null) {
+        const d = byId.get(divisionId);
+        if (!d) throw new BadRequestException(`${l.line_no}行目：税区分が見つかりません`);
+        const expected = TAX_RATE_BY_DIVISION[d.code];
+        if (expected !== undefined) {
+          if (l.tax_rate !== undefined && Number(l.tax_rate) !== Number(expected)) {
+            throw new BadRequestException(
+              `${l.line_no}行目：税区分「${d.name}」の税率は ${Number(expected)}% です（入力は ${Number(l.tax_rate)}%）`,
+            );
+          }
+          rate = expected;
+        }
+      }
+      return { tax_rate: rate, tax_division_code_id: divisionId };
+    });
+  }
+
   async create(input: CreatePurchaseInput, userId: number) {
     if (input.lines.length === 0) throw new BadRequestException('明細を1行以上入力してください');
 
@@ -139,6 +203,7 @@ export class PurchasingService {
     }
 
     return this.db.transaction().execute(async (trx) => {
+      const lineTax = await this.resolveLineTax(trx, input.lines);
       const purchaseNo = await this.numbering.next(trx, 'purchase');
 
       const purchase = await trx
@@ -163,7 +228,7 @@ export class PurchasingService {
       await trx
         .insertInto('purchase_lines')
         .values(
-          input.lines.map((l) => ({
+          input.lines.map((l, i) => ({
             purchase_id: purchase.id,
             line_no: l.line_no,
             purchase_item_id: l.purchase_item_id ?? null,
@@ -171,7 +236,8 @@ export class PurchasingService {
             qty: l.qty ?? '1',
             unit_cost: l.unit_cost,
             subtotal: sql<string>`${l.qty ?? '1'}::numeric * ${l.unit_cost}::numeric`,
-            tax_rate: l.tax_rate ?? undefined,
+            tax_rate: lineTax[i].tax_rate ?? undefined,
+            tax_division_code_id: lineTax[i].tax_division_code_id,
             target_product_id: l.target_product_id ?? null,
             target_brand_id: l.target_brand_id ?? null,
             target_product_class_id: l.target_product_class_id ?? null,

@@ -95,6 +95,7 @@ export class OrdersService {
 
       // 販売担当は取引先マスタの担当者を初期値にし、受注ごとに変えられる（9/15 ご要望）。
       const salesStaffId = input.sales_staff_id ?? (await this.defaultStaff(trx, input.partner_id));
+      const tradeType = input.trade_type ?? (await this.defaultTradeType(trx, input.partner_id));
 
       // サンプル出荷は売上・請求に計上しない（確認事項④）。
       // データベース側にも ck_so_sample があり、後から売上計上には変えられない。
@@ -108,7 +109,7 @@ export class OrdersService {
           partner_id: input.partner_id,
           delivery_destination_id: input.delivery_destination_id ?? null,
           sales_category_id: input.sales_category_id,
-          trade_type: input.trade_type ?? '買取',
+          trade_type: tradeType,
           sales_staff_id: salesStaffId,
           po_no: input.po_no ?? null,
           po_line_no: input.po_line_no ?? null,
@@ -153,6 +154,20 @@ export class OrdersService {
       .where('id', '=', partnerId)
       .executeTakeFirst();
     return p?.sales_staff_id ?? null;
+  }
+
+  /**
+   * 取引条件の初期値は取引先マスタの既定値（確認事項③）。
+   * 取引先の既定値には仕入先向けの「仕入」もあるが（1001 ご要望）、受注の取引条件は
+   * 委託・買取の2つだけなので、それ以外のときは買取にする。
+   */
+  private async defaultTradeType(trx: Transaction<DB>, partnerId: number): Promise<'委託' | '買取'> {
+    const p = await trx
+      .selectFrom('partners')
+      .select('default_trade_type')
+      .where('id', '=', partnerId)
+      .executeTakeFirst();
+    return p?.default_trade_type === '委託' ? '委託' : '買取';
   }
 
   private writeResult(

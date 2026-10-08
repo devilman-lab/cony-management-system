@@ -31,6 +31,8 @@ interface PurchaseItem {
   purchase_code: string;
   item_name: string;
   unit_cost: string;
+  new_tax_rate: string | null;
+  new_tax_class_code_id: number | null;
 }
 
 interface ProductOpt {
@@ -49,10 +51,15 @@ interface LineDraft {
   product: Option | null;
   brand_id: string;
   class_id: string;
+  /** 税区分（区分値 TAX_DIVISION の id）。空なら課税10% */
+  tax_division_id: string;
   tax_rate: string;
 }
 let seq = 1;
-const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_rate: '10.00' });
+const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_division_id: '', tax_rate: '10.00' });
+
+/** 税区分ごとの税率。税率は税区分から決め、食い違ったまま保存されないようにする */
+const RATE_BY_TAX_DIVISION: Record<string, string> = { TAX10: '10.00', TAX8: '8.00', EXEMPT: '0.00', NON_TAX: '0.00' };
 
 /** NUMERIC は "1200.00" の形で返る。入力欄に入れるときだけ見た目を整える（数値には通さない）。 */
 const plain = (v: string | null | undefined): string => (v ?? '').replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
@@ -74,6 +81,11 @@ export default function PurchasesPage() {
   // 通貨と経費区分。どちらも「分類・区分・設定 ＞ 区分値」から増やせる（1001 ご要望）。
   const currencies = useCodes('CURRENCY');
   const expenses = useCodes('EXPENSE_DIVISION');
+  const taxDivisions = useCodes('TAX_DIVISION');
+  const rateOfDivision = (id: string) => {
+    const d = (taxDivisions.data?.values ?? []).find((x) => String(x.id) === id);
+    return (d && RATE_BY_TAX_DIVISION[d.code]) ?? '10.00';
+  };
 
   const [division, setDivision] = useState('');
   const [supplier, setSupplier] = useState<Option | null>(null);
@@ -90,7 +102,10 @@ export default function PurchasesPage() {
   const pickItem = (key: number, id: string) => {
     const m = (items.data?.items ?? []).find((x) => String(x.id) === id);
     if (!m) return setLine(key, { purchase_item_id: '' });
-    setLine(key, { purchase_item_id: id, item_name: m.item_name, unit_cost: plain(m.unit_cost) });
+    // 仕入項目マスタの税区分・税率も写す（1001 ご要望。以前は品名と単価だけで、軽減8%の品目も10%で登録されていた）
+    const division = m.new_tax_class_code_id ? String(m.new_tax_class_code_id) : '';
+    const rate = division ? rateOfDivision(division) : m.new_tax_rate != null ? Number(m.new_tax_rate).toFixed(2) : '10.00';
+    setLine(key, { purchase_item_id: id, item_name: m.item_name, unit_cost: plain(m.unit_cost), tax_division_id: division, tax_rate: rate });
   };
 
   const [cancelId, setCancelId] = useState<number | null>(null);
@@ -134,6 +149,7 @@ export default function PurchasesPage() {
           target_brand_id: l.target === 'brand' && l.brand_id ? Number(l.brand_id) : null,
           target_product_class_id: l.target === 'class' && l.class_id ? Number(l.class_id) : null,
           tax_rate: l.tax_rate,
+          tax_division_code_id: l.tax_division_id ? Number(l.tax_division_id) : null,
         })),
       });
       toast('登録しました', 'good');
@@ -217,7 +233,7 @@ export default function PurchasesPage() {
                 <th className="r" style={{ width: 100 }}>単価</th>
                 <th style={{ width: 110 }}>紐づけ先</th>
                 <th style={{ width: 220 }}>対象</th>
-                <th style={{ width: 70 }}>税率</th>
+                <th style={{ width: 100 }}>税区分</th>
                 <th style={{ width: 44 }} />
               </tr>
             </thead>
@@ -246,7 +262,12 @@ export default function PurchasesPage() {
                     {l.target === 'brand' && <Select value={l.brand_id} onChange={(e) => setLine(l.key, { brand_id: e.target.value })} className="!h-[26px]"><option value="">選んでください</option>{(brands.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
                     {l.target === 'class' && <Select value={l.class_id} onChange={(e) => setLine(l.key, { class_id: e.target.value })} className="!h-[26px]"><option value="">選んでください</option>{(classes.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
                   </td>
-                  <td><Select value={l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} className="!h-[26px]"><option value="10.00">10%</option><option value="8.00">8%</option><option value="0.00">0%</option></Select></td>
+                  <td>
+                    <Select value={l.tax_division_id} onChange={(e) => setLine(l.key, { tax_division_id: e.target.value, tax_rate: e.target.value ? rateOfDivision(e.target.value) : '10.00' })} className="!h-[26px]">
+                      <option value="">（指定なし・10%）</option>
+                      {(taxDivisions.data?.values ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </Select>
+                  </td>
                   <td className="c"><button type="button" className="btn btn-quiet !px-1.5 !h-6" disabled={lines.length === 1} onClick={() => setLines((s) => s.filter((x) => x.key !== l.key))}>×</button></td>
                 </tr>
               ))}

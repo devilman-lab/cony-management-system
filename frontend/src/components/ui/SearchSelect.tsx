@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 
 import { api, type Paged } from '@/lib/api';
 import { useDebounce } from '@/lib/hooks';
@@ -11,6 +12,82 @@ export interface Option {
   sub?: string;
   /** 呼び手が使う元データ */
   raw?: unknown;
+}
+
+const LIST_MAX_HEIGHT = 260;
+const EDGE = 8;
+
+/**
+ * 候補の一覧を、入力欄の真下（入らなければ真上）に重ねて出す。
+ *
+ * 一覧は body の直下に描く。入力欄の中に描くと、明細表のセル（overflow:hidden）や
+ * 横スクロールする表の枠、ダイアログの枠で切られて、候補が見えず選べなかった
+ * （受注入力・入荷・在庫調整・セット登録の商品欄、得意先別商品の SKU 欄）。
+ * 位置は入力欄の画面上の座標から決め、スクロールや画面の大きさが変わるたびに付け直す。
+ */
+function FloatingList({
+  anchor,
+  listRef,
+  children,
+}: {
+  anchor: RefObject<HTMLElement | null>;
+  listRef: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}) {
+  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', visibility: 'hidden', left: 0, top: 0 });
+
+  const place = useCallback(() => {
+    const a = anchor.current;
+    const list = listRef.current;
+    if (!a) return;
+    const r = a.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const listHeight = Math.min(list?.offsetHeight ?? LIST_MAX_HEIGHT, LIST_MAX_HEIGHT + 2);
+    const below = vh - r.bottom - EDGE;
+    const above = r.top - EDGE;
+    const openUp = below < listHeight && above > below;
+    // 右端からはみ出す分だけ左へずらす（ダイアログの右端で切れていた）
+    const width = list?.offsetWidth ?? r.width;
+    const left = Math.max(EDGE, Math.min(r.left, vw - EDGE - width));
+    const next: CSSProperties = {
+      position: 'fixed',
+      left,
+      minWidth: r.width,
+      maxWidth: `min(640px, ${vw - EDGE * 2}px)`,
+      ...(openUp ? { bottom: vh - r.top + 4 } : { top: r.bottom + 4 }),
+      visibility: 'visible',
+    };
+    // 描画のたびに測り直すので、位置が変わったときだけ更新する（同じ値で更新し続けないため）
+    setStyle((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+  }, [anchor, listRef]);
+
+  useLayoutEffect(() => {
+    place();
+  });
+
+  useEffect(() => {
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [place]);
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      ref={listRef}
+      className="z-[1000] w-max card overflow-hidden"
+      style={{ ...style, boxShadow: '0 10px 28px rgb(18 36 45 / .18)' }}
+    >
+      <div className="overflow-auto" style={{ maxHeight: LIST_MAX_HEIGHT }}>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /**
@@ -41,6 +118,7 @@ export function SearchSelect({
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -85,7 +163,9 @@ export function SearchSelect({
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) commitRef.current();
+      const t = e.target as Node;
+      // 候補の一覧は body の直下にあるので、入力欄の箱とは別に見る
+      if (box.current && !box.current.contains(t) && !list.current?.contains(t)) commitRef.current();
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -152,11 +232,8 @@ export function SearchSelect({
         画面からはみ出さないよう上限を付けてある。
       */}
       {open && !disabled && (
-        <div
-          className="absolute z-30 mt-1 w-max min-w-full card overflow-hidden"
-          style={{ maxWidth: 'min(640px, 86vw)', boxShadow: '0 10px 28px rgb(18 36 45 / .18)' }}
-        >
-          <div className="max-h-[260px] overflow-auto">
+        <FloatingList anchor={box} listRef={list}>
+          <>
             {loading && options.length === 0 && <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">検索中…</div>}
             {!loading && options.length === 0 && <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">見つかりません</div>}
             {options.map((o, i) => (
@@ -178,8 +255,8 @@ export function SearchSelect({
                 )}
               </button>
             ))}
-          </div>
-        </div>
+          </>
+        </FloatingList>
       )}
     </div>
   );
@@ -219,6 +296,8 @@ export function MultiSearchSelect({
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const full = max !== undefined && values.length >= max;
 
   useEffect(() => {
@@ -236,7 +315,8 @@ export function MultiSearchSelect({
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (box.current && !box.current.contains(t) && !list.current?.contains(t)) setOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -288,6 +368,7 @@ export function MultiSearchSelect({
       */}
       {!full && (
         <input
+          ref={input}
           className="inp"
           disabled={disabled}
           placeholder={placeholder}
@@ -317,11 +398,8 @@ export function MultiSearchSelect({
       )}
 
       {open && !disabled && !full && (
-        <div
-          className="absolute z-30 top-full w-max min-w-full card overflow-hidden"
-          style={{ maxWidth: 'min(640px, 86vw)', boxShadow: '0 10px 28px rgb(18 36 45 / .18)' }}
-        >
-          <div className="max-h-[260px] overflow-auto">
+        <FloatingList anchor={input} listRef={list}>
+          <>
             {loading && left.length === 0 && (
               <div className="px-3 py-2 text-[11.5px] text-[var(--color-ink-3)]">検索中…</div>
             )}
@@ -340,8 +418,8 @@ export function MultiSearchSelect({
                 {o.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] whitespace-nowrap">{o.sub}</span>}
               </button>
             ))}
-          </div>
-        </div>
+          </>
+        </FloatingList>
       )}
     </div>
   );
@@ -401,17 +479,35 @@ export interface SkuRow {
   tax_rate: string;
   color_name: string | null;
   size_name: string | null;
+  /** 取引先を渡して探したときだけ入る（得意先別商品の値） */
+  partner_jan?: string | null;
+  shipping_jan?: string | null;
+  partner_product_code?: string | null;
 }
 
-export const fetchSkus = async (q: string): Promise<Option[]> => {
-  const rows = await api.get<SkuRow[]>('/masters/skus', { q: q || undefined, limit: 20 });
-  return rows.map((s) => ({
-    id: s.sku_id,
-    label: `${s.sku_code}　${s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`,
-    sub: s.is_set ? 'セット' : (s.jan ?? ''),
-    raw: s,
-  }));
-};
+/**
+ * SKU を探す。取引先を渡すと、その取引先の先方JAN・出荷JAN・専用コードでも引け、
+ * 候補に出荷JAN（無ければ先方JAN）を出す（1001 ご要望）。
+ */
+export const fetchSkusFor =
+  (partnerId?: number | null) =>
+  async (q: string): Promise<Option[]> => {
+    const rows = await api.get<SkuRow[]>('/masters/skus', { q: q || undefined, partner_id: partnerId ?? undefined, limit: 20 });
+    return rows.map((s) => ({
+      id: s.sku_id,
+      label: `${s.sku_code}　${s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`,
+      sub: s.is_set
+        ? 'セット'
+        : s.shipping_jan
+          ? `出荷JAN ${s.shipping_jan}`
+          : s.partner_jan
+            ? `先方JAN ${s.partner_jan}`
+            : (s.jan ?? ''),
+      raw: s,
+    }));
+  };
+
+export const fetchSkus = fetchSkusFor();
 
 export interface WorkInstructionRow {
   id: number;

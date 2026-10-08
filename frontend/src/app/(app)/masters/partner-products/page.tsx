@@ -31,8 +31,12 @@ interface PpRow extends Record<string, unknown> {
   cost_price: string | null;
   partner_color: string | null;
   partner_size: string | null;
+  /** SKU マスタのカラー／サイズ名（一覧の表示用） */
   color_name: string | null;
   size_name: string | null;
+  /** この得意先向けに印字するカラー／サイズ（得意先別商品の値） */
+  print_color_name: string | null;
+  print_size_name: string | null;
   product_class_name: string | null;
   /** 販売先カテゴリー（複数持てるので読点でつないだ文字列。1001 ご要望） */
   partner_category_names: string | null;
@@ -121,7 +125,7 @@ export default function PartnerProductsPage() {
         partner_product_code: s(r.partner_product_code), partner_jan: s(r.partner_jan), jan_code: s(r.jan_code),
         shipping_jan: s(r.shipping_jan), old_unit_price: dec(r.old_unit_price), price_changed_date: r.price_changed_date ? String(r.price_changed_date).slice(0, 10) : '',
         sales_name: s(r.sales_name), sales_name2: s(r.sales_name2), unit_price: dec(r.unit_price), retail_price: dec(r.retail_price), cost_price: dec(r.cost_price),
-        partner_color: s(r.partner_color), partner_size: s(r.partner_size), color_name: s(r.color_name), size_name: s(r.size_name),
+        partner_color: s(r.partner_color), partner_size: s(r.partner_size), color_name: s(r.print_color_name), size_name: s(r.print_size_name),
         memo: s(r.memo), sort_order: s(r.sort_order), note: s(r.note),
       })}
       toBody={(f) => ({
@@ -154,10 +158,13 @@ export default function PartnerProductsPage() {
               <SearchSelect
                 value={f.sku}
                 onChange={(o) => {
-                  // 先方の商品コードが空のときだけ、自社SKUコードを写す。
+                  // 先方の商品コードが空、または前に選んだ SKU のコードを写したままのときは、自社SKUコードを写す。
                   // 多くの取引先で同じコードを使うため、都度手で打つと打ち間違いの元になる（1001 のご指摘）。
+                  // 選び直したときに前の SKU のコードが残り、食い違ったまま保存できていた。
                   const skuCode = (o?.raw as { sku_code?: string } | undefined)?.sku_code ?? '';
-                  set(f.partner_product_code.trim() === '' && skuCode ? { sku: o, partner_product_code: skuCode } : { sku: o });
+                  const prevCode = f.sku ? f.sku.label.split('　')[0] : '';
+                  const current = f.partner_product_code.trim();
+                  set(skuCode && (current === '' || current === prevCode) ? { sku: o, partner_product_code: skuCode } : { sku: o });
                 }}
                 fetchOptions={fetchSkus}
                 placeholder="SKU・JAN・商品名で検索"

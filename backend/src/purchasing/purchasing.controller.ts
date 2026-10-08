@@ -58,6 +58,8 @@ const CreatePurchaseSchema = z.object({
         target_brand_id: z.number().int().positive().nullish(),
         target_product_class_id: z.number().int().positive().nullish(),
         tax_rate: z.enum(['0.00', '8.00', '10.00']).optional(),
+        /** 税区分。省略すると仕入項目マスタの税区分を使う */
+        tax_division_code_id: z.number().int().positive().nullish(),
         note: z.string().nullish(),
       }),
     )

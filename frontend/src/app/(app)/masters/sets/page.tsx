@@ -25,7 +25,7 @@ interface SetDetail {
   id: number;
   sku_id: number;
   note: string | null;
-  components: { id: number; component_sku_id: number; sku_code: string; product_name: string; qty: string }[];
+  components: { id: number; component_sku_id: number; sku_code: string; product_name: string; color_name: string | null; size_name: string | null; qty: string }[];
 }
 interface Line {
   sku: Option | null;
@@ -63,7 +63,8 @@ export default function SetsPage() {
     try {
       const d = await api.get<SetDetail>(`/masters/sets/${r.id}`);
       setSetSku({ id: d.sku_id, label: `${r.sku_code}　${r.product_name}` });
-      setLines(d.components.map((c) => ({ sku: { id: c.component_sku_id, label: `${c.sku_code}　${c.product_name}` }, qty: c.qty })));
+      // 構成品は新規で選んだときと同じ見え方（品番　商品名 カラー サイズ）にする
+      setLines(d.components.map((c) => ({ sku: { id: c.component_sku_id, label: `${c.sku_code}　${c.product_name}${c.color_name ? ' ' + c.color_name : ''}${c.size_name ? ' ' + c.size_name : ''}` }, qty: c.qty })));
       setNote(d.note ?? '');
     } catch (e) {
       setError(e);

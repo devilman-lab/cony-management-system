@@ -27,7 +27,7 @@ powershell -ExecutionPolicy Bypass -File scripts\smoke-backend.ps1
   OK  納品書が4様式とも出る
 === 27. 郵便番号・同梱・請求の手入力・販売予定・JAN出力・添付 ===
   OK  同じ郵便番号に複数の町域があれば全部返す
-すべて合格  309 項目
+すべて合格  332 項目
 ```
 
 経路の一覧は実物から数え上げられます。提出用の API 仕様書の付録はこれで作っています。

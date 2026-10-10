@@ -51,10 +51,10 @@ DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM information_schema.tables
    WHERE table_schema='cony' AND table_type='BASE TABLE';
-  IF n <> 71 THEN
-    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 71 件）', n USING ERRCODE='TF001';
+  IF n <> 72 THEN
+    RAISE EXCEPTION 'T01 失敗: テーブル数が % 件（期待 72 件）', n USING ERRCODE='TF001';
   END IF;
-  RAISE NOTICE 'T01 OK  テーブル数 71';
+  RAISE NOTICE 'T01 OK  テーブル数 72';
 
   SELECT count(*) INTO n FROM pg_type t JOIN pg_namespace ns ON ns.oid=t.typnamespace
    WHERE ns.nspname='cony' AND t.typtype='d' AND t.typname IN ('money_amt','qty_num','tax_rate');
@@ -530,8 +530,8 @@ DO $b15$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM system_settings;
-  IF n <> 24 THEN
-    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 24 件）', n USING ERRCODE='TF001';
+  IF n <> 25 THEN
+    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 25 件）', n USING ERRCODE='TF001';
   END IF;
 
   -- 貴社にご説明した項目が、いずれもコードではなく設定として存在すること

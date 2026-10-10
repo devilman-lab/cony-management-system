@@ -1,8 +1,9 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { sql } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
+import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
 import { StockLedgerService } from './stock-ledger.service';
 
@@ -13,6 +14,8 @@ export interface ReceiptLineInput {
   lot_no?: string | null;
   expiry_date?: string | null;
   cost_price?: string | null;
+  /** 商品ごとの備考（在庫編 Z-12） */
+  note?: string | null;
 }
 
 export interface CreateReceiptInput {
@@ -21,6 +24,15 @@ export interface CreateReceiptInput {
   planned_date?: string | null;
   note?: string | null;
   lines: ReceiptLineInput[];
+}
+
+/** 入荷の編集。送られた項目だけを直す。明細を送ったときは明細をまるごと入れ替える。 */
+export interface UpdateReceiptInput {
+  warehouse_id?: number;
+  supplier_partner_id?: number | null;
+  planned_date?: string | null;
+  note?: string | null;
+  lines?: ReceiptLineInput[];
 }
 
 export interface ReceiptListQuery {
@@ -34,6 +46,13 @@ export interface ReceiptListQuery {
   offset: number;
 }
 
+/**
+ * 入荷倉庫として決め打ちにする倉庫の名前（在庫編 Z-07「入荷倉庫を『コニー倉庫』で固定」）。
+ * 倉庫マスタの略称がこれと一致するものを使う。似た名前（「コニー倉庫(EC)」など）は拾わない。
+ * 黙って別の倉庫に入荷してしまうより、見つからないと止まるほうが在庫の食い違いを防げるため。
+ */
+export const RECEIPT_WAREHOUSE_NAME = 'コニー倉庫';
+
 /** 機能ID S-03 入荷登録 */
 @Injectable()
 export class ReceiptsService {
@@ -43,15 +62,59 @@ export class ReceiptsService {
     private readonly ledger: StockLedgerService,
   ) {}
 
-  async create(input: CreateReceiptInput, userId: number) {
-    // 数量 0 の明細でも登録・確定できてしまうと、在庫が1つも増えないまま「入荷済」の行だけが残り、
-    // 入荷したのかどうかが誰にも分からなくなる。ケース端数があるので小数は通す。
-    for (const line of input.lines) {
+  /**
+   * 数量 0 の明細でも登録・確定できてしまうと、在庫が1つも増えないまま「入荷済」の行だけが残り、
+   * 入荷したのかどうかが誰にも分からなくなる。ケース端数があるので小数は通す。
+   */
+  private assertLines(lines: ReceiptLineInput[]) {
+    if (lines.length === 0) throw new BadRequestException('入荷明細を1行以上入力してください');
+    for (const line of lines) {
       const qty = Number(line.qty);
       if (!Number.isFinite(qty) || qty <= 0) {
         throw new BadRequestException(`${line.line_no}行目：数量は 0 より大きい数で入力してください`);
       }
     }
+  }
+
+  private async insertLines(trx: Transaction<DB>, receiptId: number, lines: ReceiptLineInput[], userId: number) {
+    await trx
+      .insertInto('receipt_lines')
+      .values(
+        lines.map((l) => ({
+          receipt_id: receiptId,
+          line_no: l.line_no,
+          sku_id: l.sku_id,
+          qty: l.qty,
+          lot_no: l.lot_no ?? null,
+          expiry_date: l.expiry_date ?? null,
+          cost_price: l.cost_price ?? null,
+          note: l.note && l.note.trim() !== '' ? l.note : null,
+          created_by: userId,
+        })),
+      )
+      .execute();
+  }
+
+  /** 入荷画面で決め打ちにする倉庫（Z-07）。見つからなければ、マスタの直し方が分かる言葉で止める。 */
+  async receiptWarehouse() {
+    const row = await this.db
+      .selectFrom('warehouses')
+      .select(['id', 'warehouse_code', 'short_name'])
+      .where('short_name', '=', RECEIPT_WAREHOUSE_NAME)
+      .where('is_active', '=', true)
+      .orderBy('sort_order', sql`asc nulls last`)
+      .orderBy('id', 'asc')
+      .executeTakeFirst();
+    if (!row) {
+      throw new NotFoundException(
+        `入荷倉庫「${RECEIPT_WAREHOUSE_NAME}」が倉庫マスタにありません。倉庫マスタで略称が「${RECEIPT_WAREHOUSE_NAME}」の倉庫を登録（または有効に）してください`,
+      );
+    }
+    return row;
+  }
+
+  async create(input: CreateReceiptInput, userId: number) {
+    this.assertLines(input.lines);
 
     return this.db.transaction().execute(async (trx) => {
       const receiptNo = await this.numbering.next(trx, 'receipt');
@@ -71,23 +134,61 @@ export class ReceiptsService {
         .returning(['id', 'receipt_no'])
         .executeTakeFirstOrThrow();
 
-      await trx
-        .insertInto('receipt_lines')
-        .values(
-          input.lines.map((l) => ({
-            receipt_id: receipt.id,
-            line_no: l.line_no,
-            sku_id: l.sku_id,
-            qty: l.qty,
-            lot_no: l.lot_no ?? null,
-            expiry_date: l.expiry_date ?? null,
-            cost_price: l.cost_price ?? null,
-            created_by: userId,
-          })),
-        )
-        .execute();
+      await this.insertLines(trx, receipt.id, input.lines, userId);
 
       return receipt;
+    });
+  }
+
+  /**
+   * 入荷の編集（在庫編 Z-15）。直せるのは入荷確定前（「指示」）のうちだけ。
+   *
+   * 確定後に数量を直しても実在庫は変わらないので、伝票と在庫が食い違う。
+   * 在庫が動いたかどうかは取消と同じく移動履歴で見る（状態の付け替え漏れがあっても守れるように）。
+   */
+  async update(id: number, input: UpdateReceiptInput, userId: number) {
+    if (input.lines) this.assertLines(input.lines);
+
+    return this.db.transaction().execute(async (trx) => {
+      const receipt = await trx
+        .selectFrom('receipts')
+        .select(['id', 'receipt_no', 'status'])
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!receipt) throw new NotFoundException(`入荷が見つかりません（ID: ${id}）`);
+      const moved = await trx
+        .selectFrom('stock_movements')
+        .select('id')
+        .where('ref_table', '=', 'receipts')
+        .where('ref_id', '=', id)
+        .executeTakeFirst();
+      if (moved || receipt.status !== '指示') {
+        throw new ConflictException(
+          `${receipt.receipt_no} は「${receipt.status === '指示' ? '入荷済' : receipt.status}」です。編集できるのは入荷確定前（入荷予定）のものだけです`,
+        );
+      }
+
+      await trx
+        .updateTable('receipts')
+        .set({
+          ...(input.warehouse_id !== undefined ? { warehouse_id: input.warehouse_id } : {}),
+          ...(input.supplier_partner_id !== undefined ? { supplier_partner_id: input.supplier_partner_id } : {}),
+          ...(input.planned_date !== undefined ? { planned_date: input.planned_date } : {}),
+          ...(input.note !== undefined ? { note: input.note } : {}),
+          updated_by: userId,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .execute();
+
+      if (input.lines) {
+        await trx.deleteFrom('receipt_lines').where('receipt_id', '=', id).execute();
+        await this.insertLines(trx, id, input.lines, userId);
+      }
+
+      return { id, receipt_no: receipt.receipt_no, status: receipt.status };
     });
   }
 
@@ -110,7 +211,7 @@ export class ReceiptsService {
 
       const lines = await trx
         .selectFrom('receipt_lines')
-        .select(['id', 'line_no', 'sku_id', 'qty', 'lot_no'])
+        .select(['id', 'line_no', 'sku_id', 'qty', 'lot_no', 'expiry_date'])
         .where('receipt_id', '=', id)
         .orderBy('line_no', 'asc')
         .execute();
@@ -133,6 +234,11 @@ export class ReceiptsService {
           userId,
         );
         await this.ledger.apply(trx, stockId, line.qty, '入荷', { table: 'receipts', id }, userId);
+        // 入荷で入れた賞味期限を在庫表に写す（在庫表の列に賞味期限を出すため。2026-10-09 在庫編）。
+        // ロットを分けない運用なので、いちばん新しく入荷した分の期限で上書きする
+        if (line.expiry_date) {
+          await trx.updateTable('stocks').set({ expiry_date: line.expiry_date }).where('id', '=', stockId).execute();
+        }
       }
 
       await trx
@@ -198,6 +304,11 @@ export class ReceiptsService {
     });
   }
 
+  /**
+   * 入荷の一覧。1件の入荷に明細（lines）を付けて返す（在庫編 Z-16「入荷内容も一覧に表示」）。
+   * ページ送りは入荷の単位で数える。明細の単位で切ると1件の入荷がページをまたいで割れ、
+   * 入荷確定・取消のボタンがどちらのページにあるのか分からなくなるため。
+   */
   async list(query: ReceiptListQuery): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
       .selectFrom('receipts as r')
@@ -212,7 +323,7 @@ export class ReceiptsService {
     if (query.from) base = base.where('r.planned_date', '>=', query.from);
     if (query.to) base = base.where('r.planned_date', '<=', query.to);
 
-    const [items, total] = await Promise.all([
+    const [headers, total] = await Promise.all([
       base
         .select([
           'r.id as id',
@@ -220,8 +331,10 @@ export class ReceiptsService {
           'r.status as status',
           'r.planned_date as planned_date',
           'r.received_date as received_date',
+          'r.warehouse_id as warehouse_id',
           'w.short_name as warehouse_name',
           'p.name1 as supplier_name',
+          'r.note as note',
           (eb) =>
             eb
               .selectFrom('receipt_lines as l')
@@ -237,7 +350,40 @@ export class ReceiptsService {
       base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
     ]);
 
+    const lines = await this.linesOf(headers.map((h) => h.id));
+    const items = headers.map((h) => ({ ...h, lines: lines.filter((l) => l.receipt_id === h.id) }));
+
     return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
+  }
+
+  /** 明細を商品の名前・カラー・サイズ付きで引く。一覧と詳細（編集画面）で同じ形にする。 */
+  private async linesOf(receiptIds: number[]) {
+    if (receiptIds.length === 0) return [];
+    return this.db
+      .selectFrom('receipt_lines as l')
+      .innerJoin('skus as s', 's.id', 'l.sku_id')
+      .innerJoin('products as pr', 'pr.id', 's.product_id')
+      .leftJoin('colors as c', 'c.id', 's.color_id')
+      .leftJoin('sizes as z', 'z.id', 's.size_id')
+      .select([
+        'l.receipt_id as receipt_id',
+        'l.line_no as line_no',
+        'l.sku_id as sku_id',
+        's.sku_code as sku_code',
+        's.jan as jan',
+        // SKU ごとの商品名があればそれ（マスター編② M-10）
+        sql<string>`coalesce(nullif(s.sku_name, ''), pr.product_name)`.as('product_name'),
+        'c.name as color_name',
+        'z.name as size_name',
+        'l.qty as qty',
+        'l.lot_no as lot_no',
+        'l.expiry_date as expiry_date',
+        'l.note as note',
+      ])
+      .where('l.receipt_id', 'in', receiptIds)
+      .orderBy('l.receipt_id', 'asc')
+      .orderBy('l.line_no', 'asc')
+      .execute();
   }
 
   async findOne(id: number) {
@@ -252,22 +398,7 @@ export class ReceiptsService {
 
     if (!receipt) throw new NotFoundException(`入荷が見つかりません（ID: ${id}）`);
 
-    const lines = await this.db
-      .selectFrom('receipt_lines as l')
-      .innerJoin('skus as s', 's.id', 'l.sku_id')
-      .innerJoin('products as pr', 'pr.id', 's.product_id')
-      .select([
-        'l.line_no as line_no',
-        's.sku_code as sku_code',
-        'pr.product_name as product_name',
-        'l.qty as qty',
-        'l.lot_no as lot_no',
-        'l.expiry_date as expiry_date',
-      ])
-      .where('l.receipt_id', '=', id)
-      .orderBy('l.line_no', 'asc')
-      .execute();
-
+    const lines = await this.linesOf([id]);
     return { ...receipt, lines };
   }
 }

@@ -188,6 +188,7 @@ function ShippingList() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<ShipmentRow>
           wide
+          fit
           columns={[
             {
               key: '_sel',
@@ -196,20 +197,20 @@ function ShippingList() {
               width: 36,
               render: (r) => <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} onClick={(e) => e.stopPropagation()} aria-label="選択" />,
             },
-            { key: 'shipment_no', label: '出荷指示番号', width: 140, render: (r) => <Num className="font-semibold text-[var(--color-brand-700)]">{r.shipment_no}</Num> },
-            { key: 'planned_ship_date', label: '出荷予定日', width: 100, render: (r) => <Num>{ymd(r.planned_ship_date)}</Num> },
+            { key: 'shipment_no', label: '出荷指示番号', width: 112, nowrap: true, render: (r) => <Num className="font-semibold text-[var(--color-brand-700)]">{r.shipment_no}</Num> },
+            { key: 'planned_ship_date', label: '出荷予定日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.planned_ship_date)}</Num> },
             { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? '' },
-            { key: 'order_type', label: '区分', width: 64, render: (r) => r.order_type ?? '' },
-            { key: 'warehouse_name', label: '倉庫', width: 100 },
-            { key: 'consolidated_to_shipment_id', label: '同梱', width: 70, render: (r) => (r.consolidated_to_shipment_id ? <span className="bdg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">同梱</span> : '') },
-            { key: 'ship_date', label: '出荷日', width: 100, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
-            { key: 'status', label: '状態', width: 90, render: (r) => <Badge status={r.status}>{r.status === '確定済' ? '出荷待ち' : r.status}</Badge> },
+            { key: 'order_type', label: '区分', width: 52, render: (r) => r.order_type ?? '' },
+            { key: 'warehouse_name', label: '倉庫', width: 72 },
+            { key: 'consolidated_to_shipment_id', label: '同梱', width: 52, render: (r) => (r.consolidated_to_shipment_id ? <span className="bdg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">同梱</span> : '') },
+            { key: 'ship_date', label: '出荷日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
+            { key: 'status', label: '状態', width: 76, render: (r) => <Badge status={r.status}>{r.status === '確定済' ? '出荷待ち' : r.status}</Badge> },
             {
               key: '_act',
               label: '',
-              width: 170,
+              width: 110,
               render: (r) => (
-                <div className="flex items-center gap-1">
+                <div className="tbl-acts">
                   {r.sales_order_id && <Link href={`/orders/${r.sales_order_id}`} className="btn btn-quiet btn-sm">受注</Link>}
                   {r.status === '出荷済' && can('D-01', 'update') && (
                     <Button size="sm" variant="quiet" className="!text-[var(--color-crit-500)]" disabled={busy} onClick={() => unconfirm(r)}>確定取消</Button>

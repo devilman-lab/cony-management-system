@@ -333,6 +333,9 @@ CREATE TABLE partners (
   default_trade_type          VARCHAR(10),                   -- 既定の取引条件（委託／買取／仕入）。受注で自動表示し変更可
   -- ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る（1001 ご要望）
   is_royalty_payee            BOOLEAN NOT NULL DEFAULT false,
+  -- 海外の取引先。消費税を免税（税抜扱い）または課税対象外として扱う（2026-10-09 マスター編②）。
+  -- どちらで扱うかはシステム設定 OVERSEAS_TAX_TREATMENT で決める
+  is_overseas                 BOOLEAN NOT NULL DEFAULT false,
   -- ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。
   -- 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。
   closing_day                 SMALLINT,                      -- 締め日（99＝月末）
@@ -543,6 +546,9 @@ CREATE TABLE skus (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   product_id    BIGINT      NOT NULL REFERENCES products(id),
   sku_code      VARCHAR(40) NOT NULL UNIQUE,   -- 例：FT1196-0306-100
+  -- SKU ごとの商品名。同じ品番で (W)・Amazon用・キャップ付 などを SKU の末尾で分けるとき用（2026-10-09 マスター編②）。
+  -- 空なら商品の商品名を使う
+  sku_name      VARCHAR(200),
   color_id      BIGINT REFERENCES colors(id),
   size_id       BIGINT REFERENCES sizes(id),
   pack_division VARCHAR(10),                   -- 100＝単品 / 200＝2枚組
@@ -732,10 +738,31 @@ COMMENT ON TABLE stock_movements IS '在庫移動履歴。追記専用（UPDATE/
 CREATE INDEX ix_stock_mov_stock ON stock_movements (stock_id, moved_at DESC);
 CREATE INDEX ix_stock_mov_ref   ON stock_movements (ref_table, ref_id);
 
--- (33) reservations 確保数
+-- (33-0) reservation_groups 確保（引当在庫の見出し）
+-- 1つの確保＝期間・媒体・取引先・販売カテゴリー・項目・商品分類・備考 ＋ 明細（SKU ごとの確保数）。
+-- 商品登録と同じく、見出しの下に明細を並べて1枚で登録する（2026-10-09 在庫編）。
+CREATE TABLE reservation_groups (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  period_from       DATE    NOT NULL,
+  period_to         DATE    NOT NULL,
+  media_id          BIGINT  REFERENCES media(id),          -- 取引先が空のとき、この媒体の取引先の受注で減らす
+  partner_id        BIGINT  REFERENCES partners(id),       -- 入っていれば、この取引先の受注で減らす
+  sales_category_id BIGINT  NOT NULL REFERENCES sales_categories(id),
+  item_label        VARCHAR(60),                           -- 項目（楽楽販売の「集計」にあたる見出し）
+  product_class_id  BIGINT  REFERENCES product_classes(id),
+  note              TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
+  CONSTRAINT ck_resgrp_period CHECK (period_to >= period_from)
+);
+COMMENT ON TABLE reservation_groups IS '確保（引当在庫）の見出し。明細は reservations';
+
+-- (33) reservations 確保数（確保の明細。SKU ごと）
 CREATE TABLE reservations (
   id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  partner_id        BIGINT  REFERENCES partners(id),     -- 任意。空なら販売カテゴリー全体の枠（v1.7）
+  group_id          BIGINT  REFERENCES reservation_groups(id) ON DELETE CASCADE,
+  partner_id        BIGINT  REFERENCES partners(id),     -- 任意。空なら販売カテゴリー全体の枠（v1.7）。見出しと同じ値を持つ
+  media_id          BIGINT  REFERENCES media(id),        -- 見出しと同じ値を持つ
   sales_category_id BIGINT  NOT NULL REFERENCES sales_categories(id),
   sku_id            BIGINT  NOT NULL REFERENCES skus(id),
   period_from       DATE    NOT NULL,
@@ -748,9 +775,9 @@ CREATE TABLE reservations (
   CONSTRAINT ck_reservations_period CHECK (period_to >= period_from)
 );
 COMMENT ON TABLE reservations IS '確保数（引当在庫）。販売カテゴリー×SKU×期間、任意で取引先。受注登録時にここから減る';
--- 取引先が空の枠も含めて一意にする（NULL 同士は UNIQUE 制約では重複扱いにならないため）
-CREATE UNIQUE INDEX ux_reservations_scope ON reservations
-  (COALESCE(partner_id, 0), sales_category_id, sku_id, period_from);
+-- 1つの確保の中で同じ SKU は1行まで。確保どうしは、期間・媒体・取引先・項目が同じでも分けて持てる
+CREATE UNIQUE INDEX ux_reservations_group_sku ON reservations (group_id, sku_id);
+CREATE INDEX ix_reservations_group ON reservations (group_id);
 -- TODO(Q12) 運用単位（放送日／月／期間）。期間保持のためいずれも表現可能
 
 -- (34) receipts 入荷
@@ -779,6 +806,7 @@ CREATE TABLE receipt_lines (
   lot_no      VARCHAR(40),
   expiry_date DATE,
   cost_price  money_amt,
+  note        TEXT,                                    -- 商品ごとの備考（2026-10-09 在庫編）
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by  BIGINT REFERENCES users(id),
   UNIQUE (receipt_id, line_no)

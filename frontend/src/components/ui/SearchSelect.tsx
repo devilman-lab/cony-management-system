@@ -10,6 +10,11 @@ export interface Option {
   id: number;
   label: string;
   sub?: string;
+  /**
+   * 候補の下に折り返して全文を出す説明（作業指示の本文など）。改行もそのまま出す。
+   * sub は右に1行で出すため、長い文だと候補の枠で切れて読めなかった（2026-10-09 マスター編②）。
+   */
+  detail?: string;
   /** 呼び手が使う元データ */
   raw?: unknown;
 }
@@ -246,6 +251,17 @@ export function SearchSelect({
               >
                 {renderOption ? (
                   renderOption(o)
+                ) : o.detail !== undefined ? (
+                  // 説明つきの候補は、見出しの下に本文を省略せず折り返して出す（作業指示。2026-10-09 マスター編②）。
+                  // 一覧の幅は上限（640px）で止まり、その中で折り返すので、長い本文でも全部読める
+                  <span className="flex-1 min-w-0 flex flex-col gap-0.5 py-0.5">
+                    <span className="font-semibold">{o.label}</span>
+                    {o.detail && (
+                      <span className="text-[11.5px] leading-[1.5] text-[var(--color-ink-2)] whitespace-pre-wrap break-words">
+                        {o.detail}
+                      </span>
+                    )}
+                  </span>
                 ) : (
                   <>
                     {/* 候補は切らずに全部見せる。カラー・サイズまで読めないと選べないため。 */}
@@ -474,7 +490,12 @@ export interface SkuRow {
   jan: string | null;
   product_id: number;
   product_code: string;
+  /** 商品（品番）の商品名 */
   product_name: string;
+  /** SKU ごとの商品名（空なら null） */
+  sku_name?: string | null;
+  /** SKU の名前。SKU の商品名があればそれ、無ければ商品名（2026-10-09 マスター編②） */
+  item_name?: string;
   is_set: boolean;
   tax_rate: string;
   color_name: string | null;
@@ -486,16 +507,29 @@ export interface SkuRow {
 }
 
 /**
+ * SKU の品名（「SKU の商品名があればそれ、無ければ商品名」＋カラー＋サイズ）。
+ * 候補の表示と、受注入力で SKU を選んだときの品名に使う（2026-10-09 マスター編②）。
+ */
+export const skuItemName = (s: Pick<SkuRow, 'product_name' | 'sku_name' | 'item_name' | 'color_name' | 'size_name'>): string =>
+  `${s.item_name || s.sku_name?.trim() || s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`;
+
+/**
  * SKU を探す。取引先を渡すと、その取引先の先方JAN・出荷JAN・専用コードでも引け、
  * 候補に出荷JAN（無ければ先方JAN）を出す（1001 ご要望）。
+ * isSet を渡すと、セット商品（商品マスタで「セット商品」にしたもの）の SKU だけ／以外だけに絞る。
  */
 export const fetchSkusFor =
-  (partnerId?: number | null) =>
+  (partnerId?: number | null, opts?: { isSet?: boolean }) =>
   async (q: string): Promise<Option[]> => {
-    const rows = await api.get<SkuRow[]>('/masters/skus', { q: q || undefined, partner_id: partnerId ?? undefined, limit: 20 });
+    const rows = await api.get<SkuRow[]>('/masters/skus', {
+      q: q || undefined,
+      partner_id: partnerId ?? undefined,
+      is_set: opts?.isSet === undefined ? undefined : String(opts.isSet),
+      limit: 20,
+    });
     return rows.map((s) => ({
       id: s.sku_id,
-      label: `${s.sku_code}　${s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`,
+      label: `${s.sku_code}　${skuItemName(s)}`,
       sub: s.is_set
         ? 'セット'
         : s.shipping_jan
@@ -509,6 +543,12 @@ export const fetchSkusFor =
 
 export const fetchSkus = fetchSkusFor();
 
+/**
+ * セット登録のセット SKU の欄用。商品マスタで「セット商品」にした商品の SKU だけを出す
+ * （2026-10-09 マスター編②「商品マスタでセット登録したものだけ表示するようにしてほしい」）。
+ */
+export const fetchSetSkus = fetchSkusFor(null, { isSet: true });
+
 export interface WorkInstructionRow {
   id: number;
   code: string;
@@ -521,6 +561,10 @@ export interface WorkInstructionRow {
  *
  * プルダウンだと件数が増えたときに中身で探せなかったため（1001 のご指摘）。
  * コード・名称に加えて、出荷指示書に印字する本文も検索の対象にしてある。
+ *
+ * 候補には本文を省略せず全文を折り返して出す（detail）。以前は先頭40文字で切っていて、
+ * 似た作業指示を見分けられなかった（2026-10-09 マスター編②「切れてしまっているので全て出るように」）。
+ * 選んだあとの欄には1行に詰めた本文（sub）を出す。
  */
 export const fetchWorkInstructions = async (q: string): Promise<Option[]> => {
   const r = await api.get<Paged<WorkInstructionRow>>('/masters/simple/work_instructions', {
@@ -530,7 +574,8 @@ export const fetchWorkInstructions = async (q: string): Promise<Option[]> => {
   return r.items.map((w) => ({
     id: w.id,
     label: `${w.code}　${w.name}`,
-    sub: (w.instruction_body ?? '').replace(/\s+/g, ' ').slice(0, 40),
+    sub: (w.instruction_body ?? '').replace(/\s+/g, ' ').trim(),
+    detail: (w.instruction_body ?? '').trim(),
     raw: w,
   }));
 };

@@ -104,24 +104,25 @@ export default function PartnerProductsPage() {
         </>
       }
       columns={[
-        { key: 'partner_name', label: '取引先', width: 280, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
-        { key: 'partner_category_names', label: '販売先カテゴリー', width: 140, render: (r) => r.partner_category_names ?? <span className="text-[var(--color-ink-3)]">（なし）</span> },
-        { key: 'sku_code', label: 'SKU', width: 150, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
+        { key: 'partner_name', label: '取引先', width: 100, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
+        { key: 'partner_category_names', label: '販売先カテゴリー', width: 72, render: (r) => r.partner_category_names ?? <span className="text-[var(--color-ink-3)]">（なし）</span> },
+        { key: 'sku_code', label: 'SKU', width: 116, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
         { key: 'product_name', label: '商品名', render: (r) => r.sales_name || r.product_name },
-        { key: 'product_class_name', label: '商品分類', width: 110, render: (r) => r.product_class_name ?? '' },
-        { key: 'color_name', label: 'カラー', width: 110, render: (r) => r.color_name ?? '' },
-        { key: 'size_name', label: 'サイズ', width: 80, render: (r) => r.size_name ?? '' },
-        { key: 'partner_product_code', label: '先方コード', width: 120, render: (r) => <Num>{r.partner_product_code ?? ''}</Num> },
-        { key: 'partner_jan', label: '先方JAN', width: 130, render: (r) => <Num>{r.partner_jan ?? ''}</Num> },
-        { key: 'unit_price', label: '卸単価', r: true, width: 90, render: (r) => money(r.unit_price) },
-        { key: 'retail_price', label: '上代', r: true, width: 90, render: (r) => money(r.retail_price) },
-        { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
+        { key: 'product_class_name', label: '商品分類', width: 58, render: (r) => r.product_class_name ?? '' },
+        { key: 'color_name', label: 'カラー', width: 58, render: (r) => r.color_name ?? '' },
+        { key: 'size_name', label: 'サイズ', width: 48, render: (r) => r.size_name ?? '' },
+        { key: 'partner_product_code', label: '先方コード', width: 70, render: (r) => <Num>{r.partner_product_code ?? ''}</Num> },
+        { key: 'partner_jan', label: '先方JAN', width: 100, nowrap: true, render: (r) => <Num>{r.partner_jan ?? ''}</Num> },
+        { key: 'unit_price', label: '卸単価', r: true, width: 62, render: (r) => money(r.unit_price) },
+        { key: 'retail_price', label: '上代', r: true, width: 62, render: (r) => money(r.retail_price) },
+        { key: 'is_active', label: '', width: 36, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
       empty={() => ({ partner, sku: null, partner_product_code: '', partner_jan: '', jan_code: '', shipping_jan: '', old_unit_price: '', price_changed_date: '', sales_name: '', sales_name2: '', unit_price: '', retail_price: '', cost_price: '', partner_color: '', partner_size: '', color_name: '', size_name: '', memo: '', sort_order: '', note: '' })}
       toForm={(r) => ({
         partner: { id: r.partner_id, label: r.partner_name, sub: r.partner_code },
-        sku: { id: r.sku_id, label: `${r.sku_code}　${r.product_name}` },
+        // 候補（fetchSkus）と同じ書き方。編集画面ではカラー・サイズまで全部見せる（2026-10-09 マスター編② M-19）
+        sku: { id: r.sku_id, label: `${r.sku_code}　${r.product_name}${r.color_name ? ' ' + r.color_name : ''}${r.size_name ? ' ' + r.size_name : ''}` },
         partner_product_code: s(r.partner_product_code), partner_jan: s(r.partner_jan), jan_code: s(r.jan_code),
         shipping_jan: s(r.shipping_jan), old_unit_price: dec(r.old_unit_price), price_changed_date: r.price_changed_date ? String(r.price_changed_date).slice(0, 10) : '',
         sales_name: s(r.sales_name), sales_name2: s(r.sales_name2), unit_price: dec(r.unit_price), retail_price: dec(r.retail_price), cost_price: dec(r.cost_price),
@@ -152,9 +153,22 @@ export default function PartnerProductsPage() {
       })}
       renderForm={(f, set, editing) => (
         <div className="flex flex-col gap-3">
+          {/*
+            取引先の下に自社SKUを置き、どちらも横幅いっぱいで全文を出す（2026-10-09 マスター編② M-19「表示名が切れてしまってる」）。
+            編集では取引先・SKU を変えられないので、選択欄（長いと「…」で切れる）ではなく文字で出す。
+          */}
           <div className="master-grid-2">
-            <L label="取引先" required><SearchSelect value={f.partner} onChange={(o) => set({ partner: o })} fetchOptions={fetchCustomers} placeholder="得意先を検索" width="100%" disabled={!!editing} /></L>
-            <L label="自社 SKU" required>
+            <L label="取引先" required wide>
+              {editing ? (
+                <span className="text-[12.5px] py-1 break-all"><Num className="text-[var(--color-ink-3)] mr-1">{f.partner?.sub ?? ''}</Num>{f.partner?.label ?? ''}</span>
+              ) : (
+                <SearchSelect value={f.partner} onChange={(o) => set({ partner: o })} fetchOptions={fetchCustomers} placeholder="得意先を検索" width="100%" />
+              )}
+            </L>
+            <L label="自社 SKU" required wide>
+              {editing ? (
+                <span className="text-[12.5px] py-1 break-all">{f.sku?.label ?? ''}</span>
+              ) : (
               <SearchSelect
                 value={f.sku}
                 onChange={(o) => {
@@ -169,15 +183,19 @@ export default function PartnerProductsPage() {
                 fetchOptions={fetchSkus}
                 placeholder="SKU・JAN・商品名で検索"
                 width="100%"
-                disabled={!!editing}
               />
+              )}
+              {/* 新規で選んだ後も、長い商品名を切らずに読めるようにする */}
+              {!editing && f.sku && <span className="w-full text-[11.5px] text-[var(--color-ink-2)] break-all">{f.sku.label}</span>}
             </L>
           </div>
           <Section title="先方のコード・名称" />
           <div className="master-grid-2">
             <L label="先方の商品コード" hint="販社CSVの突き合わせに使います"><Input value={f.partner_product_code} onChange={(e) => set({ partner_product_code: e.target.value })} /></L>
-            <L label="先方の JAN"><Input value={f.partner_jan} onChange={(e) => set({ partner_jan: e.target.value })} /></L>
-            <L label="出荷 JAN" hint="受注入力で先方のJANを入れたとき、こちらを出します"><Input value={f.shipping_jan} onChange={(e) => set({ shipping_jan: e.target.value })} /></L>
+            <L label="先方の JAN" hint="受注入力でこの JAN を打っても商品を引けます"><Input value={f.partner_jan} onChange={(e) => set({ partner_jan: e.target.value })} /></L>
+            {/* 出荷JANは出荷指示書・納品書の JAN 欄に出す。空なら SKU の JAN（コニーJAN）（M-18） */}
+            <L label="出荷 JAN" hint="出荷指示書・納品書の JAN 欄に印字します。空欄なら SKU の JAN（コニーJAN）" wide><Input value={f.shipping_jan} onChange={(e) => set({ shipping_jan: e.target.value })} className="!w-[220px]" /></L>
+            {/* 販売名｜販売名2 ／ 先方のカラー/サイズ｜印字するカラー/サイズ の並び（M-20） */}
             <L label="販売名（納品書に印字）"><Input value={f.sales_name} onChange={(e) => set({ sales_name: e.target.value })} /></L>
             <L label="販売名2"><Input value={f.sales_name2} onChange={(e) => set({ sales_name2: e.target.value })} /></L>
             <L label="先方のカラー／サイズ"><Input value={f.partner_color} onChange={(e) => set({ partner_color: e.target.value })} className="!w-[120px]" placeholder="カラー" /><Input value={f.partner_size} onChange={(e) => set({ partner_size: e.target.value })} className="!w-[120px]" placeholder="サイズ" /></L>
@@ -189,7 +207,8 @@ export default function PartnerProductsPage() {
             <L label="上代" hint="納品書「上代あり」に印字"><Input right value={f.retail_price} onChange={(e) => set({ retail_price: e.target.value })} className="!w-[130px]" /></L>
             <L label="旧単価" hint="値段を変えたとき、前の単価を残しておく欄"><Input right value={f.old_unit_price} onChange={(e) => set({ old_unit_price: e.target.value })} className="!w-[130px]" /></L>
             <L label="単価の変更日"><Input type="date" value={f.price_changed_date} onChange={(e) => set({ price_changed_date: e.target.value })} className="!w-[150px]" /></L>
-            {canSeeSensitive && <L label="原価（この取引先向け）"><Input right value={f.cost_price} onChange={(e) => set({ cost_price: e.target.value })} className="!w-[130px]" /></L>}
+            {/* 取引先ごとに原価が違うときだけ入れる上書き用。粗利の計算は 得意先別 → SKU → 商品 の順に使う（M-22） */}
+            {canSeeSensitive && <L label="原価（この取引先向け）" hint="空欄なら商品（SKU）の原価を使います"><Input right value={f.cost_price} onChange={(e) => set({ cost_price: e.target.value })} className="!w-[130px]" /></L>}
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
           </div>
           <Input value={f.memo} onChange={(e) => set({ memo: e.target.value })} placeholder="メモ" />

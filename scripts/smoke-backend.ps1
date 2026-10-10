@@ -176,7 +176,7 @@ $login = Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'applicatio
            -Body (@{ login_id = 'admin'; password = $pass } | ConvertTo-Json)
 $H = @{ Authorization = "Bearer $($login.access_token)" }
 Check '管理者は権限151件（機能30×操作5＋機微項目1）' { @($login.user.permissions).Count -eq 151 }
-Check '接続先の照合（テーブル71）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 71 }
+Check '接続先の照合（テーブル72）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 72 }
 
 Check '既定の引当タイミングは受注登録時（9/15 ご確認）' {
   ((GetList "$B/masters/settings") | Where-Object { $_.setting_key -eq 'ALLOCATION_TIMING' }).value_text -eq 'order_entry'
@@ -470,7 +470,10 @@ $adj = PostJson "$B/inventory/adjustments" @{
   )
 }
 Check '調整番号が採番される（AJ+年月+連番）' { $adj.adjustment_no -match '^AJ\d{6}\d{5}$' }
-Check '減算と品質振替が実在庫に反映される（-4 と -2）' {
+# 登録しただけでは在庫を動かさない。一覧の「調整」で反映する（2026-10-09 在庫編）
+Check '登録しただけでは実在庫は動かない' { (StockOf 'FT1196-0306-100').on_hand -eq $beforeAdj.on_hand }
+$null = PostJson "$B/inventory/adjustments/$($adj.id)/confirm" @{}
+Check '「調整」で減算と品質振替が実在庫に反映される（-4 と -2）' {
   (StockOf 'FT1196-0306-100').on_hand -eq ($beforeAdj.on_hand - 6)
 }
 Check '振替先の不良在庫が増える' {
@@ -490,36 +493,41 @@ Check '未登録の調整理由は 400' {
       lines=@(@{ line_no=1; sku_id=$sku.sku_id; qty='1' }) }
   }) -eq 400
 }
-Check '押さえてある分を下回る減算は 400' {
+Check '押さえてある分を下回る減算は、「調整」で 409（理由付きで断る）' {
   $s = StockOf 'FT1196-0306-100'
-  (StatusOf {
-    PostJson "$B/inventory/adjustments" @{ warehouse_id=$warehouse.id; adjustment_date=$today; reason_code='LOSS'
-      lines=@(@{ line_no=1; sku_id=$sku.sku_id; qty=('-' + [string]($s.on_hand + 1)) }) }
-  }) -eq 400
+  $over = PostJson "$B/inventory/adjustments" @{ warehouse_id=$warehouse.id; adjustment_date=$today; reason_code='LOSS'
+    lines=@(@{ line_no=1; sku_id=$sku.sku_id; qty=('-' + [string]($s.on_hand + 1)) }) }
+  $code = StatusOf { PostJson "$B/inventory/adjustments/$($over.id)/confirm" @{} }
+  $null = PostJson "$B/inventory/adjustments/$($over.id)/cancel" @{}
+  $code -eq 409 -and (StockOf 'FT1196-0306-100').on_hand -eq $s.on_hand
 }
 Check '調整一覧に出る' { (Invoke-RestMethod "$B/inventory/adjustments" -Headers $H).total -ge 1 }
 
 Write-Host '=== 12. 取引先別確保数 ===' -ForegroundColor Cyan
-$resv = PostJson "$B/inventory/reservations" @{
-  partner_id=$partner.id; sales_category_id=$category.id; sku_id=$sku.sku_id
+# 2026-10-09 から確保は「見出し＋明細」（/inventory/reservation-groups）。詳しくは verify-fb1009-reservations.mjs
+$resv = PostJson "$B/inventory/reservation-groups" @{
+  partner_id=$partner.id; sales_category_id=$category.id
   # 以降の章の受注がこの枠から減る（受注登録時の消費）ため、止まらない大きさにしておく
-  period_from=$today; period_to=$today; reserved_qty='9999'
+  period_from=$today; period_to=$today
+  lines=@(@{ sku_id=$sku.sku_id; reserved_qty='9999' })
 }
-Check '確保数を登録できる' { [decimal]$resv.reserved_qty -eq 9999 }
+Check '確保数を登録できる（見出し＋明細）' { [decimal]$resv.reserved_total -eq 9999 -and @($resv.lines).Count -eq 1 }
 Check '残数が計算される' {
-  $r = Invoke-RestMethod "$B/inventory/reservations?on=$today" -Headers $H
-  [decimal]$r.items[0].remaining_qty -eq 9999
+  $r = Invoke-RestMethod "$B/inventory/reservation-groups?from=$today&to=$today" -Headers $H
+  $g = @($r.items | Where-Object { $_.id -eq $resv.id })[0]
+  [decimal]$g.lines[0].remaining_qty -eq 9999
 }
-Check '同じ取引先・カテゴリー・商品・期間の重複は 409 で弾かれる' {
+Check '1つの確保に同じ商品が2行あると 400' {
   (StatusOf {
-    PostJson "$B/inventory/reservations" @{ partner_id=$partner.id; sales_category_id=$category.id; sku_id=$sku.sku_id
-      period_from=$today; period_to=$today; reserved_qty='10' }
-  }) -eq 409
+    PostJson "$B/inventory/reservation-groups" @{ partner_id=$partner.id; sales_category_id=$category.id
+      period_from=$today; period_to=$today
+      lines=@(@{ sku_id=$sku.sku_id; reserved_qty='10' }, @{ sku_id=$sku.sku_id; reserved_qty='5' }) }
+  }) -eq 400
 }
 Check '期間が逆転していると 400 と日本語で返る' {
   try {
-    PostJson "$B/inventory/reservations" @{ partner_id=$partner.id; sales_category_id=$category.id; sku_id=$newSku.sku_id
-      period_from='2026-12-31'; period_to='2026-01-01'; reserved_qty='1' } | Out-Null
+    PostJson "$B/inventory/reservation-groups" @{ partner_id=$partner.id; sales_category_id=$category.id
+      period_from='2026-12-31'; period_to='2026-01-01'; lines=@(@{ sku_id=$newSku.sku_id; reserved_qty='1' }) } | Out-Null
     $false
   } catch {
     $code = $_.Exception.Response.StatusCode.value__
@@ -1588,16 +1596,21 @@ function NewCat2Order($qty) {
     lines=@(@{ line_no=1; line_type='商品'; sku_id=$sku.sku_id; item_name='枠テスト'; qty=[string]$qty; unit_price='1000' })
   }
 }
-function FrameRemaining($id) {
-  $r = Invoke-RestMethod "$B/inventory/reservations?sales_category_id=$($cat2.id)&on=$today" -Headers $H
-  [decimal](@($r.items | Where-Object { $_.id -eq $id })[0].remaining_qty)
+# 2026-10-09 から確保は「見出し＋明細」。$frame は確保（見出し）、$frameLine はその明細
+function FrameRemaining($groupId) {
+  $g = Invoke-RestMethod "$B/inventory/reservation-groups/$groupId" -Headers $H
+  [decimal](@($g.lines | Where-Object { $_.sku_id -eq $sku.sku_id })[0].remaining_qty)
+}
+function FrameQty($qty) {
+  PatchJson "$B/inventory/reservation-groups/$($frame.id)" @{ lines=@(@{ id=$frameLine.id; sku_id=$sku.sku_id; reserved_qty=$qty }) }
 }
 
-$frame = PostJson "$B/inventory/reservations" @{
-  sales_category_id=$cat2.id; sku_id=$sku.sku_id
-  period_from="$month-01"; period_to=$monthEnd; reserved_qty='3'
+$frame = PostJson "$B/inventory/reservation-groups" @{
+  sales_category_id=$cat2.id; period_from="$month-01"; period_to=$monthEnd
+  lines=@(@{ sku_id=$sku.sku_id; reserved_qty='3' })
 }
-Check '取引先を指定せず、販売カテゴリー×商品×期間で引当在庫を登録できる' { $frame.id -gt 0 -and [decimal]$frame.reserved_qty -eq 3 }
+$frameLine = @($frame.lines)[0]
+Check '取引先を指定せず、販売カテゴリー×商品×期間で引当在庫を登録できる' { $frame.id -gt 0 -and [decimal]$frame.reserved_total -eq 3 }
 Check '受注登録で引当在庫の枠から減る（3 → 1）' {
   $script:frOrder1 = NewCat2Order 2
   (FrameRemaining $frame.id) -eq 1
@@ -1620,29 +1633,37 @@ Check '受注を修正すると枠が引き直される（数量 1 → 2 で残�
   (FrameRemaining $frame.id) -eq 1
 }
 Check '使った分より少ない数量には減らせない（400）' {
-  (StatusOf { PatchJson "$B/inventory/reservations/$($frame.id)" @{ reserved_qty='1' } }) -eq 400
+  (StatusOf { FrameQty '1' }) -eq 400
 }
 Check '枠を増やせる（3 → 5）' {
-  [decimal](PatchJson "$B/inventory/reservations/$($frame.id)" @{ reserved_qty='5' }).reserved_qty -eq 5
+  [decimal](FrameQty '5').reserved_total -eq 5
 }
 Check '使われている枠は消せない（400）' {
-  (StatusOf { Invoke-RestMethod "$B/inventory/reservations/$($frame.id)" -Method Delete -Headers $H }) -eq 400
+  (StatusOf { Invoke-RestMethod "$B/inventory/reservation-groups/$($frame.id)" -Method Delete -Headers $H }) -eq 400
 }
 Check '前月分を翌月に複写できる' {
-  $r = PostJson "$B/inventory/reservations/copy" @{ from_month=$month; to_month=$nextMonth }
+  $r = PostJson "$B/inventory/reservation-groups/copy-month" @{ from_month=$month; to_month=$nextMonth }
   $r.copied -ge 1
 }
 Check '複写先は 1日〜末日の期間で、使用数は 0 から始まる' {
-  $r = Invoke-RestMethod "$B/inventory/reservations?sales_category_id=$($cat2.id)&on=$nextMonth-15" -Headers $H
-  $row = @($r.items | Where-Object { $_.sku_id -eq $sku.sku_id })[0]
-  $script:copiedFrame = $row
-  $row.period_from -eq "$nextMonth-01" -and [decimal]$row.consumed_qty -eq 0 -and [decimal]$row.reserved_qty -eq 5
+  $r = Invoke-RestMethod "$B/inventory/reservation-groups?sales_category_id=$($cat2.id)&from=$nextMonth-15&to=$nextMonth-15" -Headers $H
+  $g = @($r.items | Where-Object { @($_.lines | Where-Object { $_.sku_id -eq $sku.sku_id }).Count -gt 0 })[0]
+  $row = @($g.lines | Where-Object { $_.sku_id -eq $sku.sku_id })[0]
+  $script:copiedFrame = $g
+  $g.period_from -eq "$nextMonth-01" -and [decimal]$row.consumed_qty -eq 0 -and [decimal]$row.reserved_qty -eq 5
 }
 Check '同じ月にもう一度複写しても二重にならない' {
-  (PostJson "$B/inventory/reservations/copy" @{ from_month=$month; to_month=$nextMonth }).copied -eq 0
+  (PostJson "$B/inventory/reservation-groups/copy-month" @{ from_month=$month; to_month=$nextMonth }).copied -eq 0
 }
 Check '使われていない枠は消せる' {
-  (Invoke-RestMethod "$B/inventory/reservations/$($copiedFrame.id)" -Method Delete -Headers $H).deleted -eq $true
+  (Invoke-RestMethod "$B/inventory/reservation-groups/$($copiedFrame.id)" -Method Delete -Headers $H).deleted -eq $true
+}
+Check '引当在庫の一覧を CSV で出せる（BOM 付き、一覧と同じ列の並び）' {
+  $b = GetFileBytes "$B/inventory/reservation-groups/export?sales_category_id=$($cat2.id)"
+  $text = [System.Text.Encoding]::UTF8.GetString($b, 3, $b.Length - 3)
+  $head = ($text -split "`r`n")[0] -replace '"', ''
+  $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF -and
+    $head -eq '販売期間,媒体,取引先,販売カテゴリー,項目,備考,商品分類コード,商品分類,商品コード,商品名,確保数,使用数,残り,確保数合計,使用数合計'
 }
 Check '枠のない商品・カテゴリーの受注はそのまま通る' {
   $o = NewOrder @{
@@ -1689,27 +1710,41 @@ Check '無効にしたマスタを PATCH is_active=true で有効に戻せる' {
 }
 
 
+# 回帰確認のスクリプト（scripts\*.mjs）を流し、1行に1項目「OK/NG<TAB>項目名」で返ってきた結果を数える
+function RunVerify([string]$script) {
+  $env:CONY_API  = $B
+  $env:CONY_PASS = $pass
+  # node の出力（UTF-8）を化けずに受け取る
+  $prevEnc = [Console]::OutputEncoding
+  try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+  try {
+    $lines = & node (Join-Path $root "scripts\$script") 2>&1
+  } catch {
+    # node が途中で落ちると stderr への出力で例外になる。理由を NG として残し、smoke は最後まで流す
+    $lines = @("NG`t$script が途中で止まりました`t$($_.Exception.Message)")
+  }
+  try { [Console]::OutputEncoding = $prevEnc } catch {}
+  if (-not $lines) { Check "$script が結果を返す" { $false } }
+  foreach ($ln in @($lines)) {
+    $parts = ([string]$ln) -split "`t"
+    if ($parts[0] -eq 'OK') { Check $parts[1] { $true } }
+    elseif ($parts[0] -eq 'NG') { $detail = ($parts[2..($parts.Length - 1)] -join ' '); Check ($parts[1] + '  -> ' + $detail) { $false } }
+    else { Check ("${script}: " + [string]$ln) { $false } }
+  }
+}
+
 Write-Host '=== 31. マスタ編フィードバック（1001）の受入テストで見つかった不具合の回帰確認 ===' -ForegroundColor Cyan
-# 確認の中身は scripts\verify-master-feedback.mjs。1行に1項目「OK/NG<TAB>項目名」で返ってくる。
-$env:CONY_API  = $B
-$env:CONY_PASS = $pass
-# node の出力（UTF-8）を化けずに受け取る
-$prevEnc = [Console]::OutputEncoding
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
-try {
-  $mfLines = & node (Join-Path $root 'scripts\verify-master-feedback.mjs') 2>&1
-} catch {
-  # node が途中で落ちると stderr への出力で例外になる。理由を NG として残し、smoke は最後まで流す
-  $mfLines = @("NG`tverify-master-feedback.mjs が途中で止まりました`t$($_.Exception.Message)")
-}
-try { [Console]::OutputEncoding = $prevEnc } catch {}
-if (-not $mfLines) { Check 'verify-master-feedback.mjs が結果を返す' { $false } }
-foreach ($ln in @($mfLines)) {
-  $parts = ([string]$ln) -split "`t"
-  if ($parts[0] -eq 'OK') { Check $parts[1] { $true } }
-  elseif ($parts[0] -eq 'NG') { $detail = ($parts[2..($parts.Length - 1)] -join ' '); Check ($parts[1] + '  -> ' + $detail) { $false } }
-  else { Check ('verify-master-feedback.mjs: ' + [string]$ln) { $false } }
-}
+RunVerify 'verify-master-feedback.mjs'
+
+Write-Host '=== 32. マスター編②・在庫編（2026-10-09）のご要望 ===' -ForegroundColor Cyan
+Write-Host '--- 取引先・納品先・得意先別商品・分類（海外の消費税、帳票の JAN、通貨・経費科目）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1009-masters1.mjs'
+Write-Host '--- 商品・SKU・セット（SKU の商品名・カラー/サイズ、削除・コピー）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1009-masters2.mjs'
+Write-Host '--- 在庫表・入荷登録・在庫調整' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1009-stock.mjs'
+Write-Host '--- 引当在庫（確保の見出し＋明細）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1009-reservations.mjs'
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

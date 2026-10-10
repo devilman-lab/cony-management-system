@@ -265,13 +265,14 @@ export class AmazonImportService {
       .select([
         't.external_sku_code as amazon_sku',
         's.sku_code as sku_code',
-        'p.product_name as product_name',
+        // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
+        sql<string>`coalesce(nullif(btrim(s.sku_name), ''), p.product_name)`.as('product_name'),
         sql<string>`coalesce(sum(t.qty),0)`.as('qty'),
         sql<string>`coalesce(sum(t.product_sales),0)`.as('product_sales'),
         sql<string>`coalesce(sum(t.total_amount),0)`.as('total_amount'),
       ])
       .where('t.transaction_type', 'in', ['注文', '返金'])
-      .groupBy(['t.external_sku_code', 's.sku_code', 'p.product_name'])
+      .groupBy(['t.external_sku_code', 's.sku_code', 's.sku_name', 'p.product_name'])
       .orderBy(sql`coalesce(sum(t.product_sales),0)`, 'desc')
       .execute();
 

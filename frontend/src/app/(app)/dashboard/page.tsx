@@ -51,14 +51,15 @@ export default function DashboardPage() {
         <Card>
           <CardHead title="直近の受注" right={<Link href="/orders" className="btn btn-ghost btn-sm">一覧へ</Link>} />
           <DataTable<OrderRow>
+            fit
             columns={[
-              { key: 'order_no', label: '受注番号', render: (r) => <Link href={`/orders/${r.id}`} className="num font-semibold text-[var(--color-brand-700)]">{r.order_no}</Link> },
-              { key: 'order_date', label: '受注日', render: (r) => <Num>{ymd(r.order_date)}</Num> },
-              { key: 'order_type', label: '区分' },
+              { key: 'order_no', label: '受注番号', width: 112, nowrap: true, render: (r) => <Link href={`/orders/${r.id}`} className="num font-semibold text-[var(--color-brand-700)]">{r.order_no}</Link> },
+              { key: 'order_date', label: '受注日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.order_date)}</Num> },
+              { key: 'order_type', label: '区分', width: 52 },
               { key: 'partner_name', label: '取引先' },
               { key: 'delivery_name', label: '納品先', render: (r) => r.delivery_name ?? '（直送）' },
-              { key: 'staff_name', label: '販売担当', render: (r) => r.staff_name ?? '' },
-              { key: 'status', label: '状態', render: (r) => <Badge status={r.status} /> },
+              { key: 'staff_name', label: '販売担当', width: 80, render: (r) => r.staff_name ?? '' },
+              { key: 'status', label: '状態', width: 82, render: (r) => <Badge status={r.status} /> },
             ]}
             rows={recent.data?.items ?? []}
             rowKey={(r) => r.id}

@@ -57,17 +57,19 @@ export default function MovesPage() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<MoveRow>
           wide
+          fit
           columns={[
-            { key: 'moved_at', label: '日時', width: 130, render: (r) => <Num>{ymdhm(r.moved_at)}</Num> },
-            { key: 'movement_type', label: '種別', width: 90 },
-            { key: 'sku_code', label: 'SKU', width: 150, render: (r) => <Num>{r.sku_code}</Num> },
+            // 1280 幅でも担当まで見える幅。日時は日付と時刻の2行に折り返す
+            { key: 'moved_at', label: '日時', width: 84, render: (r) => <Num>{ymdhm(r.moved_at)}</Num> },
+            { key: 'movement_type', label: '種別', width: 64 },
+            { key: 'sku_code', label: 'SKU', width: 124, render: (r) => <Num>{r.sku_code}</Num> },
             { key: 'product_name', label: '商品' },
-            { key: 'warehouse_name', label: '倉庫', width: 100 },
-            { key: 'qty', label: '増減', r: true, width: 80, render: (r) => <span className={Number(r.qty) < 0 ? 'text-[var(--color-crit-500)]' : ''}>{Number(r.qty) > 0 ? '+' : ''}{qty(r.qty)}</span> },
-            { key: 'qty_before', label: '前', r: true, width: 70, render: (r) => qty(r.qty_before) },
-            { key: 'qty_after', label: '後', r: true, width: 70, render: (r) => qty(r.qty_after) },
-            { key: 'ref_table', label: '元伝票', width: 110, render: (r) => `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}` },
-            { key: 'user_name', label: '担当', width: 90, render: (r) => r.user_name ?? '' },
+            { key: 'warehouse_name', label: '倉庫', width: 72 },
+            { key: 'qty', label: '増減', r: true, width: 62, render: (r) => <span className={Number(r.qty) < 0 ? 'text-[var(--color-crit-500)]' : ''}>{Number(r.qty) > 0 ? '+' : ''}{qty(r.qty)}</span> },
+            { key: 'qty_before', label: '前', r: true, width: 58, render: (r) => qty(r.qty_before) },
+            { key: 'qty_after', label: '後', r: true, width: 58, render: (r) => qty(r.qty_after) },
+            { key: 'ref_table', label: '元伝票', width: 96, render: (r) => `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}` },
+            { key: 'user_name', label: '担当', width: 72, render: (r) => r.user_name ?? '' },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}

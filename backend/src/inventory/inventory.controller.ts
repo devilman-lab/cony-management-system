@@ -15,7 +15,8 @@ const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してくだ
 const positive = z.string().regex(/^\d+(\.\d+)?$/, '0 以上の数値で入力してください');
 const quality = z.enum(['GOOD', 'DEFECTIVE', 'PENDING']);
 
-const CreateReceiptSchema = z.object({
+// 入荷・在庫調整の編集（stock-operations.controller.ts）でも同じ明細の決まりを使う
+export const CreateReceiptSchema = z.object({
   warehouse_id: z.number().int().positive(),
   supplier_partner_id: z.number().int().positive().nullish(),
   planned_date: ymd.nullish(),
@@ -32,6 +33,8 @@ const CreateReceiptSchema = z.object({
         lot_no: z.string().trim().max(40).nullish(),
         expiry_date: ymd.nullish(),
         cost_price: decimal.nullish(),
+        /** 商品ごとの備考（在庫編 Z-12） */
+        note: z.string().max(2000).nullish(),
       }),
     )
     .min(1, '入荷明細を1行以上入力してください'),
@@ -56,7 +59,7 @@ const ReceiptListSchema = z.object({
 });
 type ReceiptListQuery = z.infer<typeof ReceiptListSchema>;
 
-const CreateAdjustmentSchema = z.object({
+export const CreateAdjustmentSchema = z.object({
   warehouse_id: z.number().int().positive(),
   adjustment_date: ymd,
   reason_code: z.string().trim().min(1),
@@ -194,8 +197,8 @@ export class InventoryController {
 
   // ---- 取引先別確保数 -----------------------------------------------------
   /**
+   * 明細1行だけの確保を作る（2026-10-09 より前の経路。画面は reservation-groups を使う）。
    * 確保数は期間で持つ。放送日ごとでも月ごとでも同じ形で登録できる。
-   * 同じ取引先・販売カテゴリー・商品・開始日の組み合わせは1件だけ（データベース側の一意制約）。
    */
   @Post('reservations')
   @RequirePermission('S-08', 'create')
@@ -203,21 +206,12 @@ export class InventoryController {
     @Body(new ZodValidationPipe(CreateReservationSchema)) body: CreateReservationBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.db
-      .insertInto('reservations')
-      .values({
-        partner_id: body.partner_id ?? null,
-        sales_category_id: body.sales_category_id,
-        sku_id: body.sku_id,
-        period_from: body.period_from,
-        period_to: body.period_to,
-        reserved_qty: body.reserved_qty,
-        note: body.note ?? null,
-        created_by: user.id,
-        updated_by: user.id,
-      })
-      .returning(['id', 'reserved_qty', 'consumed_qty'])
-      .executeTakeFirstOrThrow();
+    const g = await this.reservations.createGroup(
+      { ...body, lines: [{ sku_id: body.sku_id, reserved_qty: body.reserved_qty }] },
+      user.id,
+    );
+    const line = g.lines[0];
+    return { id: line.id, group_id: g.id, reserved_qty: line.reserved_qty, consumed_qty: line.consumed_qty };
   }
 
   @Get('reservations')
@@ -245,13 +239,17 @@ export class InventoryController {
       base
         .select([
           'r.id as id',
+          // 2026-10-09 から明細は確保（見出し）にぶら下がる
+          'r.group_id as group_id',
+          'r.media_id as media_id',
           'r.partner_id as partner_id',
           'p.name1 as partner_name',
           'r.sales_category_id as sales_category_id',
           'r.sku_id as sku_id',
           'sc.name as sales_category_name',
           's.sku_code as sku_code',
-          'pr.product_name as product_name',
+          // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
+          sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
           'r.period_from as period_from',
           'r.period_to as period_to',
           'r.reserved_qty as reserved_qty',
@@ -277,16 +275,16 @@ export class InventoryController {
     @Body(new ZodValidationPipe(UpdateReservationSchema)) body: UpdateReservationBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.reservations.update(id, body, user.id);
+    return this.reservations.updateLine(id, body, user.id);
   }
 
   @Delete('reservations/:id')
   @RequirePermission('S-08', 'delete')
   removeReservation(@Param('id', ParseIntPipe) id: number) {
-    return this.reservations.remove(id);
+    return this.reservations.removeLine(id);
   }
 
-  /** 前月の枠を翌月分として複写する。毎月の登録を数量の見直しだけで済ませるため。 */
+  /** 前月の確保を翌月分として複写する（見出しごと、明細も写す）。毎月の登録を数量の見直しだけで済ませるため。 */
   @Post('reservations/copy')
   @HttpCode(200)
   @RequirePermission('S-08', 'create')

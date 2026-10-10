@@ -146,15 +146,17 @@ export default function ImportsPage() {
           <Card>
             <CardHead title="取込履歴" sub="いつ・誰が・何件取り込んだか。「登録できた件数」は実際に登録できた件数（販社・通販は受注の件数）で、読めただけの行は含みません" />
             <DataTable<BatchRow>
+              fit
               columns={[
-                { key: 'imported_at', label: '日時', width: 130, render: (r) => ymdhm(r.imported_at) },
-                { key: 'import_type', label: '種類', width: 90, render: (r) => TYPE_LABEL[r.import_type] ?? r.import_type },
-                { key: 'template_name', label: '書式', width: 150, render: (r) => r.template_name ?? '' },
+                // 画面幅 1280 でも担当まで見える幅。見出しとファイル名は折り返す
+                { key: 'imported_at', label: '日時', width: 84, render: (r) => ymdhm(r.imported_at) },
+                { key: 'import_type', label: '種類', width: 64, render: (r) => TYPE_LABEL[r.import_type] ?? r.import_type },
+                { key: 'template_name', label: '書式', width: 100, render: (r) => r.template_name ?? '' },
                 { key: 'file_name', label: 'ファイル' },
-                { key: 'total_count', label: '読んだ行数', r: true, width: 90 },
-                { key: 'success_count', label: '登録できた件数', r: true, width: 110 },
-                { key: 'error_count', label: '読めなかった行', r: true, width: 110, render: (r) => (r.error_count > 0 ? <span className="text-[var(--color-crit)] font-semibold">{r.error_count}</span> : '0') },
-                { key: 'imported_by_name', label: '担当', width: 90, render: (r) => r.imported_by_name ?? '' },
+                { key: 'total_count', label: '読んだ行数', r: true, width: 56 },
+                { key: 'success_count', label: '登録できた件数', r: true, width: 64 },
+                { key: 'error_count', label: '読めなかった行', r: true, width: 64, render: (r) => (r.error_count > 0 ? <span className="text-[var(--color-crit)] font-semibold">{r.error_count}</span> : '0') },
+                { key: 'imported_by_name', label: '担当', width: 72, render: (r) => r.imported_by_name ?? '' },
               ]}
               rows={batches.items}
               rowKey={(r) => r.id}

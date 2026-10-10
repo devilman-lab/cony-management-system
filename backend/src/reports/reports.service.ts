@@ -4,6 +4,7 @@ import { sql } from 'kysely';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
+import { skuNameExpr } from '../masters/products.service';
 import { ShipmentsService } from '../shipping/shipments.service';
 import { CONTENT_WIDTH, ReportDoc, money, qty, ymd, type Column } from './pdf-builder';
 import { mergeToPdf, type MergeInput } from './pdf-merge';
@@ -158,29 +159,33 @@ export class ReportsService {
 
       // FBA用JANは、設定されている行が1つでもあるときだけ列を出す。
       // 常に出すと、使っていない取引先の依頼書に空の列が並ぶため（1001 ご要望）。
+      // JAN は得意先別商品の出荷JAN、空なら SKU の JAN（コニーJAN）。出荷依頼書に載せてほしいとの
+      // ご確認（2026-10-09 マスター編② M-18）で常に列を出す。
       const hasFbaJan = lines.some((l) => (l.fba_jan ?? '').trim() !== '');
       const columns: Column[] = hasFbaJan
         ? [
             { label: '行', width: 26, align: 'right' },
-            { label: '商品コード', width: 100 },
-            { label: 'FBA用JAN', width: 110 },
-            { label: '品名', width: 171 },
-            { label: '区分', width: 56, align: 'center' },
-            { label: '数量', width: 60, align: 'right' },
+            { label: '商品コード', width: 95 },
+            { label: 'JAN', width: 80 },
+            { label: 'FBA用JAN', width: 80 },
+            { label: '品名', width: 146 },
+            { label: '区分', width: 46, align: 'center' },
+            { label: '数量', width: 50, align: 'right' },
           ]
         : [
             { label: '行', width: 26, align: 'right' },
-            { label: '商品コード', width: 110 },
-            { label: '品名', width: 225 },
-            { label: '区分', width: 56, align: 'center' },
-            { label: '数量', width: 60, align: 'right' },
+            { label: '商品コード', width: 105 },
+            { label: 'JAN', width: 85 },
+            { label: '品名', width: 201 },
+            { label: '区分', width: 50, align: 'center' },
+            { label: '数量', width: 56, align: 'right' },
           ];
       doc.table(
         columns,
         lines.map((l) =>
           hasFbaJan
-            ? [l.line_no, l.sku_code ?? '', l.fba_jan ?? '', l.item_name, l.line_type, qty(l.qty)]
-            : [l.line_no, l.sku_code ?? '', l.item_name, l.line_type, qty(l.qty)],
+            ? [l.line_no, l.sku_code ?? '', l.jan ?? '', l.fba_jan ?? '', l.item_name, l.line_type, qty(l.qty)]
+            : [l.line_no, l.sku_code ?? '', l.jan ?? '', l.item_name, l.line_type, qty(l.qty)],
         ),
       );
       doc.totals([['合計数量', qty(this.goodsQty(lines))]]);
@@ -218,7 +223,8 @@ export class ReportsService {
             'w.short_name as warehouse_name',
             's.sku_code as sku_code',
             's.jan as jan',
-            'p.product_name as product_name',
+            // 品名は SKU の商品名があればそれ（2026-10-09 マスター編②）
+            skuNameExpr('s', 'p').as('product_name'),
             'st.lot_no as lot_no',
             sql<string>`sum(a.qty)`.as('qty'),
           ])
@@ -227,7 +233,7 @@ export class ReportsService {
           // 「引当中」だけを見ると、出荷確定して印刷したときのピッキングリストが
           // 必ず白紙になる（確定後の刷り直しも同じ）。
           .where('a.status', 'in', ['引当中', '出荷済'])
-          .groupBy(['w.short_name', 's.sku_code', 's.jan', 'p.product_name', 'st.lot_no'])
+          .groupBy(['w.short_name', 's.sku_code', 's.jan', 's.sku_name', 'p.product_name', 'st.lot_no'])
           .orderBy('w.short_name')
           .orderBy('s.sku_code')
           .execute()
@@ -239,13 +245,14 @@ export class ReportsService {
             sql<string>`''`.as('warehouse_name'),
             's.sku_code as sku_code',
             's.jan as jan',
-            'p.product_name as product_name',
+            // 品名は SKU の商品名があればそれ（2026-10-09 マスター編②）
+            skuNameExpr('s', 'p').as('product_name'),
             sql<string>`''`.as('lot_no'),
             sql<string>`sum(l.qty)`.as('qty'),
           ])
           .where('l.sales_order_id', 'in', orderIds)
           .where('l.line_type', 'in', ['商品', '内訳商品'])
-          .groupBy(['s.sku_code', 's.jan', 'p.product_name'])
+          .groupBy(['s.sku_code', 's.jan', 's.sku_name', 'p.product_name'])
           .orderBy('s.sku_code')
           .execute();
 
@@ -388,6 +395,8 @@ export class ReportsService {
         // 取引先マスタで宛名・担当者名を決めていればそちらを使う（1001 ご要望）
         'p.invoice_addressee as invoice_addressee',
         'p.invoice_contact_name as invoice_contact_name',
+        // 海外の得意先は消費税 0 で締めてある。税の欄に免税／課税対象外と書くために使う（2026-10-09 マスター編②）
+        'p.is_overseas as is_overseas',
       ])
       .where('iv.id', 'in', invoiceIds)
       .orderBy('iv.invoice_no')
@@ -396,6 +405,9 @@ export class ReportsService {
     if (headers.length === 0) throw new NotFoundException('請求書が見つかりません');
 
     const printIssueDate = await this.settings.bool('INVOICE_PRINT_ISSUE_DATE', false);
+    // 海外の得意先の税の表記。設定 OVERSEAS_TAX_TREATMENT で選ぶ（税額はどちらも 0）。
+    const overseasTaxLabel =
+      (await this.settings.text('OVERSEAS_TAX_TREATMENT', 'exempt')) === 'non_taxable' ? '課税対象外' : '免税（税抜扱い）';
     const company = await this.company();
     const doc = new ReportDoc('請求書');
 
@@ -451,14 +463,22 @@ export class ReportsService {
       if (taxes.length > 0) {
         doc.table(
           [
-            { label: '税率', width: 70, align: 'center' },
+            { label: '税率', width: iv.is_overseas ? 120 : 70, align: 'center' },
             { label: '対象金額（税抜）', width: 150, align: 'right' },
             { label: '消費税額', width: 150, align: 'right' },
           ],
-          taxes.map((t) => [`${Number(t.tax_rate)}%`, money(t.taxable_base), money(t.tax_amount)]),
+          // 海外の得意先は税率の欄に「免税（税抜扱い）」／「課税対象外」と書く（0% と出すと
+          // 国内の 0% 税率と見分けがつかないため）
+          taxes.map((t) => [
+            iv.is_overseas ? overseasTaxLabel : `${Number(t.tax_rate)}%`,
+            money(t.taxable_base),
+            money(t.tax_amount),
+          ]),
         );
         doc.y += 4;
       }
+      // 税率別の内訳が無い（明細0件）ときも扱いが分かるよう、1行で書いておく
+      if (iv.is_overseas) doc.line(`消費税　${overseasTaxLabel}`);
 
       doc.totals([
         ['前回請求残高', money(iv.prev_invoice_balance)],
@@ -578,6 +598,21 @@ export class ReportsService {
         order by pp2.id limit 1))`;
   }
 
+  /**
+   * 出荷系帳票に印字する JAN（2026-10-09 マスター編② M-18「出荷JANが空欄ならコニーJAN」）。
+   * 得意先別商品の出荷JAN → SKU の JAN の順。得意先別商品は上代と同じく、明細が指していれば
+   * それを、指していなければ取引先×SKU で引く。空白だけの出荷JANは空とみなす。
+   */
+  private shippingJanExpr(lineAlias: string, orderAlias: string, skuAlias: string) {
+    return sql<string | null>`coalesce(
+      (select nullif(btrim(pp.shipping_jan), '') from partner_products pp where pp.id = ${sql.ref(`${lineAlias}.partner_product_id`)}),
+      (select nullif(btrim(pp2.shipping_jan), '') from partner_products pp2
+        where pp2.partner_id = ${sql.ref(`${orderAlias}.partner_id`)} and pp2.sku_id = ${sql.ref(`${lineAlias}.sku_id`)}
+          and nullif(btrim(pp2.shipping_jan), '') is not null
+        order by pp2.id limit 1),
+      ${sql.ref(`${skuAlias}.jan`)})`;
+  }
+
   private orderLines(orderId: number) {
     return this.db
       .selectFrom('sales_order_lines as l')
@@ -594,7 +629,9 @@ export class ReportsService {
         'l.amount as amount',
         'l.is_stock_target as is_stock_target',
         's.sku_code as sku_code',
-        's.jan as jan',
+        // 出荷指示書・納品書の JAN 欄は、得意先別商品の出荷JAN、空なら SKU の JAN（コニーJAN）
+        // （2026-10-09 マスター編② M-18）
+        this.shippingJanExpr('l', 'o', 's').as('jan'),
         // FBA・ショップへの出荷依頼では、コニーのJANではなくこちらを使う（1001 ご要望）
         's.fba_jan as fba_jan',
         this.retailPriceExpr('l', 'o').as('retail_price'),
@@ -621,10 +658,13 @@ export class ReportsService {
   private deliveryColumns(form: DeliveryNoteForm): Column[] {
     switch (form) {
       case '単価なし':
+        // 顧客の見本（納品書_単価なし）は JAN の列を「コード」と呼び、商品コードの左に置く。
+        // 値は「単価あり2」と同じ（得意先別商品の出荷JAN、空なら SKU の JAN）。
         return [
           { label: '行', width: 26, align: 'right' },
-          { label: '商品コード', width: 115 },
-          { label: '品名', width: 322 },
+          { label: 'コード', width: 92 },
+          { label: '商品コード', width: 105 },
+          { label: '品名', width: 240 },
           { label: '数量', width: 60, align: 'right' },
         ];
       case '単価あり2':
@@ -648,13 +688,16 @@ export class ReportsService {
           { label: '金額', width: 92, align: 'right' },
         ];
       default:
+        // 単価あり。顧客の見本（納品書_単価あり）どおり、商品コードの左に「JANコード」の列を置く。
+        // 値は「単価あり2」と同じ（得意先別商品の出荷JAN、空なら SKU の JAN）。
         return [
           { label: '行', width: 26, align: 'right' },
-          { label: '商品コード', width: 105 },
-          { label: '品名', width: 190 },
+          { label: 'JANコード', width: 92 },
+          { label: '商品コード', width: 100 },
+          { label: '品名', width: 125 },
           { label: '数量', width: 42, align: 'right' },
-          { label: '単価', width: 68, align: 'right' },
-          { label: '金額', width: 92, align: 'right' },
+          { label: '単価', width: 60, align: 'right' },
+          { label: '金額', width: 78, align: 'right' },
         ];
     }
   }
@@ -674,7 +717,7 @@ export class ReportsService {
   ) {
     switch (form) {
       case '単価なし':
-        return [l.line_no, l.sku_code ?? '', l.item_name, qty(l.qty)];
+        return [l.line_no, l.jan ?? '', l.sku_code ?? '', l.item_name, qty(l.qty)];
       case '単価あり2':
         return [
           l.line_no,
@@ -698,6 +741,7 @@ export class ReportsService {
       default:
         return [
           l.line_no,
+          l.jan ?? '',
           l.sku_code ?? '',
           l.item_name,
           qty(l.qty),

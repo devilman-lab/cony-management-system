@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 7本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 8本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -79,9 +79,11 @@ SELECT '⑥ ロイヤリティを1枚のフォームで',
          WHEN (SELECT count(*) FROM information_schema.columns
                 WHERE table_schema = 'cony' AND table_name = 'royalty_rules'
                   AND column_name = 'rule_group_id') = 1
+          -- 外部キーの名前は、移行SQLで付けると fk_royalty_rules_group、02-schema.sql から作ると自動の名前になる。
+          -- 名前ではなく「rule_group_id に外部キーがあるか」で見る（新しく作ったDBで「一部」と出ていた）
           AND (SELECT count(*) FROM pg_constraint
-                WHERE conrelid = 'cony.royalty_rules'::regclass
-                  AND conname = 'fk_royalty_rules_group') = 1
+                WHERE conrelid = 'cony.royalty_rules'::regclass AND contype = 'f'
+                  AND pg_get_constraintdef(oid) LIKE '%(rule_group_id)%') = 1
           AND (SELECT count(*) FROM pg_indexes
                 WHERE schemaname = 'cony' AND indexname = 'ux_royalty_rules_scope'
                   AND indexdef LIKE '%media_id%') = 1
@@ -113,6 +115,28 @@ SELECT '⑦ マスタご要望の残り（仕入区分・支払先・SKU原価�
          ELSE '一部'
        END,
        '2026-10-04_master_feedback2.sql'
+UNION ALL
+SELECT '⑧ マスター編②・在庫編（海外・SKU商品名・入荷備考・確保の見出し）',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony'
+                  AND ((table_name = 'partners'      AND column_name = 'is_overseas')
+                    OR (table_name = 'skus'          AND column_name = 'sku_name')
+                    OR (table_name = 'receipt_lines' AND column_name = 'note')
+                    OR (table_name = 'reservations'  AND column_name IN ('group_id', 'media_id')))) = 5
+          AND to_regclass('cony.reservation_groups') IS NOT NULL
+          AND (SELECT count(*) FROM pg_indexes
+                WHERE schemaname = 'cony' AND indexname = 'ux_reservations_group_sku') = 1
+          AND (SELECT count(*) FROM pg_indexes
+                WHERE schemaname = 'cony' AND indexname = 'ux_reservations_scope') = 0
+         THEN '済'
+         WHEN to_regclass('cony.reservation_groups') IS NULL
+          AND (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'partners' AND column_name = 'is_overseas') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-09_master2_stock_feedback.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。
@@ -127,8 +151,8 @@ SELECT count(*) AS 請求の一意の決まりの数_1なら正常
      WHERE conrelid = 'invoices'::regclass AND conname = 'invoices_partner_id_period_to_key'
   ) t;
 
--- テーブルの数。⑤を当てたあとは 71（partner_category_links が増える）。
-SELECT count(*) AS テーブル数_71なら最新
+-- テーブルの数。⑤を当てたあとは 71（partner_category_links が増える）、⑧のあとは 72（reservation_groups が増える）。
+SELECT count(*) AS テーブル数_72なら最新
   FROM information_schema.tables
  WHERE table_schema = 'cony' AND table_type = 'BASE TABLE';
 

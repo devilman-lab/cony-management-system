@@ -20,7 +20,7 @@ WITH expected(sort_key, category, item, actual, expect) AS (
   -- 1. スキーマの骨格
   SELECT 110, '構造', 'テーブル',
          (SELECT count(*) FROM information_schema.tables
-           WHERE table_schema = 'cony' AND table_type = 'BASE TABLE'), 71
+           WHERE table_schema = 'cony' AND table_type = 'BASE TABLE'), 72
   UNION ALL
   SELECT 120, '構造', 'ドメイン（money_amt／qty_num／tax_rate）',
          (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -68,7 +68,7 @@ WITH expected(sort_key, category, item, actual, expect) AS (
   UNION ALL
   SELECT 370, '初期データ', '採番ルール',           (SELECT count(*) FROM numbering_rules), 11
   UNION ALL
-  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 24
+  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 25
   UNION ALL
   SELECT 390, '初期データ', '取込テンプレート（販社4社）',
                                                     (SELECT count(*) FROM import_templates), 4

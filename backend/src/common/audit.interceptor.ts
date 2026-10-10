@@ -79,10 +79,22 @@ const RULES: Record<string, Rule> = {
   'POST inventory/receipts/:id/receive': { table: 'receipts', action: 'update', idFrom: 'param' },
   'POST inventory/receipts/:id/cancel': { table: 'receipts', action: 'update', idFrom: 'param' },
   'POST inventory/adjustments': { table: 'stock_adjustments', action: 'insert', idFrom: 'response' },
+  // 2026-10-09 在庫編: 在庫表の備考・入荷の編集・在庫調整の編集／調整／取消／CSV 登録
+  'PATCH inventory/stocks/:id': { table: 'stocks', action: 'update', idFrom: 'param' },
+  'PATCH inventory/receipts/:id': { table: 'receipts', action: 'update', idFrom: 'param' },
+  'PATCH inventory/adjustments/:id': { table: 'stock_adjustments', action: 'update', idFrom: 'param' },
+  'POST inventory/adjustments/:id/confirm': { table: 'stock_adjustments', action: 'update', idFrom: 'param' },
+  'POST inventory/adjustments/:id/cancel': { table: 'stock_adjustments', action: 'update', idFrom: 'param' },
+  'POST inventory/adjustments/import': { table: 'stock_adjustments', action: 'insert', idFrom: 'none' },
   'POST inventory/reservations': { table: 'reservations', action: 'insert', idFrom: 'response' },
   'PATCH inventory/reservations/:id': { table: 'reservations', action: 'update', idFrom: 'param' },
   'DELETE inventory/reservations/:id': { table: 'reservations', action: 'delete', idFrom: 'param' },
   'POST inventory/reservations/copy': { table: 'reservations', action: 'insert', idFrom: 'none' },
+  // 引当在庫の確保（見出し＋明細。2026-10-09 在庫編）
+  'POST inventory/reservation-groups': { table: 'reservation_groups', action: 'insert', idFrom: 'response' },
+  'PATCH inventory/reservation-groups/:id': { table: 'reservation_groups', action: 'update', idFrom: 'param' },
+  'DELETE inventory/reservation-groups/:id': { table: 'reservation_groups', action: 'delete', idFrom: 'param' },
+  'POST inventory/reservation-groups/copy-month': { table: 'reservation_groups', action: 'insert', idFrom: 'none' },
 
   // マスタ
   'POST masters/simple/:kind': { table: 'kind', action: 'insert', idFrom: 'response' },
@@ -103,6 +115,10 @@ const RULES: Record<string, Rule> = {
   'POST masters/skus': { table: 'skus', action: 'insert', idFrom: 'response' },
   'PATCH masters/skus/:id': { table: 'skus', action: 'update', idFrom: 'param' },
   'POST masters/sets': { table: 'set_headers', action: 'insert', idFrom: 'none' },
+  // 商品は SKU ごと、セットは構成ごと消える。何を消したかを残す（2026-10-09 マスター編②）
+  'DELETE masters/products/:id': { table: 'products', action: 'delete', idFrom: 'param' },
+  'DELETE masters/skus/:id': { table: 'skus', action: 'delete', idFrom: 'param' },
+  'DELETE masters/sets/:id': { table: 'set_headers', action: 'delete', idFrom: 'param' },
   'POST masters/partner-products': { table: 'partner_products', action: 'insert', idFrom: 'response' },
   'PATCH masters/partner-products/:id': { table: 'partner_products', action: 'update', idFrom: 'param' },
   'POST masters/partner-products/:id/deactivate': { table: 'partner_products', action: 'update', idFrom: 'param' },
@@ -166,6 +182,8 @@ const CHILD_LINES: Record<string, { table: string; fk: string; order: string }> 
   invoices: { table: 'invoice_lines', fk: 'invoice_id', order: 'line_no' },
   stock_adjustments: { table: 'stock_adjustment_lines', fk: 'stock_adjustment_id', order: 'line_no' },
   set_headers: { table: 'set_components', fk: 'set_header_id', order: 'sort_order' },
+  // 引当在庫の確保（見出し）。明細は SKU ごとの確保数（2026-10-09 在庫編）
+  reservation_groups: { table: 'reservations', fk: 'group_id', order: 'id' },
 };
 
 /** 明細を写す上限。これを超える伝票は件数だけ残す（履歴が膨らむのを防ぐ）。 */

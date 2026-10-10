@@ -410,10 +410,12 @@ export interface PartnersTable {
   shipping_fee_threshold: string | null;
   /** 請求する送料額。NULL＝既定値  [money_amt] */
   shipping_fee_amount: string | null;
-  /** 既定の取引条件（委託／買取）。受注で自動表示し変更可  [VARCHAR(10)] */
+  /** 既定の取引条件（委託／買取／仕入）。受注で自動表示し変更可  [VARCHAR(10)] */
   default_trade_type: string | null;
-  /** ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る  [BOOLEAN] */
+  /** ロイヤリティの支払先。規定の「支払先」の候補をこの印で絞る（1001 ご要望）  [BOOLEAN] */
   is_royalty_payee: Generated<boolean>;
+  /** 海外の取引先。消費税を免税（税抜扱い）または課税対象外として扱う（2026-10-09 マスター編②）。 どちらで扱うかはシステム設定 OVERSEAS_TAX_TREATMENT で決める  [BOOLEAN] */
+  is_overseas: Generated<boolean>;
   /** ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。 締め日（99＝月末）  [SMALLINT] */
   closing_day: number | null;
   /** [SMALLINT] */
@@ -601,7 +603,7 @@ export interface DeliveryDestinationsTable {
   delivery_note_print2: string | null;
   /** [-> work_instructions / BIGINT] */
   work_instruction_id: number | null;
-  /** [-> delivery_rules / BIGINT] */
+  /** 納品ルール。2026-10-01 のご指摘で納品先の編集画面からは外した（不要とのこと）。 列とマスタは残してある。また使うことになったら画面に戻すだけで済むため。  [-> delivery_rules / BIGINT] */
   delivery_rule_id: number | null;
   /** [-> warehouses / BIGINT] */
   default_warehouse_id: number | null;
@@ -828,6 +830,8 @@ export interface SkusTable {
   product_id: number;
   /** 例：FT1196-0306-100  [VARCHAR(40)] */
   sku_code: string;
+  /** SKU ごとの商品名。同じ品番で (W)・Amazon用・キャップ付 などを SKU の末尾で分けるとき用（2026-10-09 マスター編②）。 空なら商品の商品名を使う  [VARCHAR(200)] */
+  sku_name: string | null;
   /** [-> colors / BIGINT] */
   color_id: number | null;
   /** [-> sizes / BIGINT] */
@@ -840,7 +844,7 @@ export interface SkusTable {
   fba_jan: string | null;
   /** [VARCHAR(60)] */
   shop_product_code: string | null;
-  /** このSKUだけの原価。空欄なら商品の原価を使う  [money_amt] */
+  /** このSKUだけの原価。空欄なら商品の原価を使う（大きいサイズだけ原価が違う。1001 ご要望）  [money_amt] */
   cost_price: string | null;
   /** [INTEGER] */
   sort_order: number | null;
@@ -1069,12 +1073,49 @@ export type StockMovements = Selectable<StockMovementsTable>;
 export type NewStockMovements = Insertable<StockMovementsTable>;
 export type StockMovementsUpdate = Updateable<StockMovementsTable>;
 
+/** 確保（引当在庫）の見出し。明細は reservations */
+export interface ReservationGroupsTable {
+  /** [BIGINT] */
+  id: Generated<number>;
+  /** [DATE] */
+  period_from: string;
+  /** [DATE] */
+  period_to: string;
+  /** 取引先が空のとき、この媒体の取引先の受注で減らす  [-> media / BIGINT] */
+  media_id: number | null;
+  /** 入っていれば、この取引先の受注で減らす  [-> partners / BIGINT] */
+  partner_id: number | null;
+  /** [-> sales_categories / BIGINT] */
+  sales_category_id: number;
+  /** 項目（楽楽販売の「集計」にあたる見出し）  [VARCHAR(60)] */
+  item_label: string | null;
+  /** [-> product_classes / BIGINT] */
+  product_class_id: number | null;
+  /** [TEXT] */
+  note: string | null;
+  /** [TIMESTAMPTZ] */
+  created_at: Generated<Date>;
+  /** [-> users / BIGINT] */
+  created_by: number | null;
+  /** [TIMESTAMPTZ] */
+  updated_at: Generated<Date>;
+  /** [-> users / BIGINT] */
+  updated_by: number | null;
+}
+export type ReservationGroups = Selectable<ReservationGroupsTable>;
+export type NewReservationGroups = Insertable<ReservationGroupsTable>;
+export type ReservationGroupsUpdate = Updateable<ReservationGroupsTable>;
+
 /** 確保数（引当在庫）。販売カテゴリー×SKU×期間、任意で取引先。受注登録時にここから減る */
 export interface ReservationsTable {
   /** [BIGINT] */
   id: Generated<number>;
-  /** 任意。空なら販売カテゴリー全体の枠（v1.7）  [-> partners / BIGINT] */
+  /** [-> reservation_groups / BIGINT] */
+  group_id: number | null;
+  /** 任意。空なら販売カテゴリー全体の枠（v1.7）。見出しと同じ値を持つ  [-> partners / BIGINT] */
   partner_id: number | null;
+  /** 見出しと同じ値を持つ  [-> media / BIGINT] */
+  media_id: number | null;
   /** [-> sales_categories / BIGINT] */
   sales_category_id: number;
   /** [-> skus / BIGINT] */
@@ -1150,6 +1191,8 @@ export interface ReceiptLinesTable {
   expiry_date: string | null;
   /** [money_amt] */
   cost_price: string | null;
+  /** 商品ごとの備考（2026-10-09 在庫編）  [TEXT] */
+  note: string | null;
   /** [TIMESTAMPTZ] */
   created_at: Generated<Date>;
   /** [-> users / BIGINT] */
@@ -2520,6 +2563,7 @@ export interface DB {
   receipt_lines: ReceiptLinesTable;
   receipts: ReceiptsTable;
   refurbishments: RefurbishmentsTable;
+  reservation_groups: ReservationGroupsTable;
   reservations: ReservationsTable;
   return_lines: ReturnLinesTable;
   returns: ReturnsTable;

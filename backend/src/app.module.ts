@@ -24,8 +24,10 @@ import { HealthController } from './health/health.controller';
 import { AdjustmentsService } from './inventory/adjustments.service';
 import { InventoryController } from './inventory/inventory.controller';
 import { ReceiptsService } from './inventory/receipts.service';
+import { ReservationGroupsController } from './inventory/reservation-groups.controller';
 import { ReservationsService } from './inventory/reservations.service';
 import { StockLedgerService } from './inventory/stock-ledger.service';
+import { StockOperationsController } from './inventory/stock-operations.controller';
 import { StocksController } from './inventory/stocks.controller';
 import { ImportsController } from './imports/imports.controller';
 import { AmazonImportService } from './imports/amazon-import.service';
@@ -64,6 +66,8 @@ import { ShipmentsService } from './shipping/shipments.service';
     MastersCsvController,
     StocksController,
     InventoryController,
+    ReservationGroupsController,
+    StockOperationsController,
     ReturnsController,
     OrdersController,
     ShipmentsController,

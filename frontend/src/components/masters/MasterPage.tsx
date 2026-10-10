@@ -52,6 +52,14 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
    */
   csvSlug?: string;
   onSaved?: (row: Record<string, unknown>, editing: T | null) => void;
+  /**
+   * 本体を保存したあと、続けて別の経路で保存するもの（商品の SKU など）。
+   *
+   * 商品の SKU は別の経路で保存するため、SKU に FBA用JAN などを入れて「更新する」を押すと
+   * 商品だけが保存され、SKU の入力が黙って捨てられていた（2026-10-09 マスター編②「入れて保存しても消えてしまう」）。
+   * 失敗したら画面を閉じずに理由を出す（本体は保存済みなので、新規なら編集の状態に切り替える）。
+   */
+  afterSave?: (row: Record<string, unknown>, form: F, set: (patch: Partial<F>) => void) => Promise<void>;
 }
 
 export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPageProps<T, F>) {
@@ -71,6 +79,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
+  const setFormPatch = (patch: Partial<F>) => setForm((s) => (s ? { ...s, ...patch } : s));
   const openNew = () => {
     setEditing(null);
     setForm(p.empty());
@@ -97,6 +106,18 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
       const row = editing
         ? await api.patch<Record<string, unknown>>(`${p.writePath}/${p.rowKey(editing)}`, body)
         : await api.post<Record<string, unknown>>(p.writePath, body);
+      if (p.afterSave) {
+        try {
+          await p.afterSave(row, form, setFormPatch);
+        } catch (e) {
+          // 本体は保存できている。新規だった場合にもう一度「登録する」で二重に登録しないよう、編集の状態にする
+          if (!editing) setEditing(row as T);
+          setError(e);
+          toast(editing ? '更新しましたが、続きの保存に失敗しました' : '登録しましたが、続きの保存に失敗しました', 'bad');
+          await list.reload();
+          return;
+        }
+      }
       toast(editing ? '更新しました' : '登録しました', 'good');
       setOpen(false);
       p.onSaved?.(row, editing);
@@ -161,12 +182,15 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   };
 
   const isActive = p.isActive ?? ((r: T) => r.is_active !== false);
+  // 操作のボタンは列の幅で折り返す（編集・使わない／削除 の2段）。横一列に並べて列を広げると、
+  // 画面幅 1440 でも右の列が画面の外に出てしまうため（2026-10-09 顧客「見切れているので全部出るように」）
+  const buttons = 1 + (p.deactivatePath !== null ? 1 : 0) + (p.deletePath !== null ? 1 : 0);
   const actionCol: Column<T> = {
     key: '_act',
     label: '',
-    width: p.deactivatePath === null ? 70 : 200,
+    width: buttons >= 3 ? 122 : buttons === 2 ? 92 : 56,
     render: (r) => (
-      <span className="flex gap-1 justify-end">
+      <span className="tbl-acts justify-end">
         {can(p.functionId, 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
         {p.deactivatePath !== null && can(p.functionId, 'delete') && isActive(r) && <Button size="sm" variant="danger" onClick={() => deactivate(r)}>使わない</Button>}
         {p.deactivatePath !== null && can(p.functionId, 'update') && !isActive(r) && <Button size="sm" onClick={() => reactivate(r)}>有効に戻す</Button>}
@@ -216,7 +240,9 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
           {p.toolbar}
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
+        {/* 文字の列は「…」で切らずに折り返して全文を出す */}
         <DataTable<T>
+          fit
           columns={[...p.columns, actionCol]}
           rows={list.items}
           rowKey={p.rowKey}
@@ -230,7 +256,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
 
       <Modal open={open} title={editing ? `${p.title}の編集` : `${p.title}の登録`} onClose={() => setOpen(false)} width={p.modalWidth ?? 640} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!form} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
-        {form ? p.renderForm(form, (patch) => setForm((s) => (s ? { ...s, ...patch } : s)), editing) : <div className="py-6 text-center text-[12px] text-[var(--color-ink-3)]">読み込み中…</div>}
+        {form ? p.renderForm(form, setFormPatch, editing) :<div className="py-6 text-center text-[12px] text-[var(--color-ink-3)]">読み込み中…</div>}
       </Modal>
     </div>
   );

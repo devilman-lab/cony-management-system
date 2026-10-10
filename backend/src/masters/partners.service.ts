@@ -28,6 +28,8 @@ export interface PartnerListItem {
   short_name: string | null;
   is_customer: boolean;
   is_supplier: boolean;
+  /** 海外の取引先（2026-10-09 マスター編②）。一覧のバッジと、仕入入力で税区分の初期値を決めるのに使う。 */
+  is_overseas: boolean;
   closing_day: number | null;
   default_trade_type: string | null;
   /** 既定の販売担当。受注入力で取引先を選んだときに引き継ぐ。 */
@@ -102,6 +104,7 @@ export class PartnersService {
           'short_name',
           'is_customer',
           'is_supplier',
+          'is_overseas',
           'closing_day',
           'default_trade_type',
           'sales_staff_id',

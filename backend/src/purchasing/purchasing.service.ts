@@ -8,6 +8,7 @@ import {
 import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
+import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
@@ -35,6 +36,28 @@ const TAX_RATE_BY_DIVISION: Record<string, string> = {
   EXEMPT: '0.00',
   NON_TAX: '0.00',
 };
+
+/**
+ * 海外の仕入先の明細に使う税区分（2026-10-09 マスター編②）。
+ * システム設定 OVERSEAS_TAX_TREATMENT の値 → 区分値 TAX_DIVISION のコード。
+ * 免税（税抜扱い）は「非課税」、課税対象外は「不課税」に当てる。どちらも税率 0%。
+ */
+const OVERSEAS_TAX_DIVISION: Record<string, { code: string; label: string }> = {
+  exempt: { code: 'EXEMPT', label: '免税（税抜扱い）' },
+  non_taxable: { code: 'NON_TAX', label: '課税対象外' },
+};
+
+/** 海外の仕入先の明細の税区分の初期値。画面でも同じ値を初期値に使う。 */
+export interface OverseasTaxDefault {
+  /** 設定の値（exempt／non_taxable） */
+  treatment: string;
+  /** 帳票・画面に出す呼び名 */
+  label: string;
+  tax_division_code_id: number | null;
+  tax_division_code: string;
+  tax_division_name: string | null;
+  tax_rate: string;
+}
 
 export interface CreatePurchaseInput {
   division: '仕入' | '経費';
@@ -134,17 +157,48 @@ export class PurchasingService {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly numbering: NumberingService,
+    private readonly settings: SettingsService,
   ) {}
+
+  /**
+   * 海外の仕入先の明細に使う税区分（2026-10-09 マスター編②）。
+   * 設定 OVERSEAS_TAX_TREATMENT が免税なら「非課税」、課税対象外なら「不課税」。
+   * 仕入入力の画面も、仕入先を選んだときの初期値をここから取る（判定を1か所にするため）。
+   */
+  async overseasTaxDefault(db: ConyDatabase | Transaction<DB> = this.db): Promise<OverseasTaxDefault> {
+    const value = await this.settings.text('OVERSEAS_TAX_TREATMENT', 'exempt');
+    const treatment = OVERSEAS_TAX_DIVISION[value] ? value : 'exempt';
+    const { code, label } = OVERSEAS_TAX_DIVISION[treatment];
+    const division = await db
+      .selectFrom('codes as c')
+      .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
+      .select(['c.id as id', 'c.name as name'])
+      .where('cc.code', '=', 'TAX_DIVISION')
+      .where('c.code', '=', code)
+      .executeTakeFirst();
+    return {
+      treatment,
+      label,
+      tax_division_code_id: division ? Number(division.id) : null,
+      tax_division_code: code,
+      tax_division_name: division?.name ?? null,
+      tax_rate: TAX_RATE_BY_DIVISION[code],
+    };
+  }
 
   /**
    * 明細ごとの税区分と税率を決める（1001 ご要望「仕入項目に税区分」）。
    *  - 明細で税区分を指定していればそれを使い、税率は税区分から決める（食い違いは 400）。
+   *  - 指定がなく仕入先が海外なら、設定 OVERSEAS_TAX_TREATMENT の税区分（非課税／不課税）・税率 0%
+   *    （2026-10-09 マスター編②）。仕入項目マスタの税区分は国内向けの値なので、こちらを優先する。
+   *    ただし税率を 0% 以外で明示されたときは、その指定を尊重して触らない。
    *  - 指定がなく仕入項目を選んでいれば、仕入項目マスタの税区分・税率を使う。
    *  - どちらもなければ、明細の税率（省略時は DB の既定 10%）のまま税区分は空。
    */
   private async resolveLineTax(
     db: Transaction<DB>,
     lines: PurchaseLineInput[],
+    supplierPartnerId: number,
   ): Promise<Array<{ tax_rate: string | undefined; tax_division_code_id: number | null }>> {
     const divisions = await db
       .selectFrom('codes as c')
@@ -153,6 +207,13 @@ export class PurchasingService {
       .where('cc.code', '=', 'TAX_DIVISION')
       .execute();
     const byId = new Map(divisions.map((d) => [Number(d.id), d]));
+
+    const supplier = await db
+      .selectFrom('partners')
+      .select('is_overseas')
+      .where('id', '=', supplierPartnerId)
+      .executeTakeFirst();
+    const overseas = supplier?.is_overseas ? await this.overseasTaxDefault(db) : null;
 
     const itemIds = [...new Set(lines.map((l) => l.purchase_item_id).filter((v): v is number => !!v))];
     const items = itemIds.length
@@ -167,6 +228,13 @@ export class PurchasingService {
     return lines.map((l) => {
       let divisionId = l.tax_division_code_id ?? null;
       let rate = l.tax_rate;
+      if (
+        divisionId === null &&
+        overseas?.tax_division_code_id &&
+        (l.tax_rate === undefined || Number(l.tax_rate) === 0)
+      ) {
+        divisionId = overseas.tax_division_code_id;
+      }
       if (divisionId === null && l.purchase_item_id) {
         const item = itemById.get(l.purchase_item_id);
         if (item?.new_tax_class_code_id) divisionId = Number(item.new_tax_class_code_id);
@@ -203,7 +271,7 @@ export class PurchasingService {
     }
 
     return this.db.transaction().execute(async (trx) => {
-      const lineTax = await this.resolveLineTax(trx, input.lines);
+      const lineTax = await this.resolveLineTax(trx, input.lines, input.supplier_partner_id);
       const purchaseNo = await this.numbering.next(trx, 'purchase');
 
       const purchase = await trx

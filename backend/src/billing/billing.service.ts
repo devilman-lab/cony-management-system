@@ -108,7 +108,7 @@ export class BillingService {
 
     let partnerQuery = this.db
       .selectFrom('partners')
-      .select(['id', 'partner_code', 'name1', 'closing_day'])
+      .select(['id', 'partner_code', 'name1', 'closing_day', 'is_overseas'])
       .where('is_customer', '=', true)
       .where('is_active', '=', true)
       .where('closing_day', 'is not', null);
@@ -126,7 +126,7 @@ export class BillingService {
     for (const partner of partners) {
       const period = closingPeriod(input.target_month, partner.closing_day ?? 99);
       const invoice = await this.db.transaction().execute((trx) =>
-        this.closeOne(trx, partner.id, period, roundingMode, userId),
+        this.closeOne(trx, partner.id, period, roundingMode, userId, partner.is_overseas),
       );
       results.push({
         partner_code: partner.partner_code,
@@ -146,7 +146,14 @@ export class BillingService {
     period: { from: string; to: string },
     roundingMode: string,
     userId: number,
+    overseas = false,
   ) {
+    // 海外の得意先（取引先マスタの「海外」）は消費税を 0 にする（2026-10-09 マスター編②）。
+    // 免税（税抜扱い）でも課税対象外でも税額は 0 で、違いは請求書の表記だけ（reports.service.ts）。
+    // 受注明細の税率は国内と同じ 10% のまま入っていることがあるので、請求明細の税率を 0 に置き換え、
+    // 税率別の内訳も「0%・税額 0」の1行にまとめる（10% の対象額として載せると税がかかって見えるため）。
+    const lineRate = overseas ? sql<string>`0` : null;
+
     // 取り消した請求は残す（請求番号と、いくらで出してどう取り消したかを追えるようにする）。
     // そのため、締め直しの判断材料になるのは「取消でない請求」だけ。
     const existing = await trx
@@ -243,7 +250,7 @@ export class BillingService {
           .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
           .select([
             sql<number>`${invoice.id}`.as('invoice_id'),
-            sql<number>`row_number() over (order by sh.shipment_no, sl.tax_rate)`.as('line_no'),
+            sql<number>`row_number() over (order by sh.shipment_no${overseas ? sql.raw('') : sql.raw(', sl.tax_rate')})`.as('line_no'),
             'sh.id as shipment_id',
             sql<string>`'出荷 ' || sh.shipment_no`.as('item_name'),
             // 数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
@@ -251,7 +258,7 @@ export class BillingService {
             sql<string>`coalesce(sum(sl.qty) filter (where sl.line_type in ('商品','セット商品')
               or (sl.line_type = '内訳商品' and sl.parent_line_no is null)), 0)`.as('qty'),
             sql<string>`0`.as('unit_price'),
-            'sl.tax_rate as tax_rate',
+            (lineRate ?? sql<string>`sl.tax_rate`).as('tax_rate'),
             sql<string>`sum(sl.amount)`.as('amount'),
             sql<number>`${userId}`.as('created_by'),
           ])
@@ -260,7 +267,9 @@ export class BillingService {
           .where('o.is_billable', '=', true)
           .where('sh.ship_date', '>=', period.from)
           .where('sh.ship_date', '<=', period.to)
-          .groupBy(['sh.id', 'sh.shipment_no', 'sl.tax_rate']),
+          .groupBy(['sh.id', 'sh.shipment_no'])
+          // 海外は税率を 0 にそろえるので、税率で行を分けない（1出荷1行）
+          .$if(!overseas, (qb) => qb.groupBy('sl.tax_rate')),
       )
       .execute();
 
@@ -280,12 +289,12 @@ export class BillingService {
           .innerJoin('returns as r', 'r.id', 'rl.return_id')
           .select([
             sql<number>`${invoice.id}`.as('invoice_id'),
-            sql<number>`${Number(shipmentLineCount.n)} + row_number() over (order by r.return_no, rl.tax_rate)`.as('line_no'),
+            sql<number>`${Number(shipmentLineCount.n)} + row_number() over (order by r.return_no${overseas ? sql.raw('') : sql.raw(', rl.tax_rate')})`.as('line_no'),
             'r.id as return_id',
             sql<string>`'返品 ' || r.return_no`.as('item_name'),
             sql<string>`-sum(rl.qty)`.as('qty'),
             sql<string>`0`.as('unit_price'),
-            'rl.tax_rate as tax_rate',
+            (lineRate ?? sql<string>`rl.tax_rate`).as('tax_rate'),
             sql<string>`-sum(rl.qty * rl.unit_price)`.as('amount'),
             sql<number>`${userId}`.as('created_by'),
           ])
@@ -293,7 +302,8 @@ export class BillingService {
           .where('r.status', '<>', '取消')
           .where('r.return_date', '>=', period.from)
           .where('r.return_date', '<=', period.to)
-          .groupBy(['r.id', 'r.return_no', 'rl.tax_rate']),
+          .groupBy(['r.id', 'r.return_no'])
+          .$if(!overseas, (qb) => qb.groupBy('rl.tax_rate')),
       )
       .execute();
 

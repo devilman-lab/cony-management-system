@@ -54,9 +54,23 @@ interface LineDraft {
   /** 税区分（区分値 TAX_DIVISION の id）。空なら課税10% */
   tax_division_id: string;
   tax_rate: string;
+  /**
+   * 税区分が自動で入ったものか（仕入先・仕入項目から決めた初期値）。手で選び直したら false にし、
+   * 後から仕入先を変えても上書きしない（2026-10-09 マスター編②）。
+   */
+  tax_auto: boolean;
 }
 let seq = 1;
-const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_division_id: '', tax_rate: '10.00' });
+const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_division_id: '', tax_rate: '10.00', tax_auto: true });
+
+/** GET /purchases/overseas-tax-default。海外の仕入先の明細の税区分の初期値（システム設定 OVERSEAS_TAX_TREATMENT から決まる）。 */
+interface OverseasTaxDefault {
+  treatment: string;
+  label: string;
+  tax_division_code_id: number | null;
+  tax_division_name: string | null;
+  tax_rate: string;
+}
 
 /** 税区分ごとの税率。税率は税区分から決め、食い違ったまま保存されないようにする */
 const RATE_BY_TAX_DIVISION: Record<string, string> = { TAX10: '10.00', TAX8: '8.00', EXEMPT: '0.00', NON_TAX: '0.00' };
@@ -78,7 +92,7 @@ export default function PurchasesPage() {
   const items = useFetch<{ items: PurchaseItem[] }>('/masters/purchase-items', { limit: 200 });
   const brands = useSimpleMaster('brands');
   const classes = useSimpleMaster('product_classes');
-  // 通貨と経費区分。どちらも「分類・区分・設定 ＞ 区分値」から増やせる（1001 ご要望）。
+  // 通貨と経費区分。「分類・区分・設定」の「通貨」「経費科目」タブで増やせる（1001 ご要望、M-23）。
   const currencies = useCodes('CURRENCY');
   const expenses = useCodes('EXPENSE_DIVISION');
   const taxDivisions = useCodes('TAX_DIVISION');
@@ -98,14 +112,34 @@ export default function PurchasesPage() {
   const [busy, setBusy] = useState(false);
   const setLine = (key: number, p: Partial<LineDraft>) => setLines((s) => s.map((l) => (l.key === key ? { ...l, ...p } : l)));
 
+  // 海外の仕入先（取引先マスタの「海外」）は、明細の税区分の初期値を非課税／不課税・税率 0% にする
+  // （2026-10-09 マスター編②）。どちらにするかはシステム設定で決まるので、サーバーから受け取る。
+  const overseasTax = useFetch<OverseasTaxDefault>('/purchases/overseas-tax-default');
+  const isOverseas = (o: Option | null) => Boolean((o?.raw as { is_overseas?: boolean } | undefined)?.is_overseas);
+  const supplierOverseas = isOverseas(f.supplier);
+
+  /** 自動で決める税区分。海外の仕入先 → 仕入項目マスタ → 指定なし（10%）の順。サーバー（resolveLineTax）と同じ順。 */
+  const autoTax = (purchaseItemId: string, overseas: boolean): Pick<LineDraft, 'tax_division_id' | 'tax_rate'> => {
+    const o = overseasTax.data;
+    if (overseas && o?.tax_division_code_id) return { tax_division_id: String(o.tax_division_code_id), tax_rate: o.tax_rate };
+    const m = (items.data?.items ?? []).find((x) => String(x.id) === purchaseItemId);
+    // 仕入項目マスタの税区分・税率も写す（1001 ご要望。以前は品名と単価だけで、軽減8%の品目も10%で登録されていた）
+    const division = m?.new_tax_class_code_id ? String(m.new_tax_class_code_id) : '';
+    const rate = division ? rateOfDivision(division) : m?.new_tax_rate != null ? Number(m.new_tax_rate).toFixed(2) : '10.00';
+    return { tax_division_id: division, tax_rate: rate };
+  };
+  const addLine = () => setLines((s) => [...s, { ...newLine(), ...autoTax('', supplierOverseas) }]);
+  const pickSupplier = (o: Option | null) => {
+    setF({ ...f, supplier: o });
+    // 手で選び直していない行だけ、新しい仕入先に合わせて税区分を入れ直す
+    setLines((s) => s.map((l) => (l.tax_auto ? { ...l, ...autoTax(l.purchase_item_id, isOverseas(o)) } : l)));
+  };
+
   // 仕入項目を選んだら品名と単価をその場で埋める。単価はマスタの値を起点に手で直せる
   const pickItem = (key: number, id: string) => {
     const m = (items.data?.items ?? []).find((x) => String(x.id) === id);
     if (!m) return setLine(key, { purchase_item_id: '' });
-    // 仕入項目マスタの税区分・税率も写す（1001 ご要望。以前は品名と単価だけで、軽減8%の品目も10%で登録されていた）
-    const division = m.new_tax_class_code_id ? String(m.new_tax_class_code_id) : '';
-    const rate = division ? rateOfDivision(division) : m.new_tax_rate != null ? Number(m.new_tax_rate).toFixed(2) : '10.00';
-    setLine(key, { purchase_item_id: id, item_name: m.item_name, unit_cost: plain(m.unit_cost), tax_division_id: division, tax_rate: rate });
+    setLine(key, { purchase_item_id: id, item_name: m.item_name, unit_cost: plain(m.unit_cost), ...autoTax(id, supplierOverseas), tax_auto: true });
   };
 
   const [cancelId, setCancelId] = useState<number | null>(null);
@@ -154,7 +188,8 @@ export default function PurchasesPage() {
       });
       toast('登録しました', 'good');
       setOpen(false);
-      setLines([newLine()]);
+      // 仕入先は残るので、次の1行目も海外なら非課税／不課税から始める
+      setLines([{ ...newLine(), ...autoTax('', supplierOverseas) }]);
       await list.reload();
     } catch (e) {
       setError(e);
@@ -208,14 +243,14 @@ export default function PurchasesPage() {
             <Select value={f.division} onChange={(e) => setF({ ...f, division: e.target.value })} className="!w-[110px]"><option>仕入</option><option>経費</option></Select>
           </FormRow>
           <FormRow label="日付" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="!w-[150px]" /></FormRow>
-          <FormRow label="仕入先" required><SearchSelect value={f.supplier} onChange={(o) => setF({ ...f, supplier: o })} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" /></FormRow>
+          <FormRow label="仕入先" required hint={supplierOverseas ? `海外：税区分の初期値は「${overseasTax.data?.tax_division_name ?? ''}」（${overseasTax.data?.label ?? ''}）・0%` : undefined}><SearchSelect value={f.supplier} onChange={pickSupplier} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" /></FormRow>
           <FormRow label="支払予定日"><Input type="date" value={f.payment_date1} onChange={(e) => setF({ ...f, payment_date1: e.target.value })} className="!w-[150px]" /></FormRow>
-          <FormRow label="通貨" hint="海外からの仕入に使います">
+          <FormRow label="通貨" hint="海外からの仕入に使います。「分類・区分・設定」の「通貨」タブで増やせます">
             <Select value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} className="!w-[140px]">
               {(currencies.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
             </Select>
           </FormRow>
-          <FormRow label="経費区分" hint="勘定科目にあたるもの。区分値の画面で増やせます">
+          <FormRow label="経費区分" hint="勘定科目にあたるもの。「分類・区分・設定」の「経費科目」タブで増やせます">
             <Select value={f.expense_code_id} onChange={(e) => setF({ ...f, expense_code_id: e.target.value })} className="!w-[180px]">
               <option value="">（なし）</option>
               {(expenses.data?.values ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -263,7 +298,7 @@ export default function PurchasesPage() {
                     {l.target === 'class' && <Select value={l.class_id} onChange={(e) => setLine(l.key, { class_id: e.target.value })} className="!h-[26px]"><option value="">選んでください</option>{(classes.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
                   </td>
                   <td>
-                    <Select value={l.tax_division_id} onChange={(e) => setLine(l.key, { tax_division_id: e.target.value, tax_rate: e.target.value ? rateOfDivision(e.target.value) : '10.00' })} className="!h-[26px]">
+                    <Select value={l.tax_division_id} onChange={(e) => setLine(l.key, { tax_division_id: e.target.value, tax_rate: e.target.value ? rateOfDivision(e.target.value) : '10.00', tax_auto: false })} className="!h-[26px]">
                       <option value="">（指定なし・10%）</option>
                       {(taxDivisions.data?.values ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </Select>
@@ -274,7 +309,7 @@ export default function PurchasesPage() {
             </tbody>
           </table>
         </div>
-        <div className="mt-2"><Button size="sm" icon="plus" onClick={() => setLines((s) => [...s, newLine()])}>行を追加</Button></div>
+        <div className="mt-2"><Button size="sm" icon="plus" onClick={addLine}>行を追加</Button></div>
       </Modal>
 
       <Modal open={detailId !== null} title={detail.data ? `${detail.data.purchase_no}　${detail.data.supplier_name}` : ''} onClose={() => setDetailId(null)} width={800} dismissible>

@@ -23,6 +23,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { MastersCrudService, SIMPLE_MASTERS, type SimpleMaster } from './masters-crud.service';
+import { skuNameExpr } from './products.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
@@ -87,6 +88,12 @@ const PartnerSchema = z.object({
   short_name: z.string().trim().max(60).nullish(),
   is_customer: z.boolean().default(false),
   is_supplier: z.boolean().default(false),
+  /**
+   * 海外の取引先（2026-10-09 マスター編②）。得意先なら締め処理で消費税を 0 にし、
+   * 仕入先なら仕入明細の税区分の初期値を免税／課税対象外にする。どちらで扱うかは
+   * システム設定 OVERSEAS_TAX_TREATMENT。省略時は国内（false）。
+   */
+  is_overseas: z.boolean().optional(),
   staff_user_id: z.number().int().positive().nullish(),
   /** 既定の販売担当（販売担当マスタ）。受注に引き継ぐ。 */
   sales_staff_id: z.number().int().positive().nullish(),
@@ -173,6 +180,8 @@ type ProductBody = z.infer<typeof ProductSchema>;
 const SkuSchema = z.object({
   product_id: z.number().int().positive(),
   sku_code: z.string().trim().min(1).max(40),
+  /** SKU ごとの商品名。空なら商品の商品名を使う（2026-10-09 マスター編②） */
+  sku_name: z.string().trim().max(200).nullish(),
   color_id: z.number().int().positive().nullish(),
   size_id: z.number().int().positive().nullish(),
   pack_division: z.string().trim().max(10).nullish(),
@@ -555,7 +564,14 @@ export class MastersWriteController {
     const [items, total] = await Promise.all([
       base
         .selectAll('d')
-        .select(['p.partner_code as partner_code', 'p.name1 as partner_name', 'wi.name as work_instruction_name'])
+        .select([
+          'p.partner_code as partner_code',
+          'p.name1 as partner_name',
+          'wi.name as work_instruction_name',
+          'wi.code as work_instruction_code',
+          // 編集画面で「作業指示内容」（選んだ作業指示の本文）を読めるようにする（2026-10-09 マスター編② M-04）
+          'wi.instruction_body as work_instruction_body',
+        ])
         .orderBy('p.partner_code')
         .orderBy('d.sort_order', sql`asc nulls last`)
         .orderBy('d.delivery_code')
@@ -630,15 +646,8 @@ export class MastersWriteController {
     return this.crud.setActive('products', id, false, '商品', user.id);
   }
 
-  /**
-   * 一覧から消す。どこからも使われていないものだけ消せる。
-   * 使われているものは 409 で断り、「使わない」に誘導する（1001 のご要望）。
-   */
-  @Delete('products/:id')
-  @RequirePermission('M-08', 'delete')
-  removeProduct(@Param('id', ParseIntPipe) id: number) {
-    return this.crud.remove('products', id, '商品');
-  }
+  // 商品・SKU・セットの削除（DELETE products/:id・skus/:id・sets/:id）は products.controller.ts にある。
+  // SKU ごと消すことと、どこで使われているかを数える処理を ProductsService に持たせたため（2026-10-09 マスター編②）。
 
   // ---- SKU ------------------------------------------------------------------
   @Post('skus')
@@ -715,6 +724,7 @@ export class MastersWriteController {
         eb.or([
           eb('s.sku_code', 'ilike', like),
           eb('p.product_name', 'ilike', like),
+          eb('s.sku_name', 'ilike', like),
           eb('p.product_code', 'ilike', like),
           eb('cl.name', 'ilike', like),
           eb('sz.name', 'ilike', like),
@@ -726,8 +736,13 @@ export class MastersWriteController {
     const items = await base
       .select([
         'h.id as id',
+        'h.sku_id as sku_id',
         's.sku_code as sku_code',
-        'p.product_name as product_name',
+        // SKU の商品名があればそれ（2026-10-09 マスター編②）
+        skuNameExpr('s', 'p').as('product_name'),
+        // 一覧の商品名は「商品名　カラー　サイズ」（例 骨盤ショーツ07　2枚組　ブラック　S。2026-10-09 マスター編②）。
+        // 同じ商品のセットが色・サイズ違いで並ぶため、商品名だけでは見分けられなかった
+        sql<string>`concat_ws('　', ${skuNameExpr('s', 'p')}, cl.name, sz.name)`.as('display_name'),
         'cl.name as color_name',
         'sz.name as size_name',
         'pc.name as product_class_name',
@@ -751,6 +766,15 @@ export class MastersWriteController {
   @RequirePermission('M-10', 'view')
   async findSet(@Param('id', ParseIntPipe) id: number) {
     const header = await this.crud.findOne('set_headers', id, 'セット登録');
+    // 編集で開いたとき、セット SKU の欄にも「SKU　商品名 カラー サイズ」を出すため（2026-10-09 マスター編②）
+    const setSku = await this.db
+      .selectFrom('skus as s')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .select(['s.sku_code as sku_code', skuNameExpr('s', 'p').as('product_name'), 'cl.name as color_name', 'sz.name as size_name'])
+      .where('s.id', '=', Number(header.sku_id))
+      .executeTakeFirst();
     const components = await this.db
       .selectFrom('set_components as c')
       .innerJoin('skus as s', 's.id', 'c.component_sku_id')
@@ -762,7 +786,7 @@ export class MastersWriteController {
         'c.id as id',
         'c.component_sku_id as component_sku_id',
         's.sku_code as sku_code',
-        'p.product_name as product_name',
+        skuNameExpr('s', 'p').as('product_name'),
         'cl.name as color_name',
         'sz.name as size_name',
         'c.qty as qty',
@@ -770,7 +794,14 @@ export class MastersWriteController {
       .where('c.set_header_id', '=', id)
       .orderBy('c.sort_order', sql`asc nulls last`)
       .execute();
-    return { ...header, components };
+    return {
+      ...header,
+      sku_code: setSku?.sku_code ?? null,
+      product_name: setSku?.product_name ?? null,
+      color_name: setSku?.color_name ?? null,
+      size_name: setSku?.size_name ?? null,
+      components,
+    };
   }
 
   // ---- 得意先別商品 ---------------------------------------------------------
@@ -827,7 +858,8 @@ export class MastersWriteController {
           'p.partner_code as partner_code',
           'p.name1 as partner_name',
           's.sku_code as sku_code',
-          'pr.product_name as product_name',
+          // SKU の商品名があればそれ（2026-10-09 マスター編②。編集画面の自社SKUの全文表示にも使う）
+          skuNameExpr('s', 'pr').as('product_name'),
           'cl.name as color_name',
           'sz.name as size_name',
           // 得意先別商品が持つ「印字するカラー／サイズ」。上の2つ（SKU マスタの名前）と同じ名前で返すと
@@ -1011,6 +1043,11 @@ export class MastersWriteController {
     if (!category) {
       throw new BadRequestException(`区分カテゴリー「${body.code_category_code}」が登録されていません`);
     }
+    // 通貨は伝票（仕入・入出金）にコードのまま3文字で保存する（currency VARCHAR(3)）。
+    // 4文字以上のコードを足せてしまうと、その通貨を選んだ伝票が保存できなくなる（M-23 で画面から足せるようにしたため）。
+    if (body.code_category_code === 'CURRENCY' && !/^[A-Z]{3}$/.test(body.code)) {
+      throw new BadRequestException('通貨のコードは英大文字3文字で入力してください（例 USD・CNY）');
+    }
 
     return this.crud.create(
       'codes',
@@ -1025,15 +1062,45 @@ export class MastersWriteController {
     );
   }
 
+  /**
+   * 区分値の変更。is_active=false で「使わない」（2026-10-09 マスター編② M-23「通貨・経費科目」タブ）。
+   * 伝票が区分値を参照しているので消さずに無効にする。無効の値は選択肢（GET codes/:categoryCode）から外れる。
+   */
   @Patch('codes/:id')
   @RequirePermission('M-16', 'update')
   updateCode(
     @Param('id', ParseIntPipe) id: number,
-    @Body(new ZodValidationPipe(CodeSchema.partial().omit({ code_category_code: true })))
-    body: Partial<Omit<CodeBody, 'code_category_code'>>,
+    @Body(new ZodValidationPipe(CodeSchema.partial().omit({ code_category_code: true }).extend(Active)))
+    body: Partial<Omit<CodeBody, 'code_category_code'>> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('codes', id, body, '区分値', user.id);
+  }
+
+  /**
+   * 区分値の管理用の一覧。「使わない」にした値も is_active を付けて返す。
+   * 選択肢用の GET codes/:categoryCode（lookups.controller.ts）は有効な値だけを返すので、
+   * そのままでは一度「使わない」にした値を画面から戻せなくなるため（M-23）。
+   */
+  @Get('codes/:categoryCode/all')
+  @RequirePermission('M-16', 'view')
+  async listAllCodes(@Param('categoryCode') categoryCode: string) {
+    const category = await this.db
+      .selectFrom('code_categories')
+      .select(['id', 'code', 'name'])
+      .where('code', '=', categoryCode)
+      .executeTakeFirst();
+    if (!category) throw new NotFoundException(`区分カテゴリーが見つかりません（${categoryCode}）`);
+
+    const values = await this.db
+      .selectFrom('codes')
+      .select(['id', 'code', 'name', 'sort_order', 'note', 'is_active'])
+      .where('code_category_id', '=', category.id)
+      .orderBy('is_active', 'desc')
+      .orderBy('sort_order', sql`asc nulls last`)
+      .orderBy('code', 'asc')
+      .execute();
+    return { category, values };
   }
 
   /** システム設定の変更。端数処理や送料の条件をプログラムなしで切り替える。 */

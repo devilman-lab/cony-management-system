@@ -21,6 +21,9 @@ interface DestRow extends Record<string, unknown> {
   delivery_note_print2: string | null;
   work_instruction_id: number | null;
   work_instruction_name: string | null;
+  work_instruction_code: string | null;
+  /** 選んだ作業指示の本文。編集画面の「作業指示内容」に読むだけで出す（2026-10-09 マスター編② M-04） */
+  work_instruction_body: string | null;
   /** 納品ルール。1001 のご指摘で納品先の編集画面からは外した。値は消していない。 */
   delivery_rule_id: number | null;
   default_warehouse_id: number | null;
@@ -76,11 +79,12 @@ export default function ShiptosPage() {
       modalWidth={760}
       toolbar={<SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchCustomers} placeholder="取引先で絞る" />}
       columns={[
-        { key: 'partner_name', label: '取引先', width: 280, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
+        { key: 'partner_name', label: '取引先', width: 200, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
         { key: 'delivery_code', label: 'コード', width: 100, render: (r) => <Num className="font-semibold">{r.delivery_code}</Num> },
         { key: 'name', label: '納品先名' },
         { key: 'partner_delivery_no', label: '先方の店番', width: 100, render: (r) => <Num>{r.partner_delivery_no ?? ''}</Num> },
-        { key: 'address1', label: '住所', render: (r) => <span className="truncate block max-w-[260px]">{r.address1 ?? ''}{r.address2 ?? ''}</span> },
+        // 住所は「…」で切らずに折り返して全文を出す
+        { key: 'address1', label: '住所', render: (r) => <span>{r.address1 ?? ''}{r.address2 ?? ''}</span> },
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
@@ -93,7 +97,13 @@ export default function ShiptosPage() {
         partner: { id: r.partner_id, label: r.partner_name, sub: r.partner_code },
         delivery_code: r.delivery_code, name: r.name, partner_delivery_no: s(r.partner_delivery_no), consignee: s(r.consignee),
         delivery_note_print1: s(r.delivery_note_print1), delivery_note_print2: s(r.delivery_note_print2),
-        work_instruction: r.work_instruction_id ? { id: r.work_instruction_id, label: s(r.work_instruction_name ?? `#${r.work_instruction_id}`) } : null,
+        work_instruction: r.work_instruction_id
+          ? {
+              id: r.work_instruction_id,
+              label: r.work_instruction_code ? `${r.work_instruction_code}　${s(r.work_instruction_name)}` : s(r.work_instruction_name ?? `#${r.work_instruction_id}`),
+              raw: { instruction_body: r.work_instruction_body },
+            }
+          : null,
         default_warehouse_id: s(r.default_warehouse_id), slip_issue_class_code_id: s(r.slip_issue_class_code_id),
         postal_code: s(r.postal_code), address1: s(r.address1), address2: s(r.address2), tel: s(r.tel), fax: s(r.fax), sort_order: s(r.sort_order), note: s(r.note),
       })}
@@ -118,34 +128,52 @@ export default function ShiptosPage() {
       })}
       renderForm={(f, set, editing) => (
         <div className="flex flex-col gap-3">
+          {/*
+            並びは 2026-10-09 マスター編② M-04 のご指定どおり:
+            取引先名（全幅）／ 納品先コード｜納品先名 ／ 先方の店番・納品先番号｜荷受人
+          */}
           <div className="master-grid-2">
-            <L label="取引先" required><SearchSelect value={f.partner} onChange={(o) => set({ partner: o })} fetchOptions={fetchCustomers} placeholder="得意先を検索" width="100%" disabled={!!editing} /></L>
+            <L label="取引先" required wide>
+              {editing ? (
+                // 編集では取引先は変えられない。選択欄のままだと長い名前が「…」で切れるので文字で全部出す
+                <span className="text-[12.5px] py-1 break-all"><Num className="text-[var(--color-ink-3)] mr-1">{f.partner?.sub ?? ''}</Num>{f.partner?.label ?? ''}</span>
+              ) : (
+                <SearchSelect value={f.partner} onChange={(o) => set({ partner: o })} fetchOptions={fetchCustomers} placeholder="得意先を検索" width="100%" />
+              )}
+            </L>
             <L label="納品先コード" required><Input value={f.delivery_code} onChange={(e) => set({ delivery_code: e.target.value })} className="!w-[160px]" /></L>
             <L label="納品先名" required><Input value={f.name} onChange={(e) => set({ name: e.target.value })} /></L>
             <L label="先方の店番・納品先番号" hint="販社CSVの届け先の突き合わせに使います"><Input value={f.partner_delivery_no} onChange={(e) => set({ partner_delivery_no: e.target.value })} className="!w-[180px]" /></L>
             <L label="荷受人"><Input value={f.consignee} onChange={(e) => set({ consignee: e.target.value })} /></L>
-            <L label="既定の出荷倉庫">
-              <Select value={f.default_warehouse_id} onChange={(e) => set({ default_warehouse_id: e.target.value })}><option value="">（受注時に選ぶ）</option>{(warehouses.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.short_name}</option>)}</Select>
-            </L>
           </div>
+          {/* 伝票発行区分｜既定の出荷倉庫 ／ 宛名：納品書 印字1｜納品先：納品書 印字2 ／ 作業指示｜表示順 ／ 作業指示内容（全幅） */}
           <Section title="伝票・納品書" />
           <div className="master-grid-2">
             <L label="伝票発行区分" hint="納品書に単価・上代を出すか">
               <Select value={f.slip_issue_class_code_id} onChange={(e) => set({ slip_issue_class_code_id: e.target.value })}><option value="">（既定）</option>{(slipClasses.data?.values ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
             </L>
+            <L label="既定の出荷倉庫">
+              <Select value={f.default_warehouse_id} onChange={(e) => set({ default_warehouse_id: e.target.value })}><option value="">（受注時に選ぶ）</option>{(warehouses.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.short_name}</option>)}</Select>
+            </L>
+            <L label="宛名：納品書 印字1" hint="空欄なら取引先名を印字します"><Input value={f.delivery_note_print1} onChange={(e) => set({ delivery_note_print1: e.target.value })} /></L>
+            <L label="納品先：納品書 印字2" hint="空欄なら納品先名を印字します"><Input value={f.delivery_note_print2} onChange={(e) => set({ delivery_note_print2: e.target.value })} /></L>
             <L label="作業指示" hint="コード・名称・本文のどれでも探せます">
               <SearchSelect value={f.work_instruction} onChange={(o) => set({ work_instruction: o })} fetchOptions={fetchWorkInstructions} placeholder="キーワードで検索" width="100%" />
             </L>
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
-            <L label="納品書 印字1" hint="納品書の欄外に印字する文言"><Input value={f.delivery_note_print1} onChange={(e) => set({ delivery_note_print1: e.target.value })} /></L>
-            <L label="納品書 印字2"><Input value={f.delivery_note_print2} onChange={(e) => set({ delivery_note_print2: e.target.value })} /></L>
+            <L label="作業指示内容" hint="選んだ作業指示の本文（出荷指示書に印字）。直すときは「分類・区分・設定 ＞ 作業指示内容」で" wide>
+              <div className="w-full min-h-[30px] px-2 py-1 rounded-[6px] bg-[#f2f5f6] text-[12.5px] text-[var(--color-ink-2)] whitespace-pre-wrap break-all">
+                {(f.work_instruction?.raw as { instruction_body?: string | null } | undefined)?.instruction_body || (f.work_instruction ? '（本文なし）' : '（作業指示を選ぶと、ここに本文が出ます）')}
+              </div>
+            </L>
           </div>
           <Section title="住所・連絡先" />
           <div className="master-grid-2">
             <L label="郵便番号"><PostalLookup value={f.postal_code} onChange={(v) => set({ postal_code: v })} onAddress={(a) => set({ address1: a })} /></L>
             <L label="電話／FAX"><Input value={f.tel} onChange={(e) => set({ tel: e.target.value })} className="!w-[140px]" placeholder="電話" /><Input value={f.fax} onChange={(e) => set({ fax: e.target.value })} className="!w-[140px]" placeholder="FAX" /></L>
-            <L label="住所1"><Input value={f.address1} onChange={(e) => set({ address1: e.target.value })} /></L>
-            <L label="住所2"><Input value={f.address2} onChange={(e) => set({ address2: e.target.value })} /></L>
+            {/* 住所は半分の幅だと切れるので、住所1の下に住所2を置き、どちらも横幅いっぱいにする（M-05） */}
+            <L label="住所1" wide><Input value={f.address1} onChange={(e) => set({ address1: e.target.value })} /></L>
+            <L label="住所2" wide><Input value={f.address2} onChange={(e) => set({ address2: e.target.value })} /></L>
           </div>
           <Textarea rows={2} value={f.note} onChange={(e) => set({ note: e.target.value })} placeholder="備考" />
         </div>

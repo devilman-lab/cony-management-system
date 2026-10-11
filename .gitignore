@@ -25,3 +25,5 @@ storage/
 
 # Claude Code の会話履歴。機密・個人情報を含むため絶対にコミットしない
 .cc-history/
+
+feedback/

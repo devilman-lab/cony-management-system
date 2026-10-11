@@ -311,7 +311,8 @@ export class ReturnsService {
         'l.id as id',
         'l.line_no as line_no',
         's.sku_code as sku_code',
-        'pr.product_name as product_name',
+        // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
+        sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
         'l.qty as qty',
         'l.unit_price as unit_price',
         'rf.good_qty as good_qty',

@@ -6,10 +6,14 @@ import { api } from '@/lib/api';
 import { Button, Input } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 
-/** マスタ登録フォームの1行。ラベル＋入力欄（複数可）。 */
-export function L({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: ReactNode }) {
+/**
+ * マスタ登録フォームの1行。ラベル＋入力欄（複数可）。
+ * wide を付けると2列の並び（master-grid-2）の中で横幅いっぱいを使う。住所や名称のように
+ * 半分の幅では切れてしまう項目のため（2026-10-09 マスター編②「住所が切れてしまってる」）。
+ */
+export function L({ label, hint, required, wide, children }: { label: string; hint?: string; required?: boolean; wide?: boolean; children: ReactNode }) {
   return (
-    <div className="form-row">
+    <div className="form-row" style={wide ? { gridColumn: '1 / -1' } : undefined}>
       <div className="form-row-label field-label h-full flex flex-col justify-center px-3 py-1.5">
         <span>{label}{required && <span className="text-[var(--color-crit-500)] text-[10px] ml-1">必須</span>}</span>
         {hint && <span className="text-[10px] font-normal text-[var(--color-ink-3)] leading-tight">{hint}</span>}

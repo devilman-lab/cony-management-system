@@ -135,6 +135,8 @@ const PARTNERS: MasterCsvDef = {
     { field: 'short_name', label: '略称' },
     { field: 'is_customer', label: '得意先', kind: 'bool' },
     { field: 'is_supplier', label: '仕入先', kind: 'bool' },
+    // 海外の取引先。消費税の扱い（免税／課税対象外）はシステム設定 OVERSEAS_TAX_TREATMENT で決める（2026-10-09 マスター編②）
+    { field: 'is_overseas', label: '海外', kind: 'bool' },
     { field: 'media_id', label: '媒体コード', ref: ref('media', '媒体') },
     { field: 'partner_category_id', label: '取引先カテゴリーコード', ref: ref('partner_categories', '取引先カテゴリー') },
     { field: 'sales_staff_id', label: '販売担当コード', ref: ref('sales_staff', '販売担当') },
@@ -225,6 +227,8 @@ const SKUS: MasterCsvDef = {
   columns: [
     { field: 'sku_code', label: 'SKUコード', readOnly: true },
     { field: 'product_id', label: '商品コード', ref: ref('products', '商品', 'product_code') },
+    // SKU ごとの商品名。空なら商品の商品名を使う（2026-10-09 マスター編②）
+    { field: 'sku_name', label: 'SKUの商品名' },
     { field: 'color_id', label: 'カラーコード', ref: ref('colors', 'カラー') },
     { field: 'size_id', label: 'サイズコード', ref: ref('sizes', 'サイズ') },
     { field: 'pack_division', label: '入数区分' },

@@ -61,7 +61,8 @@ export class SalesSchedulesService {
           'sc.name as sales_category_name',
           'ss.sku_id as sku_id',
           's.sku_code as sku_code',
-          'pr.product_name as product_name',
+          // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
+          sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
           'ss.planned_sales_month as planned_sales_month',
           'ss.planned_arrival_month as planned_arrival_month',
           'ss.planned_qty as planned_qty',

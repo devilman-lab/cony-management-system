@@ -52,8 +52,8 @@ const UNIQUE_MESSAGES: Record<string, string> = {
   royalty_calculations_target_month_payee_partner_id_key:
     'この支払先・対象月のロイヤリティ計算はすでにあります',
   postal_codes_postal_code_town_key: 'この郵便番号と町域の組み合わせはすでに登録されています',
-  ux_reservations_scope:
-    'この取引先・販売カテゴリー・商品・期間の確保数はすでに登録されています',
+  // 2026-10-09 から確保（見出し）＋明細の形。1つの確保の中で同じ商品は1行まで
+  ux_reservations_group_sku: 'この確保には同じ商品がすでにあります。数量はその行で直してください',
   // 2026-10-01 ご要望で「品番の左6桁が同じ商品の中でなら同じ JAN でよい」に変わった。
   // 実際の判定は引き金 fn_check_sku_jan が行う（表の決まりだけでは表せないため）。
   ux_skus_jan:

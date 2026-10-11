@@ -178,20 +178,22 @@ export default function InvoicesPage() {
         <DataTable<InvoiceRow>
           wide
           stickyLast
+          fit
           columns={[
-            { key: 'invoice_no', label: '請求番号', width: 130, render: (r) => <button type="button" className="num font-semibold text-[var(--color-brand-700)] underline" onClick={() => { setManual({}); setError(null); setDetailId(r.id); }}>{r.invoice_no}</button> },
+            // 1440・1280 のどちらでも状態まで操作の列の陰に入らない幅。期間・見出しは折り返す
+            { key: 'invoice_no', label: '請求番号', width: 110, nowrap: true, render: (r) => <button type="button" className="num font-semibold text-[var(--color-brand-700)] underline" onClick={() => { setManual({}); setError(null); setDetailId(r.id); }}>{r.invoice_no}</button> },
             { key: 'partner_name', label: '請求先' },
-            { key: 'period_from', label: '期間', width: 190, render: (r) => <Num>{ymd(r.period_from)}〜{ymd(r.period_to)}</Num> },
-            { key: 'shipment_amount', label: '出荷', r: true, width: 100, render: (r) => money(r.shipment_amount) },
-            { key: 'return_amount', label: '返品', r: true, width: 90, render: (r) => money(r.return_amount) },
-            { key: 'shipping_fee_amount', label: '送料', r: true, width: 80, render: (r) => money(r.shipping_fee_amount) },
-            { key: 'current_invoice_amount', label: '当月請求額', r: true, width: 110, render: (r) => <b>{money(r.current_invoice_amount)}</b> },
-            { key: 'current_balance', label: '今回請求残高', r: true, width: 110, render: (r) => money(r.current_balance) },
-            { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
+            { key: 'period_from', label: '期間', width: 88, render: (r) => <Num>{ymd(r.period_from)}〜{ymd(r.period_to)}</Num> },
+            { key: 'shipment_amount', label: '出荷', r: true, width: 80, render: (r) => money(r.shipment_amount) },
+            { key: 'return_amount', label: '返品', r: true, width: 72, render: (r) => money(r.return_amount) },
+            { key: 'shipping_fee_amount', label: '送料', r: true, width: 66, render: (r) => money(r.shipping_fee_amount) },
+            { key: 'current_invoice_amount', label: '当月請求額', r: true, width: 82, render: (r) => <b>{money(r.current_invoice_amount)}</b> },
+            { key: 'current_balance', label: '今回請求残高', r: true, width: 82, render: (r) => money(r.current_balance) },
+            { key: 'status', label: '状態', width: 64, render: (r) => <Badge status={r.status} /> },
             {
-              key: '_act', label: '', width: 210,
+              key: '_act', label: '', width: 112,
               render: (r) => (
-                <div className="flex gap-1 justify-end">
+                <div className="tbl-acts justify-end">
                   {r.status === '未発行' && can('B-02', 'print') && <Button size="sm" variant="primary" loading={busy === 'issue'} onClick={() => issue(r)}>発行</Button>}
                   {can('D-03', 'print') && <Button size="sm" icon="print" loading={busy === 'print'} onClick={() => print([r.id])}>PDF</Button>}
                   {r.status !== '取消' && can('B-02', 'delete') && <Button size="sm" variant="danger" loading={busy === 'cancel'} onClick={() => cancel(r)}>取消</Button>}

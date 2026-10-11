@@ -169,31 +169,33 @@ export default function CashPage() {
         <DataTable<CashRow>
           wide
           stickyLast
+          fit="dense"
           columns={[
-            { key: 'cash_transaction_no', label: '番号', width: 100, render: (r) => <span className="num font-semibold">{r.cash_transaction_no}</span> },
-            { key: 'division', label: '区分', width: 60 },
-            { key: 'transaction_date', label: '日付', width: 100, render: (r) => ymd(r.transaction_date) },
-            { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? '' },
-            { key: 'amount', label: '合計', r: true, width: 110, render: (r) => <b>{money(r.amount)}</b> },
-            { key: 'transfer_amount', label: '振込', r: true, width: 90, render: (r) => money(r.transfer_amount) },
-            { key: 'cash_amount', label: '現金', r: true, width: 80, render: (r) => money(r.cash_amount) },
-            { key: 'card_amount', label: 'カード', r: true, width: 80, render: (r) => money(r.card_amount) },
-            { key: 'bill_amount1', label: '手形①', r: true, width: 90, render: (r) => money(r.bill_amount1) },
-            { key: 'bill_amount2', label: '手形②', r: true, width: 90, render: (r) => money(r.bill_amount2) },
-            { key: 'offset_amount', label: '相殺', r: true, width: 80, render: (r) => money(r.offset_amount) },
-            { key: 'check_amount', label: '小切手', r: true, width: 80, render: (r) => money(r.check_amount) },
-            { key: 'collection_amount', label: '集金', r: true, width: 80, render: (r) => money(r.collection_amount) },
+            // 金額の列が多いので、文字を少し小さくし、見出しは折り返して、手数料まで操作の列の陰に入らない幅にしてある
+            { key: 'cash_transaction_no', label: '番号', width: 80, nowrap: true, render: (r) => <span className="num font-semibold">{r.cash_transaction_no}</span> },
+            { key: 'division', label: '区分', width: 40 },
+            { key: 'transaction_date', label: '日付', width: 66, nowrap: true, render: (r) => ymd(r.transaction_date) },
+            { key: 'partner_name', label: '取引先', width: 84, render: (r) => r.partner_name ?? '' },
+            { key: 'amount', label: '合計', r: true, width: 62, render: (r) => <b>{money(r.amount)}</b> },
+            { key: 'transfer_amount', label: '振込', r: true, width: 58, render: (r) => money(r.transfer_amount) },
+            { key: 'cash_amount', label: '現金', r: true, width: 54, render: (r) => money(r.cash_amount) },
+            { key: 'card_amount', label: 'カード', r: true, width: 54, render: (r) => money(r.card_amount) },
+            { key: 'bill_amount1', label: '手形①', r: true, width: 56, render: (r) => money(r.bill_amount1) },
+            { key: 'bill_amount2', label: '手形②', r: true, width: 56, render: (r) => money(r.bill_amount2) },
+            { key: 'offset_amount', label: '相殺', r: true, width: 54, render: (r) => money(r.offset_amount) },
+            { key: 'check_amount', label: '小切手', r: true, width: 54, render: (r) => money(r.check_amount) },
+            { key: 'collection_amount', label: '集金', r: true, width: 54, render: (r) => money(r.collection_amount) },
             // 見出しに単位を出す。合計（円）に足し込まれているが換算はしていない
-            { key: 'overseas_usd', label: '海外送金 (USD)', r: true, width: 110, render: (r) => money(r.overseas_usd) },
-            { key: 'overseas_cny', label: '海外送金 (CNY)', r: true, width: 110, render: (r) => money(r.overseas_cny) },
+            { key: 'overseas_usd', label: '海外送金 (USD)', r: true, width: 58, render: (r) => money(r.overseas_usd) },
+            { key: 'overseas_cny', label: '海外送金 (CNY)', r: true, width: 58, render: (r) => money(r.overseas_cny) },
             // 手数料は内訳ではなく差し引き。合計には入れない
-            { key: 'fee_amount', label: '手数料', r: true, width: 90, render: (r) => money(r.fee_amount) },
+            { key: 'fee_amount', label: '手数料', r: true, width: 54, render: (r) => money(r.fee_amount) },
             {
               key: '_act',
               label: '',
-              width: 130,
+              width: 52,
               render: (r) => (
-                <span className="flex gap-1">
+                <span className="tbl-acts">
                   {canEdit && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
                   {canRemove && <Button size="sm" variant="danger" loading={removingId === r.id} onClick={() => remove(r)}>削除</Button>}
                 </span>

@@ -110,7 +110,7 @@
 |  | テスト版一式（db／api／web）。4 名でお試しいただく構成 |
 |  | テスト版の立ち上げ・利用者登録・バックアップの手順（貴社にお渡しする文書） |
 |  | 第2段階の報告書（API 仕様） |
-|  | 使い捨て PostgreSQL + API での通し確認（332 項目。開発用 DB には触れない。第31節は scripts/verify-master-feedback.mjs） |
+|  | 使い捨て PostgreSQL + API での通し確認（464 項目。開発用 DB には触れない。第31・32節は scripts/verify-*.mjs の回帰確認） |
 
 ## 技術構成
 

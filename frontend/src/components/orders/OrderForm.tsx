@@ -7,7 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { useSalesCategories, useSimpleMaster, useWarehouses } from '@/lib/hooks';
 import { money, today } from '@/lib/format';
 import { Button, Card, CardHead, ErrorBox, FormRow, Input, Select, Textarea } from '@/components/ui';
-import { SearchSelect, fetchDestinations, fetchPartners, fetchSkusFor, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
+import { SearchSelect, fetchDestinations, fetchPartners, fetchSkusFor, skuItemName, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
 const LINE_TYPES = ['商品', 'セット商品', '販促品', '送料', '値引', '非商品'] as const;
@@ -195,9 +195,11 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
       return;
     }
     const s = o.raw as SkuRow;
+    // 品名は「SKU の商品名があればそれ、無ければ商品名」＋カラー＋サイズ（2026-10-09 マスター編②）
+    const skuName = skuItemName(s);
     setLine(key, {
       sku: o,
-      item_name: s.product_name + (s.color_name ? ' ' + s.color_name : '') + (s.size_name ? ' ' + s.size_name : ''),
+      item_name: skuName,
       tax_rate: Number(s.tax_rate).toFixed(2),
       line_type: s.is_set ? 'セット商品' : '商品',
       partner_product_id: null,
@@ -220,9 +222,9 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
           setLine(key, {
             unit_price: pp.unit_price,
             partner_product_id: pp.id,
-            // 販売名が未登録（null）なら空にする。undefined を入れると品名が失われ、
+            // 販売名が未登録（null・空）なら SKU の品名のままにする。undefined を入れると品名が失われ、
             // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
-            item_name: pp.sales_name ?? '',
+            item_name: pp.sales_name?.trim() || skuName,
             // 出荷JANが登録されていれば、倉庫がそれを見られるよう備考に出す。
             // 先方JANしか無いときは先方JANを出す（1001 ご要望）。
             note:

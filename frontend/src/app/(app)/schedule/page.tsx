@@ -113,16 +113,18 @@ export default function SchedulePage() {
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<ScheduleRow>
+          fit
           columns={[
-            { key: 'planned_sales_month', label: '販売予定月', width: 100, render: (r) => <Num>{ym(r.planned_sales_month).replace('-', '/')}</Num> },
+            // 1280 幅でも操作の列まで見える幅。取引先・商品・備考は折り返して全文を出す
+            { key: 'planned_sales_month', label: '販売予定月', width: 72, render: (r) => <Num>{ym(r.planned_sales_month).replace('-', '/')}</Num> },
             { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? <span className="text-[var(--color-ink-3)]">（指定なし）</span> },
-            { key: 'sales_category_name', label: '販売カテゴリー', width: 130, render: (r) => r.sales_category_name ?? '' },
+            { key: 'sales_category_name', label: '販売カテゴリー', width: 84, render: (r) => r.sales_category_name ?? '' },
             { key: 'sku_code', label: 'SKU', width: 120, render: (r) => <Num>{r.sku_code ?? ''}</Num> },
             { key: 'product_name', label: '商品', render: (r) => r.product_name ?? '' },
-            { key: 'planned_qty', label: '予定数', r: true, width: 90, render: (r) => <b>{qty(r.planned_qty)}</b> },
-            { key: 'planned_arrival_month', label: '入荷予定', width: 100, render: (r) => <Num>{ym(r.planned_arrival_month).replace('-', '/')}</Num> },
-            { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[240px]">{r.note ?? ''}</span> },
-            { key: '_act', label: '', width: 110, render: (r) => <span className="flex gap-1">{can('S-08', 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}{can('S-08', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}</span> },
+            { key: 'planned_qty', label: '予定数', r: true, width: 64, render: (r) => <b>{qty(r.planned_qty)}</b> },
+            { key: 'planned_arrival_month', label: '入荷予定', width: 72, render: (r) => <Num>{ym(r.planned_arrival_month).replace('-', '/')}</Num> },
+            { key: 'note', label: '備考', render: (r) => r.note ?? '' },
+            { key: '_act', label: '', width: 56, render: (r) => <span className="tbl-acts">{can('S-08', 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}{can('S-08', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}</span> },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}

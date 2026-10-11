@@ -108,7 +108,7 @@ export default function RoyaltyRulesPage() {
       modalWidth={720}
       noSearch
       columns={[
-        { key: 'payee_name', label: '支払先', width: 150, render: (r) => <b>{r.payee_name}</b> },
+        { key: 'payee_name', label: '支払先', width: 120, render: (r) => <b>{r.payee_name}</b> },
         {
           key: 'media_name',
           label: '媒体',
@@ -118,7 +118,7 @@ export default function RoyaltyRulesPage() {
         {
           key: 'brand_name',
           label: 'ブランド／商品',
-          width: 150,
+          width: 120,
           render: (r) => r.product_name ?? r.brand_name ?? <span className="text-[var(--color-ink-3)]">すべて</span>,
         },
         { key: 'customer_name', label: '販売先', render: (r) => <CustomerCell r={r} /> },
@@ -134,7 +134,7 @@ export default function RoyaltyRulesPage() {
         {
           key: 'valid_from',
           label: '適用期間',
-          width: 180,
+          width: 140,
           render: (r) => (
             <Num>
               {ymd(r.valid_from)} 〜 {r.valid_to ? ymd(r.valid_to) : ''}

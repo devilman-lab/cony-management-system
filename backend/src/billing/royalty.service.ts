@@ -288,7 +288,8 @@ export class RoyaltyService {
         'cp.name1 as customer_name',
         'b.name as brand_name',
         's.sku_code as sku_code',
-        'pr.product_name as product_name',
+        // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
+        sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
         'l.qty as qty',
         'l.base_amount as base_amount',
         'l.rate as rate',

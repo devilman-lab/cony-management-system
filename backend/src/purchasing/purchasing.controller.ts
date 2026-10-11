@@ -195,6 +195,17 @@ export class PurchasingController {
     return this.purchasing.expenseByProduct(query);
   }
 
+  /**
+   * 海外の仕入先を選んだときの、明細の税区分の初期値（2026-10-09 マスター編②）。
+   * システム設定の一覧（M-16）を見られない人も仕入は入力するので、仕入の権限で返す。
+   * 'purchases/:id' より前に置く（後ろだと :id に取られて数字でないと弾かれる）。
+   */
+  @Get('purchases/overseas-tax-default')
+  @RequirePermission('P-01', 'view')
+  overseasTaxDefault() {
+    return this.purchasing.overseasTaxDefault();
+  }
+
   @Get('purchases/:id')
   @RequirePermission('P-01', 'view')
   findOne(@Param('id', ParseIntPipe) id: number) {

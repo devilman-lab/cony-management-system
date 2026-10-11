@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe, Query, Res } from '@nestjs/common';
+import { Controller, Delete, Get, Param, ParseIntPipe, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 
@@ -23,6 +23,11 @@ const SkuSearchSchema = z.object({
   q: z.string().trim().min(1).max(60).optional(),
   /** 受注入力で取引先を選んでいるとき。その取引先の先方JAN・出荷JAN・専用コードでも引けるようにする */
   partner_id: z.coerce.number().int().positive().optional(),
+  /** true＝セット商品の SKU だけ／false＝セット商品以外だけ。省くと絞らない（セット登録のセット SKU 欄で使う） */
+  is_set: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 type SkuSearchQuery = z.infer<typeof SkuSearchSchema>;
@@ -86,5 +91,33 @@ export class ProductsController {
   @RequirePermission('M-09', 'view')
   searchSkus(@Query(new ZodValidationPipe(SkuSearchSchema)) query: SkuSearchQuery) {
     return this.products.searchSkus(query);
+  }
+
+  // ---- 削除（2026-10-09 マスター編②） --------------------------------------
+  // 書き込みの経路は masters-write.controller.ts にまとめてあるが、削除は「どこで使われているか」を
+  // 数える処理が商品・SKU・セットで共通なので、その処理を持つ ProductsService の隣に置く。
+
+  /**
+   * 商品を消す。SKU がどこにも使われていなければ SKU ごと消す。
+   * 使われていれば 409 で、どこで使われているか（在庫表・受注 など）を返す。
+   */
+  @Delete('products/:id')
+  @RequirePermission('M-08', 'delete')
+  removeProduct(@Param('id', ParseIntPipe) id: number) {
+    return this.products.removeProduct(id);
+  }
+
+  /** SKU を1行消す（商品の編集画面の SKU 表から）。使われていれば 409 で理由を返す。 */
+  @Delete('skus/:id')
+  @RequirePermission('M-09', 'delete')
+  removeSku(@Param('id', ParseIntPipe) id: number) {
+    return this.products.removeSku(id);
+  }
+
+  /** セット登録を構成ごと消す。セット SKU が受注などで使われていれば 409 で理由を返す。 */
+  @Delete('sets/:id')
+  @RequirePermission('M-10', 'delete')
+  removeSet(@Param('id', ParseIntPipe) id: number) {
+    return this.products.removeSet(id);
   }
 }

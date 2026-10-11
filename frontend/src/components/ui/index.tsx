@@ -198,6 +198,8 @@ export interface Column<T> {
   r?: boolean;
   c?: boolean;
   width?: number | string;
+  /** fit の表でも折り返さない（コード・日付など） */
+  nowrap?: boolean;
   render?: (row: T, index: number) => ReactNode;
 }
 
@@ -211,6 +213,7 @@ export function DataTable<T extends Record<string, unknown>>({
   loading,
   wide,
   stickyLast,
+  fit,
   rowClassName,
 }: {
   columns: Column<T>[];
@@ -223,19 +226,27 @@ export function DataTable<T extends Record<string, unknown>>({
   wide?: boolean;
   /** 列が多い表で、いちばん右の列（操作ボタン）を右端に貼り付ける。 */
   stickyLast?: boolean;
+  /**
+   * 全部の列を画面の幅に収める（.tbl-fit）。文字の列は「…」で切らずに折り返し、見出しも折り返す。
+   * 幅を決めない列（商品名など）は残りの幅を分け合い、最低 120px。列幅の合計を 1020px 程度に
+   * 抑えておけば、画面幅 1280 でも横スクロールが出ない。
+   */
+  /** 'dense' は金額の列が多い表（売掛残高・入出金）用。文字を少し小さくし、左右の余白も詰める。 */
+  fit?: boolean | 'dense';
   rowClassName?: (row: T) => string;
 }) {
   // 列幅の合計より狭い画面では横スクロールにする（列が1文字に潰れないように）
   const fixed = columns.reduce((a, c) => a + (typeof c.width === 'number' ? c.width : 0), 0);
   const autos = columns.filter((c) => typeof c.width !== 'number').length;
-  const minWidth = Math.max(wide ? 960 : 520, fixed + autos * 150);
+  const minWidth = fit ? fixed + autos * 120 : Math.max(wide ? 960 : 520, fixed + autos * 150);
+  const cellClass = (c: Column<T>) => [c.r ? 'r' : c.c ? 'c' : '', c.nowrap ? 'nw' : ''].filter(Boolean).join(' ');
   return (
     <div className={wide ? 'tbl-wrap-wide' : 'tbl-wrap'}>
-      <table className={`tbl${stickyLast ? ' tbl-stick-last' : ''}`} style={{ minWidth }}>
+      <table className={`tbl${stickyLast ? ' tbl-stick-last' : ''}${fit ? ' tbl-fit' : ''}${fit === 'dense' ? ' tbl-dense' : ''}`} style={{ minWidth }}>
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c.key} className={c.r ? 'r' : c.c ? 'c' : ''} style={c.width ? { width: c.width } : undefined}>
+              <th key={c.key} className={cellClass(c)} style={c.width ? { width: c.width } : undefined}>
                 {c.label}
               </th>
             ))}
@@ -265,7 +276,7 @@ export function DataTable<T extends Record<string, unknown>>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
                 {columns.map((c) => (
-                  <td key={c.key} className={c.r ? 'r num' : c.c ? 'c' : ''}>
+                  <td key={c.key} className={c.r ? `r num${c.nowrap ? ' nw' : ''}` : cellClass(c)}>
                     {c.render ? c.render(row, i) : ((row[c.key] as ReactNode) ?? '')}
                   </td>
                 ))}
@@ -356,7 +367,8 @@ export function Modal({
     >
       <div
         className="modal-panel card w-full flex flex-col max-h-[92vh]"
-        style={{ maxWidth: width }}
+        // 画面より広いダイアログは、左右に少し余白を残して画面の幅に収める
+        style={{ maxWidth: `min(${width}px, calc(100vw - 24px))` }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal

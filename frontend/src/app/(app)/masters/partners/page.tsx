@@ -16,6 +16,8 @@ interface PartnerRow extends Record<string, unknown> {
   is_customer: boolean;
   is_supplier: boolean;
   is_royalty_payee: boolean;
+  /** 海外の取引先（2026-10-09 マスター編②） */
+  is_overseas: boolean;
   closing_day: number | null;
   default_trade_type: string | null;
   media_name: string | null;
@@ -32,6 +34,7 @@ interface Form {
   is_customer: boolean;
   is_supplier: boolean;
   is_royalty_payee: boolean;
+  is_overseas: boolean;
   sales_staff_id: string;
   media_id: string;
   partner_category_id: string;
@@ -61,7 +64,7 @@ const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 const dec = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
 
 const EMPTY: Form = {
-  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false, is_royalty_payee: false,
+  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false, is_royalty_payee: false, is_overseas: false,
   sales_staff_id: '', media_id: '', partner_category_id: '', category_ids: [] as number[], invoice_registration_no: '', invoice_note: '', invoice_addressee: '', invoice_contact_name: '',
   shipping_fee_threshold: '', shipping_fee_amount: '', default_trade_type: '', closing_day: '', payment_month_offset: '', payment_day: '',
   postal_code: '', address1: '', address2: '', tel: '', fax: '', sort_order: '', note: '',
@@ -114,16 +117,16 @@ export default function PartnersPage() {
         </>
       }
       columns={[
-        { key: 'partner_code', label: 'コード', width: 100, render: (r) => <Num className="font-semibold">{r.partner_code}</Num> },
+        { key: 'partner_code', label: 'コード', width: 92, nowrap: true, render: (r) => <Num className="font-semibold">{r.partner_code}</Num> },
         { key: 'name1', label: '名称' },
-        { key: 'short_name', label: '略称', width: 140, render: (r) => r.short_name ?? '' },
-        { key: '_role', label: '区分', width: 120, render: (r) => <span className="flex gap-1">{r.is_customer && <Badge>得意先</Badge>}{r.is_supplier && <Badge>仕入先</Badge>}{r.is_royalty_payee && <Badge>ロイヤリティ</Badge>}</span> },
-        { key: 'category_names', label: 'カテゴリー', width: 150, render: (r) => r.category_names ?? '' },
-        { key: 'media_name', label: '媒体', width: 100, render: (r) => r.media_name ?? '' },
-        { key: 'sales_staff_name', label: '販売担当', width: 110, render: (r) => r.sales_staff_name ?? '' },
-        { key: 'default_trade_type', label: '取引', width: 60, render: (r) => r.default_trade_type ?? '' },
-        { key: 'closing_day', label: '締め日', r: true, width: 70, render: (r) => (r.closing_day ? (r.closing_day >= 99 ? '末日' : `${r.closing_day}日`) : '') },
-        { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
+        { key: 'short_name', label: '略称', width: 100, render: (r) => r.short_name ?? '' },
+        { key: '_role', label: '区分', width: 110, render: (r) => <span className="flex flex-wrap gap-1">{r.is_customer && <Badge>得意先</Badge>}{r.is_supplier && <Badge>仕入先</Badge>}{r.is_royalty_payee && <Badge>ロイヤリティ</Badge>}{r.is_overseas && <Badge>海外</Badge>}</span> },
+        { key: 'category_names', label: 'カテゴリー', width: 100, render: (r) => r.category_names ?? '' },
+        { key: 'media_name', label: '媒体', width: 76, render: (r) => r.media_name ?? '' },
+        { key: 'sales_staff_name', label: '販売担当', width: 72, render: (r) => r.sales_staff_name ?? '' },
+        { key: 'default_trade_type', label: '取引', width: 44, render: (r) => r.default_trade_type ?? '' },
+        { key: 'closing_day', label: '締め日', r: true, width: 56, render: (r) => (r.closing_day ? (r.closing_day >= 99 ? '末日' : `${r.closing_day}日`) : '') },
+        { key: 'is_active', label: '', width: 44, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
       empty={() => EMPTY}
@@ -148,6 +151,7 @@ export default function PartnersPage() {
         is_customer: f.is_customer,
         is_supplier: f.is_supplier,
         is_royalty_payee: f.is_royalty_payee,
+        is_overseas: f.is_overseas,
         sales_staff_id: numOrNull(f.sales_staff_id),
         media_id: numOrNull(f.media_id),
         partner_category_id: numOrNull(f.partner_category_id),
@@ -183,7 +187,11 @@ export default function PartnersPage() {
             <L label="名称1" required><Input value={f.name1} onChange={(e) => set({ name1: e.target.value })} /></L>
             <L label="名称2"><Input value={f.name2} onChange={(e) => set({ name2: e.target.value })} /></L>
             <L label="略称"><Input value={f.short_name} onChange={(e) => set({ short_name: e.target.value })} /></L>
-            <L label="取引先カテゴリー" hint="いくつでも選べます（テレビとカタログ両方など）">
+            {/* 海外の取引先（2026-10-09 マスター編②）。得意先なら請求の消費税が 0、仕入先なら仕入明細の税区分の初期値が非課税／不課税になる */}
+            <L label="海外" hint="消費税の扱い（免税（税抜扱い）／課税対象外）は「分類・区分・設定 ＞ システム設定」で決めます">
+              <Check checked={f.is_overseas} onChange={(v) => set({ is_overseas: v })} label="海外の取引先" />
+            </L>
+            <L label="取引先カテゴリー" hint="いくつでも選べます（テレビとカタログ両方など）" wide>
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {(categories.data?.items ?? []).map((m) => (
                   <Check
@@ -241,8 +249,9 @@ export default function PartnersPage() {
           <div className="master-grid-2">
             <L label="郵便番号"><PostalLookup value={f.postal_code} onChange={(v) => set({ postal_code: v })} onAddress={(a) => set({ address1: a })} /></L>
             <L label="電話／FAX"><Input value={f.tel} onChange={(e) => set({ tel: e.target.value })} className="!w-[140px]" placeholder="電話" /><Input value={f.fax} onChange={(e) => set({ fax: e.target.value })} className="!w-[140px]" placeholder="FAX" /></L>
-            <L label="住所1"><Input value={f.address1} onChange={(e) => set({ address1: e.target.value })} /></L>
-            <L label="住所2"><Input value={f.address2} onChange={(e) => set({ address2: e.target.value })} /></L>
+            {/* 住所は半分の幅だと切れるので、住所1の下に住所2を置き、どちらも横幅いっぱいにする（2026-10-09 マスター編② M-03） */}
+            <L label="住所1" wide><Input value={f.address1} onChange={(e) => set({ address1: e.target.value })} /></L>
+            <L label="住所2" wide><Input value={f.address2} onChange={(e) => set({ address2: e.target.value })} /></L>
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
           </div>
           <Textarea rows={2} value={f.note} onChange={(e) => set({ note: e.target.value })} placeholder="備考" />

@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch } from '@/lib/hooks';
-import { Badge, Button, Card, CardHead, DataTable, ErrorBox, Input, Modal, Num, PageHead, Select, Textarea, Toolbar } from '@/components/ui';
+import { Badge, Button, Card, CardHead, DataTable, ErrorBox, Input, Modal, Num, PageHead, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { L } from '@/components/masters/Form';
@@ -55,10 +55,19 @@ export default function SimpleMastersPage() {
     <div>
       <div className="px-4 pt-3 flex flex-wrap gap-1">
         {KINDS.map((k) => <TabBtn key={k.kind} active={tab === k.kind} onClick={() => setTab(k.kind)}>{k.label}</TabBtn>)}
+        {FIXED_CODE_TABS.map((t) => <TabBtn key={t.tab} active={tab === t.tab} onClick={() => setTab(t.tab)}>{t.title}</TabBtn>)}
         <TabBtn active={tab === '_codes'} onClick={() => setTab('_codes')}>区分値</TabBtn>
         <TabBtn active={tab === '_settings'} onClick={() => setTab('_settings')}>システム設定</TabBtn>
       </div>
-      {tab === '_codes' ? <CodesTab /> : tab === '_settings' ? <SettingsTab /> : <SimpleTab key={tab} kind={tab} label={KINDS.find((k) => k.kind === tab)?.label ?? ''} />}
+      {tab === '_codes' ? (
+        <CodesTab />
+      ) : tab === '_settings' ? (
+        <SettingsTab />
+      ) : FIXED_CODE_TABS.some((t) => t.tab === tab) ? (
+        <CodesTab key={tab} fixed={FIXED_CODE_TABS.find((t) => t.tab === tab)} />
+      ) : (
+        <SimpleTab key={tab} kind={tab} label={KINDS.find((k) => k.kind === tab)?.label ?? ''} />
+      )}
     </div>
   );
 }
@@ -129,15 +138,40 @@ interface CodeRow extends Record<string, unknown> {
   name: string;
   sort_order: number | null;
   note: string | null;
+  is_active: boolean;
 }
 
-function CodesTab() {
+/**
+ * 区分値のうち、独立したタブで扱うもの（2026-10-09 マスター編② M-23「売上仕入用の通貨追加／仕入用の経費科目追加」）。
+ * 中身は区分値そのもの（CURRENCY・EXPENSE_DIVISION）。「区分値」タブからカテゴリーを選ぶ手間を省くためにタブを分けた。
+ */
+interface FixedCodeTab { tab: string; category: string; title: string; sub: string; codeHint?: string }
+const FIXED_CODE_TABS: FixedCodeTab[] = [
+  { tab: '_currency', category: 'CURRENCY', title: '通貨', sub: '売上・仕入・入出金で選ぶ通貨です。コードは英大文字3文字（USD・CNY など）', codeHint: '英大文字3文字' },
+  { tab: '_expense', category: 'EXPENSE_DIVISION', title: '経費科目', sub: '仕入・経費の登録で選ぶ経費科目（勘定科目にあたるもの）です' },
+];
+
+function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
   const { can } = useAuth();
   const toast = useToast();
-  const cats = useFetch<CodeCategory[]>('/masters/code-categories');
+  const { confirm, element } = useConfirm();
+  const cats = useFetch<CodeCategory[]>(fixed ? null : '/masters/code-categories');
   const [cat, setCat] = useState('');
-  const current = cat || cats.data?.[0]?.code || '';
-  const values = useFetch<{ category: CodeCategory; values: CodeRow[] }>(current ? `/masters/codes/${current}` : null);
+  const current = fixed?.category ?? (cat || cats.data?.[0]?.code || '');
+  // 「使わない」にした値も含めて取る（戻せるようにするため）。選択肢の API は有効な値だけを返す
+  const values = useFetch<{ category: CodeCategory; values: CodeRow[] }>(current ? `/masters/codes/${current}/all` : null);
+  const [showInactive, setShowInactive] = useState(false);
+  const rows = (values.data?.values ?? []).filter((r) => showInactive || r.is_active);
+  const setActive = async (r: CodeRow, active: boolean) => {
+    if (!active && !(await confirm(`「${r.name}」を使わないにしますか`, '選択肢から外れます。登録済みの伝票はそのまま読めます。'))) return;
+    try {
+      await api.patch(`/masters/codes/${r.id}`, { is_active: active });
+      toast(active ? '有効に戻しました' : '使わないにしました', 'good');
+      await values.reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
+    }
+  };
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CodeRow | null>(null);
   const [f, setF] = useState({ code: '', name: '', sort_order: '', note: '' });
@@ -163,29 +197,47 @@ function CodesTab() {
 
   return (
     <div className="page-body">
-      <PageHead title="区分値" sub="伝票で選ぶ区分（調整理由・品質区分・伝票発行区分など）。プログラムを直さずに選択肢を足せます" right={can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => { setEditing(null); setF({ code: '', name: '', sort_order: '', note: '' }); setError(null); setOpen(true); }}>値を追加</Button>} />
+      {element}
+      <PageHead title={fixed?.title ?? '区分値'} sub={fixed?.sub ?? '伝票で選ぶ区分（調整理由・品質区分・伝票発行区分など）。プログラムを直さずに選択肢を足せます'} right={can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => { setEditing(null); setF({ code: '', name: '', sort_order: '', note: '' }); setError(null); setOpen(true); }}>{fixed ? '新規登録' : '値を追加'}</Button>} />
       <Card>
-        <Toolbar>
-          <Select value={current} onChange={(e) => setCat(e.target.value)} className="!w-[280px]">
-            {(cats.data ?? []).map((c) => <option key={c.code} value={c.code}>{c.name}（{c.code}）</option>)}
-          </Select>
+        <Toolbar right={<label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />使わないものも表示</label>}>
+          {!fixed && (
+            <Select value={current} onChange={(e) => setCat(e.target.value)} className="!w-[280px]">
+              {(cats.data ?? []).map((c) => <option key={c.code} value={c.code}>{c.name}（{c.code}）</option>)}
+            </Select>
+          )}
         </Toolbar>
         {values.error ? <div className="p-3"><ErrorBox error={values.error} /></div> : null}
         <DataTable<CodeRow>
           columns={[
             { key: 'code', label: 'コード', width: 140, render: (r) => <Num className="font-semibold">{r.code}</Num> },
             { key: 'name', label: '名称' },
-            { key: '_act', label: '', width: 80, render: (r) => can('M-16', 'update') && <Button size="sm" onClick={() => { setEditing(r); setF({ code: r.code, name: r.name, sort_order: r.sort_order == null ? '' : String(r.sort_order), note: r.note ?? '' }); setError(null); setOpen(true); }}>編集</Button> },
+            { key: 'sort_order', label: '表示順', r: true, width: 70, render: (r) => r.sort_order ?? '' },
+            { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[260px]">{r.note ?? ''}</span> },
+            { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
+            {
+              key: '_act',
+              label: '',
+              width: 170,
+              render: (r) =>
+                can('M-16', 'update') && (
+                  <span className="flex gap-1 justify-end">
+                    <Button size="sm" onClick={() => { setEditing(r); setF({ code: r.code, name: r.name, sort_order: r.sort_order == null ? '' : String(r.sort_order), note: r.note ?? '' }); setError(null); setOpen(true); }}>編集</Button>
+                    {r.is_active ? <Button size="sm" variant="danger" onClick={() => setActive(r, false)}>使わない</Button> : <Button size="sm" onClick={() => setActive(r, true)}>有効に戻す</Button>}
+                  </span>
+                ),
+            },
           ]}
-          rows={values.data?.values ?? []}
+          rows={rows}
           rowKey={(r) => r.id}
           loading={values.loading}
+          rowClassName={(r) => (r.is_active ? '' : 'opacity-50')}
         />
       </Card>
-      <Modal open={open} title={editing ? '区分値の編集' : '区分値の追加'} onClose={() => setOpen(false)} width={480} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
+      <Modal open={open} title={editing ? `${fixed?.title ?? '区分値'}の編集` : `${fixed?.title ?? '区分値'}の追加`} onClose={() => setOpen(false)} width={480} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         <L label="カテゴリー"><span className="text-[12px]">{values.data?.category.name ?? current}</span></L>
-        <L label="コード" required><Input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} className="!w-[150px]" disabled={!!editing} /></L>
+        <L label="コード" required hint={fixed?.codeHint}><Input value={f.code} onChange={(e) => setF({ ...f, code: fixed?.category === 'CURRENCY' ? e.target.value.toUpperCase() : e.target.value })} className="!w-[150px]" disabled={!!editing} /></L>
         <L label="名称" required><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></L>
         <L label="表示順"><Input right value={f.sort_order} onChange={(e) => setF({ ...f, sort_order: e.target.value })} className="!w-[90px]" /></L>
         <L label="備考"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></L>
@@ -195,6 +247,15 @@ function CodesTab() {
 }
 
 /* ---------- システム設定 ---------- */
+
+/**
+ * 設定値の見せ方。値そのもの（英字）だけでは意味が分からないものに呼び名を添える。
+ * 海外取引先の消費税（2026-10-09 マスター編②）は exempt／non_taxable では選べないため。
+ */
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+  OVERSEAS_TAX_TREATMENT: { exempt: '免税（税抜扱い）', non_taxable: '課税対象外' },
+};
+const valueLabel = (key: string, value: string) => (VALUE_LABELS[key]?.[value] ? `${VALUE_LABELS[key][value]}（${value}）` : value);
 
 interface Setting extends Record<string, unknown> {
   setting_key: string;
@@ -250,7 +311,7 @@ function SettingsTab() {
                     <div className="font-semibold">{x.name}</div>
                     <div className="text-[10.5px] text-[var(--color-ink-3)] num">{x.setting_key}</div>
                   </td>
-                  <td style={{ width: 200 }} className="num">{x.value_text ?? <span className="text-[var(--color-ink-3)]">（未設定）</span>}</td>
+                  <td style={{ width: 200 }} className="num">{x.value_text == null ? <span className="text-[var(--color-ink-3)]">（未設定）</span> : valueLabel(x.setting_key, x.value_text)}</td>
                   <td className="text-[11.5px] text-[var(--color-ink-2)]">{x.description ?? ''}</td>
                   <td style={{ width: 80 }} className="r">
                     {x.is_user_editable ? (can('M-16', 'update') && <Button size="sm" onClick={() => { setEditing(x); setValue(x.value_text ?? ''); setError(null); }}>変更</Button>) : <span className="text-[10.5px] text-[var(--color-ink-3)]">固定</span>}
@@ -265,7 +326,7 @@ function SettingsTab() {
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         {editing?.description && <div className="text-[11.5px] text-[var(--color-ink-2)] mb-3">{editing.description}</div>}
         {allowed.length > 0 ? (
-          <Select value={value} onChange={(e) => setValue(e.target.value)}>{allowed.map((a) => <option key={a} value={a}>{a}</option>)}</Select>
+          <Select value={value} onChange={(e) => setValue(e.target.value)}>{allowed.map((a) => <option key={a} value={a}>{editing ? valueLabel(editing.setting_key, a) : a}</option>)}</Select>
         ) : editing?.value_type === 'boolean' ? (
           <Select value={value} onChange={(e) => setValue(e.target.value)}><option value="true">はい（true）</option><option value="false">いいえ（false）</option></Select>
         ) : (

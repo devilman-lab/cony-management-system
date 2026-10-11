@@ -34,7 +34,8 @@ export default function ArPage() {
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
   const [partner, setPartner] = useState<Option | null>(null);
   const list = useList<ArRow>('/billing/ar-balances', { partner_id: partner?.id }, 100);
-  const c = (k: keyof ArRow & string, label: string, w = 96): Column<ArRow> => ({ key: k, label, r: true, width: w, render: (r) => money(r[k] as string) });
+  // 金額の列が14あるので、文字を少し小さくし（fit="dense"）、見出しは折り返して、1440 幅で全列が見えるようにしてある
+  const c = (k: keyof ArRow & string, label: string, w = 57): Column<ArRow> => ({ key: k, label, r: true, width: w, render: (r) => money(r[k] as string) });
 
   return (
     <div className="page-body">
@@ -46,24 +47,25 @@ export default function ArPage() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<ArRow>
           wide
+          fit="dense"
           columns={[
-            { key: 'partner_name', label: '取引先', width: 160 },
-            { key: 'period_to', label: '締め日', width: 96, render: (r) => <Num>{ymd(r.period_to)}</Num> },
-            { key: 'invoice_no', label: '請求番号', width: 120, render: (r) => <Num>{r.invoice_no}</Num> },
-            c('prev_invoice_balance', '前回請求残高', 110),
-            c('current_receipt_amount', '今回入金額', 100),
-            c('carryover_balance', '繰越残高', 100),
-            c('shipment_amount', '出荷', 100),
-            c('return_amount', '返品額', 90),
-            c('unposted_10', '未計上10%', 90),
-            c('unposted_8', '未計上8%', 90),
-            c('fee_amount', '手数料', 80),
-            c('adjust_10', '調整10%', 80),
-            c('adjust_8', '調整8%', 80),
-            c('shipping_fee_amount', '送料', 80),
-            c('current_invoice_amount', '当月請求額', 110),
-            c('current_balance', '今回請求残高', 110),
-            { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
+            { key: 'partner_name', label: '取引先', width: 72 },
+            { key: 'period_to', label: '締め日', width: 66, nowrap: true, render: (r) => <Num>{ymd(r.period_to)}</Num> },
+            { key: 'invoice_no', label: '請求番号', width: 80, nowrap: true, render: (r) => <Num>{r.invoice_no}</Num> },
+            c('prev_invoice_balance', '前回請求残高'),
+            c('current_receipt_amount', '今回入金額'),
+            c('carryover_balance', '繰越残高'),
+            c('shipment_amount', '出荷'),
+            c('return_amount', '返品額'),
+            c('unposted_10', '未計上10%'),
+            c('unposted_8', '未計上8%'),
+            c('fee_amount', '手数料'),
+            c('adjust_10', '調整10%'),
+            c('adjust_8', '調整8%'),
+            c('shipping_fee_amount', '送料'),
+            c('current_invoice_amount', '当月請求額'),
+            c('current_balance', '今回請求残高'),
+            { key: 'status', label: '状態', width: 56, render: (r) => <Badge status={r.status} /> },
           ]}
           rows={list.items}
           rowKey={(r) => r.id}

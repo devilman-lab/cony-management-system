@@ -1,8 +1,61 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { sql } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { Paged } from './partners.service';
+
+/**
+ * SKU の名前（SKU の商品名があればそれ、無ければ商品の商品名）。
+ *
+ * 同じ品番の中で (W)・Amazon用・キャップ付 などを SKU の末尾で分けて管理しているため、
+ * SKU ごとに商品名を持てるようにした（2026-10-09 マスター編②）。SKU の名前を出すところは
+ * すべてこの式を使い、空白だけの SKU の商品名は「無い」とみなす。
+ */
+export const skuNameExpr = (skuAlias = 's', productAlias = 'p') =>
+  sql<string>`coalesce(nullif(btrim(${sql.ref(`${skuAlias}.sku_name`)}), ''), ${sql.ref(`${productAlias}.product_name`)})`;
+
+/**
+ * 参照元の表の呼び名。削除を断るときに「どこで使われているか」を出すのに使う
+ * （2026-10-09 マスター編②「受注等で使用していないのに何故削除できないのか」）。
+ * 載っていない表は表の名前のまま出す（新しい表が増えても数え漏れはしない）。
+ */
+const USAGE_LABELS: Record<string, string> = {
+  set_headers: 'セット登録（セット SKU）',
+  set_components: 'セット登録（構成品）',
+  partner_products: '得意先別商品',
+  stocks: '在庫表',
+  reservations: '引当在庫',
+  receipt_lines: '入荷',
+  sales_order_lines: '受注',
+  shipment_lines: '出荷',
+  allocations: '引当（出荷）',
+  return_lines: '返品',
+  purchase_lines: '仕入',
+  royalty_rules: 'ロイヤリティ規定',
+  royalty_calculation_lines: 'ロイヤリティ計算',
+  external_order_lines: '受注取込',
+  platform_transactions: 'Amazon 取引取込',
+  sales_schedules: '販売予定',
+  stock_adjustment_lines: '在庫調整',
+};
+
+/** どこで何件使われているか。skus は使っている SKU のコード（商品そのものを指す参照では空）。 */
+export interface Usage {
+  table: string;
+  label: string;
+  count: number;
+  skus: string[];
+}
+
+/** 「在庫表 2件（SKU A・B）、受注 1件（SKU A）」の形にする。 */
+export function describeUsages(usages: Usage[]): string {
+  return usages
+    .map((u) => {
+      const codes = u.skus.length === 0 ? '' : `（SKU ${u.skus.slice(0, 3).join('・')}${u.skus.length > 3 ? ` ほか${u.skus.length - 3}件` : ''}）`;
+      return `${u.label} ${u.count}件${codes}`;
+    })
+    .join('、');
+}
 
 export interface ProductListQuery {
   q?: string;
@@ -26,6 +79,11 @@ export interface SkuSearchQuery {
   limit: number;
   /** 取引先を渡すと、その取引先の先方JAN・出荷JAN・専用コードでも引く */
   partner_id?: number;
+  /**
+   * セット商品（products.is_set）の SKU だけ／以外だけに絞る。
+   * セット登録のセット SKU の欄に、セット商品にした商品の SKU だけを出すため（2026-10-09 マスター編②）。
+   */
+  is_set?: boolean;
 }
 
 @Injectable()
@@ -126,6 +184,8 @@ export class ProductsService {
       .select([
         's.id as id',
         's.sku_code as sku_code',
+        // SKU ごとの商品名。空なら商品の商品名を使う（2026-10-09 マスター編②）
+        's.sku_name as sku_name',
         's.jan as jan',
         // 画面はこの詳細の値を起点に保存し直すため、編集できる欄はすべて返す。
         // 返していなかった2項目が、SKU を保存するたびに空で上書きされて消えていた。
@@ -173,6 +233,7 @@ export class ProductsService {
       .where('s.is_active', '=', true)
       .where('p.is_active', '=', true);
 
+    if (query.is_set !== undefined) q = q.where('p.is_set', '=', query.is_set);
     if (query.q) {
       const like = `%${query.q}%`;
       q = q.where((eb) =>
@@ -181,6 +242,7 @@ export class ProductsService {
           eb('s.jan', 'ilike', like),
           eb('p.product_code', 'ilike', like),
           eb('p.product_name', 'ilike', like),
+          eb('s.sku_name', 'ilike', like),
           eb('pp.partner_jan', 'ilike', like),
           eb('pp.shipping_jan', 'ilike', like),
           eb('pp.partner_product_code', 'ilike', like),
@@ -196,6 +258,9 @@ export class ProductsService {
         'p.id as product_id',
         'p.product_code as product_code',
         'p.product_name as product_name',
+        's.sku_name as sku_name',
+        // 候補の表示・受注の品名に使う名前（SKU の商品名があればそれ、無ければ商品名）
+        skuNameExpr('s', 'p').as('item_name'),
         'p.is_set as is_set',
         'p.tax_rate as tax_rate',
         'c.name as color_name',
@@ -234,7 +299,8 @@ export class ProductsService {
         's.fba_jan as fba_jan',
         's.shop_product_code as shop_product_code',
         'p.product_code as product_code',
-        'p.product_name as product_name',
+        // SKU の商品名があればそれ（2026-10-09 マスター編②）
+        skuNameExpr('s', 'p').as('product_name'),
         'b.name as brand_name',
         'c.name as color_name',
         'z.name as size_name',
@@ -279,5 +345,160 @@ export class ProductsService {
     }
 
     return '﻿' + lines.join('\r\n') + '\r\n';
+  }
+
+  // ==========================================================================
+  // 削除（2026-10-09 マスター編②）
+  // ==========================================================================
+
+  /**
+   * 商品・SKU がどこで使われているかを数える。
+   *
+   * 参照元は外部キーの定義（pg_constraint）から拾う。表を手で並べると、新しい表が
+   * 増えたときに数え漏れて、使われているものを消そうとしてしまうため。
+   * 消すと一緒に消える参照（ON DELETE CASCADE・SET NULL）は「使われている」に数えない。
+   */
+  private async usages(target: 'skus' | 'products', ids: number[], skip: string[] = []): Promise<Usage[]> {
+    if (ids.length === 0) return [];
+    const fks = await sql<{ table_name: string; column_name: string }>`
+      select cl.relname as table_name, a.attname as column_name
+        from pg_constraint c
+        join pg_class cl on cl.oid = c.conrelid
+        join pg_class rf on rf.oid = c.confrelid
+        join pg_namespace n on n.oid = rf.relnamespace
+        join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+       where c.contype = 'f'
+         and rf.relname = ${target}
+         and n.nspname = current_schema()
+         and array_length(c.conkey, 1) = 1
+         and c.confdeltype not in ('c', 'n', 'd')
+       order by cl.relname, a.attname`.execute(this.db);
+
+    const codes =
+      target === 'skus'
+        ? new Map(
+            (await this.db.selectFrom('skus').select(['id', 'sku_code']).where('id', 'in', ids).execute()).map((r) => [
+              Number(r.id),
+              r.sku_code,
+            ]),
+          )
+        : new Map<number, string>();
+
+    const out: Usage[] = [];
+    for (const fk of fks.rows) {
+      // 商品の SKU そのもの（skus.product_id）は、商品と一緒に消すので使用に数えない
+      if (target === 'products' && fk.table_name === 'skus') continue;
+      if (skip.includes(fk.table_name)) continue;
+      // 表・列の名前はデータベースの定義から取ったもの。利用者の入力は値としてのみ渡る
+      const rows = await sql<{ id: string; n: number }>`
+        select ${sql.ref(fk.column_name)} as id, count(*)::int as n
+          from ${sql.table(fk.table_name)}
+         where ${sql.ref(fk.column_name)} in (${sql.join(ids)})
+         group by 1
+         order by 1`.execute(this.db);
+      if (rows.rows.length === 0) continue;
+      const prev = out.find((u) => u.table === fk.table_name);
+      const count = rows.rows.reduce((a, r) => a + Number(r.n), 0);
+      const skus = rows.rows.map((r) => codes.get(Number(r.id))).filter((c): c is string => !!c);
+      if (prev) {
+        prev.count += count;
+        prev.skus = [...new Set([...prev.skus, ...skus])];
+      } else {
+        out.push({ table: fk.table_name, label: USAGE_LABELS[fk.table_name] ?? fk.table_name, count, skus });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 商品を消す。SKU がどこにも使われていなければ SKU ごと消す。
+   *
+   * 以前は SKU を残したまま商品だけを消そうとしていたため、SKU のある商品は
+   * 外部キーで必ず断られ「受注等で使用していないのに何故？」となっていた。
+   * 使われているときは、どこで使われているか（在庫表・受注 など）を文言に出して断る。
+   */
+  async removeProduct(id: number): Promise<{ id: number; deleted: true; skus: number }> {
+    const product = await this.db.selectFrom('products').select(['id']).where('id', '=', id).executeTakeFirst();
+    if (!product) throw new NotFoundException(`商品が見つかりません（ID: ${id}）`);
+    const skuIds = (await this.db.selectFrom('skus').select('id').where('product_id', '=', id).execute()).map((r) =>
+      Number(r.id),
+    );
+
+    const used = [...(await this.usages('products', [id])), ...(await this.usages('skus', skuIds))];
+    if (used.length > 0) {
+      throw new ConflictException(
+        `この商品は次で使われているため削除できません：${describeUsages(used)}。` +
+          `一覧から外したいときは「使わない」をお使いください`,
+      );
+    }
+
+    try {
+      await this.db.transaction().execute(async (trx) => {
+        await trx.deleteFrom('skus').where('product_id', '=', id).execute();
+        await trx.deleteFrom('products').where('id', '=', id).execute();
+      });
+    } catch (e) {
+      // 数えたあとに別の人が使い始めた場合。外部キーが最後の砦になる
+      if ((e as { code?: string }).code === '23503') {
+        throw new ConflictException('この商品は使われ始めたため削除できません。画面を開き直してください');
+      }
+      throw e;
+    }
+    return { id, deleted: true, skus: skuIds.length };
+  }
+
+  /**
+   * SKU を1行消す（商品の編集画面の SKU 表の「削除」。2026-10-09 マスター編②）。
+   * 使われていれば、どこで使われているかを出して断る。
+   */
+  async removeSku(id: number): Promise<{ id: number; deleted: true }> {
+    const sku = await this.db.selectFrom('skus').select(['id', 'sku_code']).where('id', '=', id).executeTakeFirst();
+    if (!sku) throw new NotFoundException(`SKU が見つかりません（ID: ${id}）`);
+
+    const used = await this.usages('skus', [id]);
+    if (used.length > 0) {
+      throw new ConflictException(
+        `SKU ${sku.sku_code} は次で使われているため削除できません：${describeUsages(used)}。` +
+          `使わなくなった SKU は「有効」の印を外してください`,
+      );
+    }
+    try {
+      await this.db.deleteFrom('skus').where('id', '=', id).execute();
+    } catch (e) {
+      if ((e as { code?: string }).code === '23503') {
+        throw new ConflictException(`SKU ${sku.sku_code} は使われ始めたため削除できません。画面を開き直してください`);
+      }
+      throw e;
+    }
+    return { id, deleted: true };
+  }
+
+  /**
+   * セット登録を構成ごと消す（2026-10-09 マスター編②）。
+   *
+   * セット SKU が受注・取込・引当在庫などで使われていれば断る。構成を消すと、
+   * 未出荷の受注がセットを構成品に展開できなくなるため。
+   * 得意先別商品・ほかのセットの構成品になっていることは、構成を消しても困らないので数えない。
+   * セット SKU（商品マスタ）そのものは残す。
+   */
+  async removeSet(id: number): Promise<{ id: number; deleted: true }> {
+    const header = await this.db
+      .selectFrom('set_headers as h')
+      .innerJoin('skus as s', 's.id', 'h.sku_id')
+      .select(['h.id as id', 'h.sku_id as sku_id', 's.sku_code as sku_code'])
+      .where('h.id', '=', id)
+      .executeTakeFirst();
+    if (!header) throw new NotFoundException(`セット登録が見つかりません（ID: ${id}）`);
+
+    const used = await this.usages('skus', [Number(header.sku_id)], ['set_headers', 'set_components', 'partner_products']);
+    if (used.length > 0) {
+      throw new ConflictException(
+        `セット ${header.sku_code} は次で使われているため削除できません：${describeUsages(used)}。` +
+          `構成を変えるときは「編集」で登録し直してください`,
+      );
+    }
+    // 構成品（set_components）は外部キーの ON DELETE CASCADE で一緒に消える
+    await this.db.deleteFrom('set_headers').where('id', '=', id).execute();
+    return { id, deleted: true };
   }
 }

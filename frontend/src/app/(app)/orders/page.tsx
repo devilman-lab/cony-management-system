@@ -122,23 +122,25 @@ function OrdersList() {
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<OrderRow>
           wide
+          fit
           columns={[
-            { key: 'order_no', label: '受注番号', width: 130, render: (r) => <Link href={`/orders/${r.id}`} className="num font-semibold text-[var(--color-brand-700)]">{r.order_no}</Link> },
-            { key: 'order_date', label: '受注日', width: 96, render: (r) => <Num>{ymd(r.order_date)}</Num> },
-            { key: 'order_type', label: '区分', width: 64 },
+            // 1440・1280 のどちらでも全列が横スクロールなしに見える幅。取引先・納品先は折り返して全文を出す
+            { key: 'order_no', label: '受注番号', width: 112, nowrap: true, render: (r) => <Link href={`/orders/${r.id}`} className="num font-semibold text-[var(--color-brand-700)]">{r.order_no}</Link> },
+            { key: 'order_date', label: '受注日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.order_date)}</Num> },
+            { key: 'order_type', label: '区分', width: 52 },
             { key: 'partner_name', label: '取引先', render: (r) => <span title={r.partner_code}>{r.partner_name}</span> },
             { key: 'delivery_name', label: '納品先', render: (r) => r.delivery_name ?? '（直送）' },
-            { key: 'sales_category_name', label: '販売カテゴリー', width: 110 },
-            { key: 'staff_name', label: '販売担当', width: 90, render: (r) => r.staff_name ?? '' },
-            { key: 'total_amount', label: '金額', r: true, width: 100, render: (r) => money(r.total_amount) },
-            { key: 'ship_date', label: '出荷日', width: 96, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
-            { key: 'status', label: '状態', width: 90, render: (r) => <Badge status={r.status} /> },
+            { key: 'sales_category_name', label: '販売カテゴリー', width: 76 },
+            { key: 'staff_name', label: '販売担当', width: 72, render: (r) => r.staff_name ?? '' },
+            { key: 'total_amount', label: '金額', r: true, width: 86, render: (r) => money(r.total_amount) },
+            { key: 'ship_date', label: '出荷日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
+            { key: 'status', label: '状態', width: 82, render: (r) => <Badge status={r.status} /> },
             {
               key: '_act',
               label: '',
-              width: 150,
+              width: 92,
               render: (r) => (
-                <div className="flex items-center gap-1">
+                <div className="tbl-acts">
                   {r.status === '引当待ち' && can('D-01', 'create') && (
                     <Button size="sm" variant="primary" loading={busyId === r.id} onClick={() => allocate(r)}>
                       引当

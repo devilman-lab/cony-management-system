@@ -34,6 +34,13 @@ const LIMIT = 50;
  * 一覧は楽楽販売の見本のとおり確保ごとにまとめる（Z-30）。見出しの列は1回だけ出し、
  * その下に明細を並べ、確保ごとに確保数合計・使用数合計を出す。
  */
+/**
+ * 列の幅。1440 幅のときは base（この幅で全列が横スクロールなしに収まる）で、画面がそれより広いほど
+ * 広い分の rate 倍だけ広げる。広い画面で、余りが商品名にだけ回って媒体・取引先などが細いまま何行にも
+ * 割れていたため、余りを各列に配る。
+ */
+const grow = (base: number, rate: number) => `max(${base}px, calc(${base}px + (100vw - 1440px) * ${rate}))`;
+
 export default function AllocationPage() {
   const { can } = useAuth();
   const toast = useToast();
@@ -160,28 +167,30 @@ export default function AllocationPage() {
           <SearchSelect value={sku} onChange={setSku} fetchOptions={fetchSku} placeholder="商品：すべて" width={240} />
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
-        {/* 1440・1280 のどちらでも、確保数〜使用数合計まで横スクロールなしに見える幅（Z-30）。
-            文字の列は「…」で切らずに折り返し、見出しも2行にする。商品名は残りの幅を使う。 */}
+        {/* 1440 幅で確保数〜使用数合計まで横スクロールなしに見える幅（Z-30）。
+            販売カテゴリー・商品分類コード・商品コード・確保数合計・使用数合計は、見出しも値も1行で読めるよう
+            文字が収まる幅を取って折り返さない（2行に割れて読みにくかった）。取引先・備考などは折り返し、
+            商品名は残りの幅を使う。これより狭い画面では表を横にずらして見る。 */}
         <div className="tbl-wrap-wide">
-          <table className="tbl tbl-fit" style={{ minWidth: 1000 }}>
+          <table className="tbl tbl-fit" style={{ minWidth: 1180 }}>
             <thead>
               <tr>
                 <th style={{ width: 88 }}>販売期間</th>
-                <th style={{ width: 50 }}>媒体</th>
-                <th style={{ width: 68 }}>取引先</th>
-                <th style={{ width: 72 }}>販売<br />カテゴリー</th>
-                <th style={{ width: 46 }}>項目</th>
-                <th style={{ width: 58 }}>備考</th>
-                <th style={{ width: 62 }}>商品分類<br />コード</th>
-                <th style={{ width: 62 }}>商品分類</th>
-                <th style={{ width: 108 }}>商品コード</th>
+                <th style={{ width: grow(50, 0.06) }}>媒体</th>
+                <th style={{ width: grow(68, 0.15) }}>取引先</th>
+                <th className="nw" style={{ width: 104 }}>販売カテゴリー</th>
+                <th style={{ width: grow(46, 0.06) }}>項目</th>
+                <th style={{ width: grow(58, 0.1) }}>備考</th>
+                <th className="nw" style={{ width: 94 }}>商品分類コード</th>
+                <th style={{ width: grow(62, 0.08) }}>商品分類</th>
+                <th className="nw" style={{ width: grow(128, 0.04) }}>商品コード</th>
                 <th>商品名</th>
                 <th className="r" style={{ width: 50 }}>確保数</th>
                 <th className="r" style={{ width: 50 }}>使用数</th>
                 <th className="r" style={{ width: 48 }}>残り</th>
-                <th className="r" style={{ width: 52 }}>確保数<br />合計</th>
-                <th className="r" style={{ width: 52 }}>使用数<br />合計</th>
-                <th style={{ width: 62, ...stick, zIndex: 3, background: '#f4f7f8' }}></th>
+                <th className="r nw" style={{ width: 76 }}>確保数合計</th>
+                <th className="r nw" style={{ width: 76 }}>使用数合計</th>
+                <th style={{ width: grow(62, 0.25), ...stick, zIndex: 3, background: '#f4f7f8' }}></th>
               </tr>
             </thead>
             <tbody>
@@ -206,14 +215,14 @@ export default function AllocationPage() {
                             <td rowSpan={span} style={firstRow} title={g.partner_name ?? ''}>
                               {g.partner_name ?? <span className={muted}>（指定なし）</span>}
                             </td>
-                            <td rowSpan={span} style={firstRow}>{g.sales_category_name}</td>
+                            <td rowSpan={span} style={firstRow} className="nw">{g.sales_category_name}</td>
                             <td rowSpan={span} style={firstRow} title={g.item_label ?? ''}>{g.item_label ?? ''}</td>
                             <td rowSpan={span} style={firstRow} title={g.note ?? ''}>{g.note ?? ''}</td>
-                            <td rowSpan={span} style={firstRow}>{g.product_class_code ?? ''}</td>
+                            <td rowSpan={span} style={firstRow} className="nw">{g.product_class_code ?? ''}</td>
                             <td rowSpan={span} style={firstRow} title={g.product_class_name ?? ''}>{g.product_class_name ?? ''}</td>
                           </>
                         )}
-                        <td style={i === 0 ? firstRow : top}>{l && <Num className="font-semibold">{l.sku_code}</Num>}</td>
+                        <td style={i === 0 ? firstRow : top} className="nw">{l && <Num className="font-semibold">{l.sku_code}</Num>}</td>
                         <td style={i === 0 ? firstRow : top} title={l?.item_name ?? ''}>{l?.item_name ?? ''}</td>
                         <td className="r num" style={i === 0 ? firstRow : top}>{l ? qty(l.reserved_qty) : ''}</td>
                         <td className="r num" style={i === 0 ? firstRow : top}>{l ? qty(l.consumed_qty) : ''}</td>

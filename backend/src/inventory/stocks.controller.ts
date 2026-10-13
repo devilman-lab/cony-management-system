@@ -70,11 +70,16 @@ export class StocksController {
     return this.stocks.summaryBySku(skuId, showQty);
   }
 
-  /** 入出荷履歴（機能ID S-05）。追記専用なので、記録は後から変わらない。 */
+  /**
+   * 入出荷履歴（機能ID S-05）。追記専用なので、記録は後から変わらない。
+   * 「前」「後」は実在庫そのものなので、在庫表で実在庫を隠す人には返さない（在庫編 Z-02。
+   * 在庫表だけ隠しても、この履歴から実在庫を追えてしまうため）。増減・種別などは返す。
+   */
   @Get('movements')
   @RequirePermission('S-05', 'view')
-  movements(@Query(new ZodValidationPipe(MovementQuerySchema)) query: MovementQuery) {
-    return this.stocks.movements(query);
+  async movements(@Query(new ZodValidationPipe(MovementQuerySchema)) query: MovementQuery, @CurrentUser() user: AuthenticatedUser) {
+    const { showQty } = await this.visibility(user.id);
+    return this.stocks.movements(query, showQty);
   }
 
   /** 在庫表の備考を一覧の中で直す（在庫編 Z-05）。数量は変えない。 */

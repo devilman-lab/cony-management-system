@@ -7,7 +7,8 @@ import { useAuth } from '@/lib/auth';
 import { useFetch, useList } from '@/lib/hooks';
 import { qty as fmtQty, today, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Toolbar, useConfirm } from '@/components/ui';
-import { SearchSelect, fetchSkus, type Option } from '@/components/ui/SearchSelect';
+import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
+import { SearchSelect, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
 interface ReceiptLine {
@@ -177,15 +178,29 @@ export default function ReceivingPage() {
     }
   };
 
-  const receive = async (r: ReceiptRow) => {
-    if (!(await confirm(`${r.receipt_no} を入荷確定しますか`, '実在庫が増えます。'))) return;
-    setBusy(r.id);
+  // 入荷確定（Z-14）。登録で入れた入荷日をそのまま確定の入荷日にする。
+  // 以前は確定した日（今日）を送っていて、過去の日付で入れた入荷も確定日に置き換わっていた。
+  // 確定のダイアログで入荷日を確かめ、違っていればその場で直せる（初期値は登録した入荷日）。
+  const [receiving, setReceiving] = useState<ReceiptRow | null>(null);
+  const [receivedDate, setReceivedDate] = useState('');
+  const [receiveError, setReceiveError] = useState<unknown>(null);
+  const openReceive = (r: ReceiptRow) => {
+    setReceiving(r);
+    setReceivedDate(r.planned_date ? String(r.planned_date).slice(0, 10) : today());
+    setReceiveError(null);
+  };
+  const receive = async () => {
+    if (!receiving) return;
+    if (!receivedDate) return setReceiveError(new ApiError(400, '入荷日を入れてください'));
+    setBusy(receiving.id);
+    setReceiveError(null);
     try {
-      await api.post(`/inventory/receipts/${r.id}/receive`, { received_date: today() });
-      toast('入荷を計上し、在庫に反映しました', 'good');
+      await api.post(`/inventory/receipts/${receiving.id}/receive`, { received_date: receivedDate });
+      toast(`入荷日 ${ymd(receivedDate)} で入荷を計上し、在庫に反映しました`, 'good');
+      setReceiving(null);
       await list.reload();
     } catch (e) {
-      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
+      setReceiveError(e);
     } finally {
       setBusy(null);
     }
@@ -240,7 +255,7 @@ export default function ReceivingPage() {
               render: (r) => r.first && r.receipt.status === '指示' && (
                 <span className="tbl-acts">
                   {can('S-03', 'update') && <Button size="sm" onClick={() => openEdit(r.receipt)}>編集</Button>}
-                  {can('S-03', 'update') && <Button size="sm" variant="primary" loading={busy === r.receipt.id} onClick={() => receive(r.receipt)}>入荷確定</Button>}
+                  {can('S-03', 'update') && <Button size="sm" variant="primary" loading={busy === r.receipt.id} onClick={() => openReceive(r.receipt)}>入荷確定</Button>}
                   {can('S-03', 'delete') && <Button size="sm" variant="danger" loading={cancelId === r.receipt.id} onClick={() => cancel(r.receipt)}>取消</Button>}
                 </span>
               ),
@@ -259,7 +274,9 @@ export default function ReceivingPage() {
         open={open}
         title={editing ? `入荷の編集（${editing.receipt_no}）` : '入荷の登録'}
         onClose={() => setOpen(false)}
-        width={900}
+        // 画面の幅に合わせて広げる（1280 なら画面いっぱい、広い画面では 1400px まで）。
+        // 900px 固定だと、選んだ商品のカラー・サイズが「…」で切れていた（Z-10）
+        width={1400}
         footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy === 'new'} disabled={!editing && !fixedWarehouse.data} onClick={save}>{editing ? '保存する' : '登録する'}</Button></>}
       >
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
@@ -289,7 +306,10 @@ export default function ReceivingPage() {
             <tbody>
               {lines.map((l) => (
                 <tr key={l.key}>
-                  <td><SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchSkus} placeholder="商品コード・JAN・商品名" width="100%" /></td>
+                  <td>
+                    <SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchStockSkus} placeholder="商品コード・JAN・商品名" width="100%" />
+                    <PickedSkuText value={l.sku} />
+                  </td>
                   <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" /></td>
                   <td><Input type="date" value={l.expiry_date} onChange={(e) => setLine(l.key, { expiry_date: e.target.value })} className="!h-[26px]" /></td>
                   <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} className="!h-[26px]" /></td>
@@ -303,6 +323,22 @@ export default function ReceivingPage() {
           </table>
         </div>
         <div className="mt-2"><Button size="sm" icon="plus" onClick={() => setLines((s) => [...s, newLine()])}>行を追加</Button></div>
+      </Modal>
+
+      <Modal
+        open={receiving !== null}
+        title={receiving ? `${receiving.receipt_no} を入荷確定しますか` : ''}
+        onClose={() => setReceiving(null)}
+        width={460}
+        footer={<><Button onClick={() => setReceiving(null)}>やめる</Button><Button variant="primary" loading={receiving !== null && busy === receiving.id} onClick={receive}>入荷確定する</Button></>}
+      >
+        {receiveError ? <div className="mb-3"><ErrorBox error={receiveError} onClose={() => setReceiveError(null)} /></div> : null}
+        <div className="flex flex-col gap-3 text-[12.5px] text-[var(--color-ink-2)]">
+          <div>実在庫が増えます。入荷日を確かめてください（登録した入荷日が入っています）。この日が入荷日として残り、入出荷履歴の日付にもなります。</div>
+          <FormRow label="入荷日" required>
+            <Input type="date" value={receivedDate} max={today()} onChange={(e) => setReceivedDate(e.target.value)} className="!w-[150px]" />
+          </FormRow>
+        </div>
       </Modal>
     </div>
   );

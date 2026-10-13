@@ -63,6 +63,9 @@ export interface AdjustmentImportResult {
       row: number;
       sku_code: string;
       product_name: string;
+      /** 同じ商品のカラー違い・サイズ違いを下見で見分けるため（2026-10-12 受入テスト） */
+      color_name: string | null;
+      size_name: string | null;
       qty: string;
       from_quality: string | null;
       to_quality: string | null;
@@ -180,6 +183,8 @@ export class AdjustmentsService {
   /** 在庫調整の登録。伝票を作るだけで、在庫は動かさない（Z-20）。 */
   async create(input: CreateAdjustmentInput, userId: number) {
     this.assertLines(input.lines);
+    // セット商品は在庫を持たない。手入力でも CSV 取込と同じく断る（2026-10-12 受入テスト）
+    await this.ledger.assertNoSetSkus(this.db, input.lines);
 
     return this.db.transaction().execute(async (trx) => {
       const reasonId = await this.reasonId(trx, input.reason_code);
@@ -219,7 +224,10 @@ export class AdjustmentsService {
 
   /** 調整日・理由・備考・明細の編集（Z-21「編集」・Z-23 一覧で直接直す）。在庫を動かす前（「登録」）だけ。 */
   async update(id: number, input: UpdateAdjustmentInput, userId: number) {
-    if (input.lines) this.assertLines(input.lines);
+    if (input.lines) {
+      this.assertLines(input.lines);
+      await this.ledger.assertNoSetSkus(this.db, input.lines);
+    }
 
     return this.db.transaction().execute(async (trx) => {
       const header = await this.lockHeader(trx, id);
@@ -282,6 +290,9 @@ export class AdjustmentsService {
   ) {
     const lines = await this.linesForStock(trx, id);
     if (lines.length === 0) throw new ConflictException('調整明細がありません');
+    // セット商品を断る前に登録された調整もある。反映（sign=1）のときだけ止める。
+    // 取消（sign=-1）は、すでにできてしまったセットの在庫を元に戻すために通す
+    if (sign === 1) await this.ledger.assertNoSetSkus(trx, lines);
     const ref = { table: REF_TABLE, id };
     const negate = (q: string) => (q.startsWith('-') ? q.slice(1) : `-${q}`);
 
@@ -551,10 +562,14 @@ export class AdjustmentsService {
         : await this.db
             .selectFrom('skus as s')
             .innerJoin('products as p', 'p.id', 's.product_id')
+            .leftJoin('colors as c', 'c.id', 's.color_id')
+            .leftJoin('sizes as z', 'z.id', 's.size_id')
             .select([
               's.id as id',
               's.sku_code as sku_code',
               sql<string>`coalesce(nullif(s.sku_name, ''), p.product_name)`.as('product_name'),
+              'c.name as color_name',
+              'z.name as size_name',
               sql<boolean>`p.is_set or exists (select 1 from set_headers sh where sh.sku_id = s.id)`.as('is_set'),
             ])
             .where('s.sku_code', 'in', skuCodes)
@@ -584,7 +599,7 @@ export class AdjustmentsService {
       if (!reason) problems.push(`理由「${cell(r, 'reason')}」が在庫調整理由にありません（${reasons.map((x) => x.name).join('・')}）`);
       const sku = skus.find((s) => s.sku_code === cell(r, 'sku'));
       if (!sku) problems.push(`商品コード「${cell(r, 'sku')}」が商品マスタにありません`);
-      else if (sku.is_set) problems.push(`商品コード「${sku.sku_code}」はセット商品です。セットは在庫を持たないため、構成品で調整してください`);
+      else if (sku.is_set) problems.push(`商品コード「${sku.sku_code}」はセット商品です。セット商品は在庫を持たないため、構成品で調整してください`);
       const qty = parseQty(cell(r, 'qty'));
       if (!qty) problems.push(`増減「${cell(r, 'qty')}」は 0 以外の数で入れてください（減らすときは -3 のように負の数）`);
 
@@ -626,6 +641,8 @@ export class AdjustmentsService {
         row,
         sku_code: sku.sku_code,
         product_name: sku.product_name,
+        color_name: sku.color_name,
+        size_name: sku.size_name,
         qty,
         from_quality: fromQ ? (qualities.find((q) => q.code === fromQ)?.name ?? fromQ) : null,
         to_quality: toQ ? (qualities.find((q) => q.code === toQ)?.name ?? toQ) : null,

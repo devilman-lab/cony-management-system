@@ -9,6 +9,8 @@ import { Badge, Button, Card, CardHead, DataTable, ErrorBox, Input, Modal, Num, 
 import { useToast } from '@/components/ui/Toast';
 import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { L } from '@/components/masters/Form';
+import { MasterCsv } from '@/components/masters/MasterCsv';
+import { MasterGrid } from '@/components/masters/MasterGrid';
 
 const KINDS: { kind: string; label: string }[] = [
   { kind: 'brands', label: 'ブランド' },
@@ -101,6 +103,8 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
+      // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
+      rowLabel={(r) => `${label} ${r.code}　${r.name}`}
       empty={() => ({ code: '', name: '', sort_order: '', note: '', lead_time_days: '', allowed_weekdays: '', rule_body: '', instruction_body: '' })}
       toForm={(r) => ({ code: r.code, name: r.name, sort_order: s(r.sort_order), note: s(r.note), lead_time_days: s(r.lead_time_days), allowed_weekdays: s(r.allowed_weekdays), rule_body: s(r.rule_body), instruction_body: s(r.instruction_body) })}
       toBody={(f) => ({
@@ -147,7 +151,7 @@ interface CodeRow extends Record<string, unknown> {
  */
 interface FixedCodeTab { tab: string; category: string; title: string; sub: string; codeHint?: string }
 const FIXED_CODE_TABS: FixedCodeTab[] = [
-  { tab: '_currency', category: 'CURRENCY', title: '通貨', sub: '売上・仕入・入出金で選ぶ通貨です。コードは英大文字3文字（USD・CNY など）', codeHint: '英大文字3文字' },
+  { tab: '_currency', category: 'CURRENCY', title: '通貨', sub: '取引先マスタの「通貨」（受注・請求書・入金はその取引先の通貨になります）、仕入・経費、入出金で選ぶ通貨です。コードは英大文字3文字（USD・CNY など）', codeHint: '英大文字3文字' },
   { tab: '_expense', category: 'EXPENSE_DIVISION', title: '経費科目', sub: '仕入・経費の登録で選ぶ経費科目（勘定科目にあたるもの）です' },
 ];
 
@@ -161,6 +165,9 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
   // 「使わない」にした値も含めて取る（戻せるようにするため）。選択肢の API は有効な値だけを返す
   const values = useFetch<{ category: CodeCategory; values: CodeRow[] }>(current ? `/masters/codes/${current}/all` : null);
   const [showInactive, setShowInactive] = useState(false);
+  // 一覧で編集（2026-10-12 受入 No.2）。区分値・通貨・経費科目にも取引先などと同じ仕組みで付けた
+  const [gridMode, setGridMode] = useState(false);
+  const canGrid = can('M-16', 'update');
   const rows = (values.data?.values ?? []).filter((r) => showInactive || r.is_active);
   const setActive = async (r: CodeRow, active: boolean) => {
     if (!active && !(await confirm(`「${r.name}」を使わないにしますか`, '選択肢から外れます。登録済みの伝票はそのまま読めます。'))) return;
@@ -198,8 +205,45 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
   return (
     <div className="page-body">
       {element}
-      <PageHead title={fixed?.title ?? '区分値'} sub={fixed?.sub ?? '伝票で選ぶ区分（調整理由・品質区分・伝票発行区分など）。プログラムを直さずに選択肢を足せます'} right={can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => { setEditing(null); setF({ code: '', name: '', sort_order: '', note: '' }); setError(null); setOpen(true); }}>{fixed ? '新規登録' : '値を追加'}</Button>} />
+      <PageHead
+        title={fixed?.title ?? '区分値'}
+        sub={fixed?.sub ?? '伝票で選ぶ区分（調整理由・品質区分・伝票発行区分など）。プログラムを直さずに選択肢を足せます'}
+        right={
+          <>
+            {canGrid && (
+              <Button icon={gridMode ? 'list' : 'edit'} onClick={() => setGridMode((v) => !v)}>
+                {gridMode ? '通常の一覧に戻す' : '一覧で編集'}
+              </Button>
+            )}
+            {/* CSV は表示中のカテゴリーだけを書き出す。取込は「区分カテゴリー」の列でどのカテゴリーかを見分ける */}
+            {current && (
+              <MasterCsv
+                slug="codes"
+                functionId="M-16"
+                scope={current}
+                includeInactive={showInactive}
+                hint={`「区分カテゴリー」の列にはカテゴリーのコード（${current} など）を入れます。${current === 'CURRENCY' ? '通貨のコードは英大文字3文字です。' : ''}`}
+                onImported={() => values.reload()}
+              />
+            )}
+            {can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => { setEditing(null); setF({ code: '', name: '', sort_order: '', note: '' }); setError(null); setOpen(true); }}>{fixed ? '新規登録' : '値を追加'}</Button>}
+          </>
+        }
+      />
       <Card>
+        {gridMode && canGrid && current ? (
+          <>
+            {!fixed && (
+              <div className="px-3 pt-3">
+                <Select value={current} onChange={(e) => setCat(e.target.value)} className="!w-[280px]">
+                  {(cats.data ?? []).map((c) => <option key={c.code} value={c.code}>{c.name}（{c.code}）</option>)}
+                </Select>
+              </div>
+            )}
+            <MasterGrid key={current} slug="codes" scope={current} canEdit={canGrid} />
+          </>
+        ) : (
+        <>
         <Toolbar right={<label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />使わないものも表示</label>}>
           {!fixed && (
             <Select value={current} onChange={(e) => setCat(e.target.value)} className="!w-[280px]">
@@ -233,6 +277,8 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
           loading={values.loading}
           rowClassName={(r) => (r.is_active ? '' : 'opacity-50')}
         />
+        </>
+        )}
       </Card>
       <Modal open={open} title={editing ? `${fixed?.title ?? '区分値'}の編集` : `${fixed?.title ?? '区分値'}の追加`} onClose={() => setOpen(false)} width={480} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}

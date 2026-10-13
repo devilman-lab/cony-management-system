@@ -30,6 +30,8 @@ export interface PartnerListItem {
   is_supplier: boolean;
   /** 海外の取引先（2026-10-09 マスター編②）。一覧のバッジと、仕入入力で税区分の初期値を決めるのに使う。 */
   is_overseas: boolean;
+  /** 取引通貨（区分値 CURRENCY のコード）。受注入力で得意先を選んだときに受注の通貨として出す（2026-10-12 No.39）。 */
+  currency: string;
   closing_day: number | null;
   default_trade_type: string | null;
   /** 既定の販売担当。受注入力で取引先を選んだときに引き継ぐ。 */
@@ -105,6 +107,7 @@ export class PartnersService {
           'is_customer',
           'is_supplier',
           'is_overseas',
+          'currency',
           'closing_day',
           'default_trade_type',
           'sales_staff_id',

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
+import { currencyDigits } from '../common/currency';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
@@ -19,6 +20,8 @@ export interface CashReceiptInput {
   receipt_date: string;
   amount: string;
   invoice_id?: number | null;
+  /** 通貨。省略時は消込先の請求の通貨、請求を選ばなければ取引先の通貨（2026-10-12 No.39）。 */
+  currency?: string;
   applied_amount?: string | null;
   note?: string | null;
 }
@@ -29,6 +32,8 @@ export interface CashReceiptUpdateInput {
   amount?: string;
   /** null を入れると消込を外す。 */
   invoice_id?: number | null;
+  /** 通貨。消込先の請求と同じ通貨でないと消し込めない（2026-10-12 No.39）。 */
+  currency?: string;
   note?: string | null;
 }
 
@@ -72,6 +77,18 @@ function assertReceiptAmount(value: string): void {
   }
 }
 
+/**
+ * 入金と消込先の請求の通貨がそろっているか（2026-10-12 No.39）。
+ * 円の請求にドルの入金を消し込むと、売掛残高の数字に意味が無くなるため断る。
+ */
+function assertSameCurrency(receiptCurrency: string, invoiceCurrency: string, invoiceNo: string): void {
+  if (receiptCurrency !== invoiceCurrency) {
+    throw new BadRequestException(
+      `入金の通貨（${receiptCurrency}）と請求 ${invoiceNo} の通貨（${invoiceCurrency}）が違うため、消し込めません。通貨を合わせるか、消込先を選び直してください`,
+    );
+  }
+}
+
 /** 機能ID B-01 締め処理／B-02 請求書発行／B-04 売掛残高一覧／B-05 入金登録・消込 */
 /**
  * その請求の期間に入っている入金の合計。締めたあとに登録された分も含める。
@@ -82,6 +99,8 @@ const RECEIPT_IN_PERIOD = sql<string>`(
   select coalesce(sum(cr.amount), 0)
     from cash_receipts cr
    where cr.partner_id = i.partner_id
+     -- 請求と同じ通貨の入金だけ数える（円の請求にドルの入金を足さない。2026-10-12 No.39）
+     and cr.currency = i.currency
      and cr.receipt_date >= i.period_from
      and cr.receipt_date <= i.period_to
 )`;
@@ -108,7 +127,7 @@ export class BillingService {
 
     let partnerQuery = this.db
       .selectFrom('partners')
-      .select(['id', 'partner_code', 'name1', 'closing_day', 'is_overseas'])
+      .select(['id', 'partner_code', 'name1', 'closing_day', 'is_overseas', 'currency'])
       .where('is_customer', '=', true)
       .where('is_active', '=', true)
       .where('closing_day', 'is not', null);
@@ -126,7 +145,7 @@ export class BillingService {
     for (const partner of partners) {
       const period = closingPeriod(input.target_month, partner.closing_day ?? 99);
       const invoice = await this.db.transaction().execute((trx) =>
-        this.closeOne(trx, partner.id, period, roundingMode, userId, partner.is_overseas),
+        this.closeOne(trx, partner.id, period, roundingMode, userId, partner.is_overseas, partner.currency),
       );
       results.push({
         partner_code: partner.partner_code,
@@ -147,6 +166,7 @@ export class BillingService {
     roundingMode: string,
     userId: number,
     overseas = false,
+    partnerCurrency = 'JPY',
   ) {
     // 海外の得意先（取引先マスタの「海外」）は消費税を 0 にする（2026-10-09 マスター編②）。
     // 免税（税抜扱い）でも課税対象外でも税額は 0 で、違いは請求書の表記だけ（reports.service.ts）。
@@ -180,7 +200,7 @@ export class BillingService {
     const receipts = await trx
       .selectFrom('cash_receipts as c')
       .innerJoin('invoices as i', 'i.id', 'c.invoice_id')
-      .select('c.id as id')
+      .select(['c.id as id', 'c.currency as currency'])
       .where('i.partner_id', '=', partnerId)
       .where('i.period_to', '=', period.to)
       .execute();
@@ -198,6 +218,45 @@ export class BillingService {
 
     const invoiceNo = existing?.invoice_no ?? (await this.numbering.next(trx, 'invoice'));
 
+    // 請求の通貨（2026-10-12 No.39「売上仕入用の通貨」）。請求書は取引先の通貨で作る。
+    // まだ請求していない受注は取引先の通貨に従う決まり（引き金 trg_partners_currency）なので、
+    // 締め直しで外れた受注（未発行の請求を消した分・取り消した請求に載っていた分）も、ここで取引先の通貨にそろえる。
+    // 受注の通貨は引き金 trg_sales_orders_currency が取引先から入れ直す（currency = currency で起動する）。
+    await sql`
+      update sales_orders o
+         set currency = o.currency
+       where o.partner_id = ${partnerId}
+         and o.is_billable
+         and o.currency <> ${partnerCurrency}
+         and exists (select 1 from shipments sh
+                      where sh.sales_order_id = o.id and sh.status = '出荷済'
+                        and sh.ship_date >= ${period.from} and sh.ship_date <= ${period.to})
+         and not exists (select 1 from shipments sh
+                           join invoice_lines il on il.shipment_id = sh.id
+                           join invoices i on i.id = il.invoice_id
+                          where sh.sales_order_id = o.id and i.status <> '取消')`.execute(trx);
+
+    // 1つの請求に違う通貨を混ぜない。ほかの請求に載ったまま残っている受注があると、ここに来る。
+    const mixed = await trx
+      .selectFrom('sales_orders as o')
+      .innerJoin('shipments as sh', 'sh.sales_order_id', 'o.id')
+      .select('o.currency as currency')
+      .distinct()
+      .where('sh.status', '=', '出荷済')
+      .where('o.partner_id', '=', partnerId)
+      .where('o.is_billable', '=', true)
+      .where('o.currency', '<>', partnerCurrency)
+      .where('sh.ship_date', '>=', period.from)
+      .where('sh.ship_date', '<=', period.to)
+      .execute();
+    if (mixed.length > 0) {
+      throw new ConflictException(
+        `${period.from}〜${period.to} の出荷に、取引先の通貨（${partnerCurrency}）と違う通貨（${mixed.map((m) => m.currency).join('・')}）の受注があります。` +
+          '1つの請求書には1つの通貨しか載せられません。ほかの請求に載っている受注がないか、請求書の一覧で確かめてください',
+      );
+    }
+    const currency = partnerCurrency;
+
     // 前回の請求残高。初回は 0。
     // 取り消した請求の残高は引き継がない（取り消した金額を繰り越すと、繰越残高が実態と合わなくなる）。
     const prev = await trx
@@ -206,6 +265,8 @@ export class BillingService {
       .where('partner_id', '=', partnerId)
       .where('period_to', '<', period.from)
       .where('status', '<>', '取消')
+      // 前回の残高は同じ通貨の請求から引き継ぐ（通貨を切り替えた取引先で、円の残高をドルに足さない）
+      .where('currency', '=', currency)
       .orderBy('period_to', 'desc')
       .orderBy('id', 'desc')
       .limit(1)
@@ -220,6 +281,7 @@ export class BillingService {
         closing_date: period.to,
         period_from: period.from,
         period_to: period.to,
+        currency,
         prev_invoice_balance: prevBalance,
         status: '未発行',
         created_by: userId,
@@ -228,11 +290,22 @@ export class BillingService {
       .returning(['id', 'invoice_no'])
       .executeTakeFirstOrThrow();
 
-    if (relinkReceiptIds.length > 0) {
+    // 付け替えるのは新しい請求と同じ通貨の入金だけ（2026-10-12 No.39）。取引先の通貨を直して締め直したときに、
+    // 前の通貨の入金を違う通貨の請求へ消し込まないよう、通貨の違う入金は消込を外したまま（消込額も 0）にする。
+    const sameCurrency = receipts.filter((r) => r.currency === currency).map((r) => r.id);
+    const otherCurrency = receipts.filter((r) => r.currency !== currency).map((r) => r.id);
+    if (sameCurrency.length > 0) {
       await trx
         .updateTable('cash_receipts')
         .set({ invoice_id: invoice.id, updated_by: userId, updated_at: new Date() })
-        .where('id', 'in', relinkReceiptIds)
+        .where('id', 'in', sameCurrency)
+        .execute();
+    }
+    if (otherCurrency.length > 0) {
+      await trx
+        .updateTable('cash_receipts')
+        .set({ applied_amount: '0', updated_by: userId, updated_at: new Date() })
+        .where('id', 'in', otherCurrency)
         .execute();
     }
 
@@ -318,7 +391,8 @@ export class BillingService {
             sql<number>`${invoice.id}`.as('invoice_id'),
             'tax_rate',
             sql<string>`sum(amount)`.as('taxable_base'),
-            sql<string>`fn_round_amount(sum(amount) * tax_rate / 100, ${roundingMode})`.as('tax_amount'),
+            // 端数は通貨の最小単位で処理する（円は1円、外貨は小数2桁。2026-10-13 再テスト N3）
+            sql<string>`fn_round_amount(sum(amount) * tax_rate / 100, ${roundingMode}, ${currencyDigits(currency)}::int)`.as('tax_amount'),
           ])
           .where('invoice_id', '=', invoice.id)
           .groupBy('tax_rate'),
@@ -342,6 +416,8 @@ export class BillingService {
             case when t.fee_amount <> 0 then 0
                  else coalesce(o.shipping_fee_adjustment,
                         case when o.order_type = '直送' then 0
+                             -- 自動の送料（3万円未満で 750 円）は円の決まり。外貨の受注には付けず、要るときは送料調整欄に入れる
+                             when o.currency <> 'JPY' then 0
                              when fr.code in ('NO_CHARGE', 'DIRECT_ONLY') then 0
                              else fn_shipping_fee(o.partner_id, t.total) end) end), 0)
             from shipments sh
@@ -357,7 +433,7 @@ export class BillingService {
              and sh.ship_date >= ${period.from} and sh.ship_date <= ${period.to})`,
         shipment_amount: sql<string>`(select coalesce(sum(amount),0) from invoice_lines where invoice_id = ${invoice.id} and shipment_id is not null)`,
         return_amount: sql<string>`(select coalesce(-sum(amount),0) from invoice_lines where invoice_id = ${invoice.id} and return_id is not null)`,
-        current_receipt_amount: sql<string>`(select coalesce(sum(amount),0) from cash_receipts where partner_id = ${partnerId} and receipt_date >= ${period.from} and receipt_date <= ${period.to})`,
+        current_receipt_amount: sql<string>`(select coalesce(sum(amount),0) from cash_receipts where partner_id = ${partnerId} and currency = ${currency} and receipt_date >= ${period.from} and receipt_date <= ${period.to})`,
       })
       .where('id', '=', invoice.id)
       .execute();
@@ -409,7 +485,7 @@ export class BillingService {
 
     const totals = await trx
       .selectFrom('invoices')
-      .select(['id', 'invoice_no', 'shipment_amount', 'return_amount', 'shipping_fee_amount', 'current_invoice_amount', 'current_balance'])
+      .select(['id', 'invoice_no', 'currency', 'shipment_amount', 'return_amount', 'shipping_fee_amount', 'current_invoice_amount', 'current_balance'])
       .where('id', '=', invoice.id)
       .executeTakeFirstOrThrow();
 
@@ -529,6 +605,8 @@ export class BillingService {
           'i.status as status',
           'i.period_from as period_from',
           'i.period_to as period_to',
+          // 通貨（2026-10-12 No.39）。一覧・売掛残高の金額に添え、合計は通貨ごとに出す
+          'i.currency as currency',
           'p.partner_code as partner_code',
           'p.name1 as partner_name',
           // 売掛残高一覧の12項目。現行と同じ並び。
@@ -548,6 +626,11 @@ export class BillingService {
           'i.shipping_fee_amount as shipping_fee_amount',
           'i.current_invoice_amount as current_invoice_amount',
           sql<string>`i.prev_invoice_balance - ${RECEIPT_IN_PERIOD} + i.current_invoice_amount`.as('current_balance'),
+          // この請求に消し込んだ入金の合計と、その残り。入金消込の「消込先の請求」で、一部入金を続けて入れるときの目安
+          // （今回請求残高は締めた時点の値なので、消し込んでも変わらない。再テスト R1 N3）
+          sql<string>`coalesce((select sum(cr.applied_amount) from cash_receipts cr where cr.invoice_id = i.id), 0)`.as('applied_amount'),
+          sql<string>`i.prev_invoice_balance - ${RECEIPT_IN_PERIOD} + i.current_invoice_amount
+                      - coalesce((select sum(cr.applied_amount) from cash_receipts cr where cr.invoice_id = i.id), 0)`.as('unapplied_balance'),
         ])
         .orderBy('i.period_to', 'desc')
         .orderBy('p.partner_code', 'asc')
@@ -656,10 +739,12 @@ export class BillingService {
   async createCashReceipt(input: CashReceiptInput, userId: number) {
     assertReceiptAmount(input.amount);
 
+    // 通貨（2026-10-12 No.39）。指定が無ければ消込先の請求の通貨、請求も無ければ取引先の通貨。
+    let currency = input.currency;
     if (input.invoice_id) {
       const invoice = await this.db
         .selectFrom('invoices')
-        .select(['id', 'partner_id', 'invoice_no', 'status'])
+        .select(['id', 'partner_id', 'invoice_no', 'status', 'currency'])
         .where('id', '=', input.invoice_id)
         .executeTakeFirst();
       if (!invoice) throw new NotFoundException('消込先の請求が見つかりません');
@@ -672,6 +757,16 @@ export class BillingService {
           `${invoice.invoice_no} は取り消された請求です。締め直してできた請求を消込先に選んでください`,
         );
       }
+      currency ??= invoice.currency;
+      assertSameCurrency(currency, invoice.currency, invoice.invoice_no);
+    }
+    if (currency === undefined) {
+      const partner = await this.db
+        .selectFrom('partners')
+        .select('currency')
+        .where('id', '=', input.partner_id)
+        .executeTakeFirst();
+      currency = partner?.currency ?? 'JPY';
     }
 
     const applied = input.applied_amount ?? (input.invoice_id ? input.amount : '0');
@@ -685,13 +780,14 @@ export class BillingService {
         partner_id: input.partner_id,
         receipt_date: input.receipt_date,
         amount: input.amount,
+        currency,
         invoice_id: input.invoice_id ?? null,
         applied_amount: applied,
         note: input.note ?? null,
         created_by: userId,
         updated_by: userId,
       })
-      .returning(['id', 'amount', 'applied_amount'])
+      .returning(['id', 'amount', 'currency', 'applied_amount'])
       .executeTakeFirstOrThrow();
   }
 
@@ -714,7 +810,7 @@ export class BillingService {
     return this.db.transaction().execute(async (trx) => {
       const current = await trx
         .selectFrom('cash_receipts')
-        .select(['id', 'partner_id', 'amount', 'applied_amount', 'invoice_id', 'cash_transaction_id'])
+        .select(['id', 'partner_id', 'amount', 'currency', 'applied_amount', 'invoice_id', 'cash_transaction_id'])
         .where('id', '=', id)
         .forUpdate()
         .executeTakeFirst();
@@ -734,10 +830,20 @@ export class BillingService {
 
       // 消込先を付け替えるときは取引先の一致を確かめる（登録時と同じ確認）。
       // 他社の請求に消し込むと、どちらの売掛残高も合わなくなる。
+      const nextCurrency = (clean.currency as string | undefined) ?? current.currency;
+      // 登録済みの入金の通貨は、消込先を選んだついでには変えない（2026-10-13 再テスト N1）。
+      // 円 5,000 の入金をドルの請求に付け替えると同時に通貨を USD にすると、USD 5,000 として消し込まれ、
+      // 請求の残高がマイナスになっていた。通貨を直すのは消込を外した状態のときだけ（入力の誤りを直す用）。
+      if (nextCurrency !== current.currency && nextInvoiceId !== null) {
+        throw new BadRequestException(
+          `消し込んだまま入金の通貨は直せません（${current.currency} → ${nextCurrency}）。` +
+            '通貨が違う請求には消し込めないので、消込先を「消し込まない」にして通貨を直すか、入金を削除して入れ直してください',
+        );
+      }
       if (nextInvoiceId !== null && nextInvoiceId !== current.invoice_id) {
         const invoice = await trx
           .selectFrom('invoices')
-          .select(['id', 'partner_id', 'invoice_no', 'status'])
+          .select(['id', 'partner_id', 'invoice_no', 'status', 'currency'])
           .where('id', '=', nextInvoiceId)
           .executeTakeFirst();
         if (!invoice) throw new NotFoundException('消込先の請求が見つかりません');
@@ -750,6 +856,7 @@ export class BillingService {
             `${invoice.invoice_no} は取り消された請求です。締め直してできた請求を消込先に選んでください`,
           );
         }
+        assertSameCurrency(nextCurrency, invoice.currency, invoice.invoice_no);
       }
 
       // 消込額は画面から直接いただかないので、ここで辻褄を合わせる。
@@ -830,6 +937,7 @@ export class BillingService {
           'c.id as id',
           'c.receipt_date as receipt_date',
           'c.amount as amount',
+          'c.currency as currency',
           'c.applied_amount as applied_amount',
           sql<string>`c.amount - c.applied_amount`.as('unapplied_amount'),
           'c.partner_id as partner_id',

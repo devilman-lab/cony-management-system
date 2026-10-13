@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList, useWarehouses } from '@/lib/hooks';
-import { money, qty, today, ymd } from '@/lib/format';
+import { moneyCell, qty, today, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -18,6 +18,8 @@ interface ReturnRow extends Record<string, unknown> {
   return_date: string;
   return_amount: string;
   partner_name: string | null;
+  /** 取引先の通貨（2026-10-13 再テスト）。外貨の返品額は「USD 12.50」と出す */
+  currency?: string | null;
   warehouse_name: string;
 }
 
@@ -162,7 +164,7 @@ export default function ReturnsPage() {
             { key: 'return_type', label: '種類', width: 130 },
             { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? '' },
             { key: 'warehouse_name', label: '入庫倉庫', width: 110 },
-            { key: 'return_amount', label: '返品額', r: true, width: 100, render: (r) => money(r.return_amount) },
+            { key: 'return_amount', label: '返品額', r: true, width: 100, render: (r) => moneyCell(r.return_amount, r.currency) },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
             {
               key: '_act',

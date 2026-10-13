@@ -114,7 +114,9 @@ const RULES: Record<string, Rule> = {
   'POST masters/products/:id/deactivate': { table: 'products', action: 'update', idFrom: 'param' },
   'POST masters/skus': { table: 'skus', action: 'insert', idFrom: 'response' },
   'PATCH masters/skus/:id': { table: 'skus', action: 'update', idFrom: 'param' },
-  'POST masters/sets': { table: 'set_headers', action: 'insert', idFrom: 'none' },
+  // セットは POST が新規だけ、PUT が構成の入れ替え（2026-10-12 M-14。以前は POST が上書きも兼ねていた）
+  'POST masters/sets': { table: 'set_headers', action: 'insert', idFrom: 'response' },
+  'PUT masters/sets/:id': { table: 'set_headers', action: 'update', idFrom: 'param' },
   // 商品は SKU ごと、セットは構成ごと消える。何を消したかを残す（2026-10-09 マスター編②）
   'DELETE masters/products/:id': { table: 'products', action: 'delete', idFrom: 'param' },
   'DELETE masters/skus/:id': { table: 'skus', action: 'delete', idFrom: 'param' },

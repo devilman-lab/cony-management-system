@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList } from '@/lib/hooks';
-import { money, qty, thisMonth, ymd } from '@/lib/format';
+import { isYen, moneyIn, moneyWithCurrency, qty, thisMonth, ymd } from '@/lib/format';
 import { Badge, Button, Card, CardHead, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -18,6 +18,8 @@ interface InvoiceRow extends Record<string, unknown> {
   period_to: string;
   partner_code: string;
   partner_name: string;
+  /** 通貨（取引先の通貨。2026-10-12 No.39）。1つの請求は1つの通貨 */
+  currency: string;
   prev_invoice_balance: string;
   current_receipt_amount: string;
   carryover_balance: string;
@@ -182,13 +184,14 @@ export default function InvoicesPage() {
           columns={[
             // 1440・1280 のどちらでも状態まで操作の列の陰に入らない幅。期間・見出しは折り返す
             { key: 'invoice_no', label: '請求番号', width: 110, nowrap: true, render: (r) => <button type="button" className="num font-semibold text-[var(--color-brand-700)] underline" onClick={() => { setManual({}); setError(null); setDetailId(r.id); }}>{r.invoice_no}</button> },
-            { key: 'partner_name', label: '請求先' },
+            // 円以外の請求は通貨を添える（金額の欄は小数2桁になる。2026-10-12 No.39）
+            { key: 'partner_name', label: '請求先', render: (r) => <>{r.partner_name}{!isYen(r.currency) && <> <Badge>{r.currency}</Badge></>}</> },
             { key: 'period_from', label: '期間', width: 88, render: (r) => <Num>{ymd(r.period_from)}〜{ymd(r.period_to)}</Num> },
-            { key: 'shipment_amount', label: '出荷', r: true, width: 80, render: (r) => money(r.shipment_amount) },
-            { key: 'return_amount', label: '返品', r: true, width: 72, render: (r) => money(r.return_amount) },
-            { key: 'shipping_fee_amount', label: '送料', r: true, width: 66, render: (r) => money(r.shipping_fee_amount) },
-            { key: 'current_invoice_amount', label: '当月請求額', r: true, width: 82, render: (r) => <b>{money(r.current_invoice_amount)}</b> },
-            { key: 'current_balance', label: '今回請求残高', r: true, width: 82, render: (r) => money(r.current_balance) },
+            { key: 'shipment_amount', label: '出荷', r: true, width: 80, render: (r) => moneyIn(r.shipment_amount, r.currency) },
+            { key: 'return_amount', label: '返品', r: true, width: 72, render: (r) => moneyIn(r.return_amount, r.currency) },
+            { key: 'shipping_fee_amount', label: '送料', r: true, width: 66, render: (r) => moneyIn(r.shipping_fee_amount, r.currency) },
+            { key: 'current_invoice_amount', label: '当月請求額', r: true, width: 82, render: (r) => <b>{moneyIn(r.current_invoice_amount, r.currency)}</b> },
+            { key: 'current_balance', label: '今回請求残高', r: true, width: 82, render: (r) => moneyIn(r.current_balance, r.currency) },
             { key: 'status', label: '状態', width: 64, render: (r) => <Badge status={r.status} /> },
             {
               key: '_act', label: '', width: 112,
@@ -232,6 +235,7 @@ export default function InvoicesPage() {
               <Badge status={d.status} />
               <span>締め日 <Num>{ymd(d.closing_date)}</Num></span>
               <span>期間 <Num>{ymd(d.period_from)}〜{ymd(d.period_to)}</Num></span>
+              {!isYen(d.currency) && <span>通貨 <b className="num">{d.currency}</b>（金額はすべてこの通貨です）</span>}
             </div>
             <div className="detail-grid-2">
               <Card>
@@ -240,7 +244,7 @@ export default function InvoicesPage() {
                   {[
                     ['前回請求残高', d.prev_invoice_balance], ['今回入金額', d.current_receipt_amount], ['繰越残高', d.carryover_balance],
                     ['出荷', d.shipment_amount], ['返品額', d.return_amount],
-                  ].map(([k, v]) => <div key={k} className="form-row"><div className="form-row-label field-label px-3 flex items-center h-full">{k}</div><div className="px-3 text-right num">{money(v)}</div></div>)}
+                  ].map(([k, v]) => <div key={k} className="form-row"><div className="form-row-label field-label px-3 flex items-center h-full">{k}</div><div className="px-3 text-right num">{moneyIn(v, d.currency)}</div></div>)}
                   {MANUAL.map((m) => (
                     <div key={m.k} className="form-row">
                       <div className="form-row-label field-label px-3 flex items-center h-full">{m.label}</div>
@@ -248,13 +252,13 @@ export default function InvoicesPage() {
                         {d.status === '未発行' && can('B-02', 'update') ? (
                           <Input right value={manual[m.k] ?? String(d[m.k])} onChange={(e) => setManual((s) => ({ ...s, [m.k]: e.target.value }))} className="!h-[26px] !w-[120px]" />
                         ) : (
-                          <span className="num">{money(d[m.k] as string)}</span>
+                          <span className="num">{moneyIn(d[m.k] as string, d.currency)}</span>
                         )}
                       </div>
                     </div>
                   ))}
                   {[['当月請求額', d.current_invoice_amount], ['今回請求残高', d.current_balance]].map(([k, v]) => (
-                    <div key={k} className="form-row"><div className="form-row-label field-label px-3 flex items-center h-full font-bold">{k}</div><div className="px-3 text-right num font-bold text-[14px]">{money(v)}</div></div>
+                    <div key={k} className="form-row"><div className="form-row-label field-label px-3 flex items-center h-full font-bold">{k}</div><div className="px-3 text-right num font-bold text-[14px]">{moneyWithCurrency(v, d.currency)}</div></div>
                   ))}
                 </div>
               </Card>
@@ -263,7 +267,7 @@ export default function InvoicesPage() {
                 <table className="tbl">
                   <thead><tr><th>税率</th><th className="r">対象額（税抜）</th><th className="r">消費税</th></tr></thead>
                   <tbody>
-                    {d.tax_summaries.map((t) => <tr key={t.tax_rate}><td>{Number(t.tax_rate)}%</td><td className="r num">{money(t.taxable_base)}</td><td className="r num">{money(t.tax_amount)}</td></tr>)}
+                    {d.tax_summaries.map((t) => <tr key={t.tax_rate}><td>{Number(t.tax_rate)}%</td><td className="r num">{moneyIn(t.taxable_base, d.currency)}</td><td className="r num">{moneyIn(t.tax_amount, d.currency)}</td></tr>)}
                   </tbody>
                 </table>
                 <CardHead title="明細" />
@@ -271,7 +275,7 @@ export default function InvoicesPage() {
                   <table className="tbl">
                     <thead><tr><th style={{ width: 36 }}>行</th><th>内容</th><th className="r" style={{ width: 70 }}>数量</th><th className="r" style={{ width: 60 }}>税率</th><th className="r" style={{ width: 100 }}>金額</th></tr></thead>
                     <tbody>
-                      {d.lines.map((l) => <tr key={l.line_no}><td className="num">{l.line_no}</td><td className="truncate">{l.item_name}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{Number(l.tax_rate)}%</td><td className="r num">{money(l.amount)}</td></tr>)}
+                      {d.lines.map((l) => <tr key={l.line_no}><td className="num">{l.line_no}</td><td className="truncate">{l.item_name}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{Number(l.tax_rate)}%</td><td className="r num">{moneyIn(l.amount, d.currency)}</td></tr>)}
                     </tbody>
                   </table>
                 </div>

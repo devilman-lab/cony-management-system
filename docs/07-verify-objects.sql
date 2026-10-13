@@ -27,9 +27,10 @@ WITH expected(sort_key, category, item, actual, expect) AS (
            WHERE n.nspname = 'cony' AND t.typtype = 'd'), 3
   UNION ALL
   -- JAN の決まりを確かめる fn_check_sku_jan を足して 9（1001 ご要望）
+  -- 受注の通貨を取引先にそろえる fn_sales_order_currency・fn_partner_currency_follow を足して 11（2026-10-12 No.39）
   SELECT 130, '構造', '関数',
          (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-           WHERE n.nspname = 'cony'), 9
+           WHERE n.nspname = 'cony'), 11
   UNION ALL
   SELECT 140, '構造', '生成列（有効在庫・引当対象・ロイヤリティ適用優先度）',
          (SELECT count(*) FROM information_schema.columns
@@ -50,6 +51,13 @@ WITH expected(sort_key, category, item, actual, expect) AS (
          (SELECT count(*) FROM pg_trigger tg JOIN pg_class cl ON cl.oid = tg.tgrelid
             JOIN pg_namespace n ON n.oid = cl.relnamespace
            WHERE n.nspname = 'cony' AND tg.tgname LIKE '%immutable' AND NOT tg.tgisinternal), 2
+  UNION ALL
+  -- 受注の通貨は取引先の通貨で固定し、取引先の通貨を直したら未請求の受注もそろえる（2026-10-12 No.39）
+  SELECT 230, '整合性', '通貨のトリガ（受注・取引先）',
+         (SELECT count(*) FROM pg_trigger tg JOIN pg_class cl ON cl.oid = tg.tgrelid
+            JOIN pg_namespace n ON n.oid = cl.relnamespace
+           WHERE n.nspname = 'cony' AND tg.tgname IN ('trg_sales_orders_currency', 'trg_partners_currency')
+             AND NOT tg.tgisinternal), 2
 
   -- 3. 初期データ
   UNION ALL

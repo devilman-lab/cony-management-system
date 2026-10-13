@@ -115,6 +115,7 @@ export class ReceiptsService {
 
   async create(input: CreateReceiptInput, userId: number) {
     this.assertLines(input.lines);
+    await this.ledger.assertNoSetSkus(this.db, input.lines);
 
     return this.db.transaction().execute(async (trx) => {
       const receiptNo = await this.numbering.next(trx, 'receipt');
@@ -147,7 +148,10 @@ export class ReceiptsService {
    * 在庫が動いたかどうかは取消と同じく移動履歴で見る（状態の付け替え漏れがあっても守れるように）。
    */
   async update(id: number, input: UpdateReceiptInput, userId: number) {
-    if (input.lines) this.assertLines(input.lines);
+    if (input.lines) {
+      this.assertLines(input.lines);
+      await this.ledger.assertNoSetSkus(this.db, input.lines);
+    }
 
     return this.db.transaction().execute(async (trx) => {
       const receipt = await trx
@@ -195,6 +199,11 @@ export class ReceiptsService {
   /**
    * 入荷確定。ここで実在庫が増える。
    * 在庫表にまだ無い商品は、この時点で行が作られる（現行と同じ動き）。
+   *
+   * 入荷日（在庫編 Z-14）: 登録・編集の画面で入れた「入荷日」（planned_date）を、確定した入荷の
+   * 入荷日として残す。以前は確定した日で置き換わり、過去の日付で入れた入荷も確定日になっていた。
+   * 確定のときに日付を渡せば（確定のダイアログで直したとき）その日にする。どちらも無ければ今日。
+   * 入出荷履歴の日付もこの入荷日にする。まだ来ていない日（今日より後）では確定できない。
    */
   async receive(id: number, receivedDate: string | null, userId: number) {
     return this.db.transaction().execute(async (trx) => {
@@ -226,6 +235,21 @@ export class ReceiptsService {
           `${zeroLine.line_no}行目の数量が ${zeroLine.qty} です。この入荷は取り消して、数量を入れて登録し直してください`,
         );
       }
+      // セット商品を断る前に登録された入荷もある。確定すると見えない在庫ができるので、ここでも止める
+      await this.ledger.assertNoSetSkus(trx, lines);
+
+      // 入荷日。確定のときに渡された日 → 登録した入荷日 → 今日 の順に決める（Z-14）
+      const day = await trx
+        .selectNoFrom([
+          sql<string>`to_char(coalesce(${receivedDate}::date, ${receipt.planned_date}::date, (now() at time zone 'Asia/Tokyo')::date), 'YYYY-MM-DD')`.as('date'),
+          sql<boolean>`coalesce(${receivedDate}::date, ${receipt.planned_date}::date, (now() at time zone 'Asia/Tokyo')::date) > (now() at time zone 'Asia/Tokyo')::date`.as('future'),
+        ])
+        .executeTakeFirstOrThrow();
+      if (day.future) {
+        throw new BadRequestException(
+          `入荷日 ${day.date.replace(/-/g, '/')} はまだ先の日付です。届いた日を入荷日にして確定してください`,
+        );
+      }
 
       for (const line of lines) {
         const stockId = await this.ledger.findOrCreate(
@@ -233,7 +257,7 @@ export class ReceiptsService {
           { sku_id: line.sku_id, warehouse_id: receipt.warehouse_id, lot_no: line.lot_no, quality: 'GOOD' },
           userId,
         );
-        await this.ledger.apply(trx, stockId, line.qty, '入荷', { table: 'receipts', id }, userId);
+        await this.ledger.apply(trx, stockId, line.qty, '入荷', { table: 'receipts', id }, userId, day.date);
         // 入荷で入れた賞味期限を在庫表に写す（在庫表の列に賞味期限を出すため。2026-10-09 在庫編）。
         // ロットを分けない運用なので、いちばん新しく入荷した分の期限で上書きする
         if (line.expiry_date) {
@@ -245,14 +269,14 @@ export class ReceiptsService {
         .updateTable('receipts')
         .set({
           status: '入荷済',
-          received_date: receivedDate ?? sql<string>`current_date`,
+          received_date: day.date,
           updated_by: userId,
           updated_at: new Date(),
         })
         .where('id', '=', id)
         .execute();
 
-      return { id, receipt_no: receipt.receipt_no, status: '入荷済', lines: lines.length };
+      return { id, receipt_no: receipt.receipt_no, status: '入荷済', received_date: day.date, lines: lines.length };
     });
   }
 

@@ -51,4 +51,12 @@ export class SettingsService {
   shipmentNoSource(): Promise<string> {
     return this.text('SHIPMENT_NO_SOURCE', 'sales_order');
   }
+
+  /**
+   * 海外の得意先の消費税の表記（設定 OVERSEAS_TAX_TREATMENT）。税額はどちらも 0。
+   * 請求書・納品書・受注の画面で同じ言い方にそろえる（2026-10-12 受入テスト M-02）。
+   */
+  async overseasTaxLabel(): Promise<'免税（税抜扱い）' | '課税対象外'> {
+    return (await this.text('OVERSEAS_TAX_TREATMENT', 'exempt')) === 'non_taxable' ? '課税対象外' : '免税（税抜扱い）';
+  }
 }

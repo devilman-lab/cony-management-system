@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 8本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 9本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -137,6 +137,25 @@ SELECT '⑧ マスター編②・在庫編（海外・SKU商品名・入荷備�
          ELSE '一部'
        END,
        '2026-10-09_master2_stock_feedback.sql'
+UNION ALL
+SELECT '⑨ 売上側の通貨（取引先・受注・請求・入金・支払）・ロイヤリティ規定の編集前の版',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND column_name = 'currency'
+                  AND table_name IN ('partners', 'sales_orders', 'invoices', 'cash_receipts', 'cash_payments')) = 5
+          AND (SELECT count(*) FROM pg_trigger
+                WHERE tgrelid = 'cony.sales_orders'::regclass AND tgname = 'trg_sales_orders_currency') = 1
+          AND (SELECT count(*) FROM pg_trigger
+                WHERE tgrelid = 'cony.partners'::regclass AND tgname = 'trg_partners_currency') = 1
+          AND (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'royalty_rules' AND column_name = 'superseded_at') = 1
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'cony' AND table_name = 'partners' AND column_name = 'currency') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-12_sales_currency.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。

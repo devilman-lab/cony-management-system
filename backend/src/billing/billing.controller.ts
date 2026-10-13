@@ -45,6 +45,8 @@ const CashReceiptSchema = z.object({
   receipt_date: ymd,
   amount: receiptAmount,
   invoice_id: z.number().int().positive().nullish(),
+  /** 通貨（2026-10-12 No.39）。省略時は消込先の請求の通貨、請求を選ばなければ取引先の通貨。 */
+  currency: z.string().regex(/^[A-Z]{3}$/, '通貨は英大文字3文字のコードで選んでください（例 JPY・USD）').optional(),
   // 消込額は「入金のうち今回この請求に充てた分」なので 0 があり得る。
   applied_amount: positive.nullish(),
   note: z.string().nullish(),
@@ -60,6 +62,8 @@ const CashReceiptUpdateSchema = z.object({
   receipt_date: ymd.optional(),
   amount: receiptAmount.optional(),
   invoice_id: z.number().int().positive().nullish(),
+  /** 通貨（2026-10-12 No.39）。消込先の請求と同じ通貨でないと消し込めない。 */
+  currency: z.string().regex(/^[A-Z]{3}$/, '通貨は英大文字3文字のコードで選んでください（例 JPY・USD）').optional(),
   note: z.string().nullish(),
 });
 type CashReceiptUpdateBody = z.infer<typeof CashReceiptUpdateSchema>;

@@ -7,7 +7,7 @@ import { Suspense, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useList } from '@/lib/hooks';
-import { money, ymd } from '@/lib/format';
+import { moneyCell, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 
@@ -24,6 +24,8 @@ interface OrderRow extends Record<string, unknown> {
   sales_category_name: string;
   staff_name: string | null;
   total_amount: string;
+  /** 通貨（取引先の通貨で固定。2026-10-12 No.39）。円以外は「USD 12.50」と出す */
+  currency: string;
   is_cancelled: boolean;
   shipment_id: number | null;
 }
@@ -132,7 +134,7 @@ function OrdersList() {
             { key: 'delivery_name', label: '納品先', render: (r) => r.delivery_name ?? '（直送）' },
             { key: 'sales_category_name', label: '販売カテゴリー', width: 76 },
             { key: 'staff_name', label: '販売担当', width: 72, render: (r) => r.staff_name ?? '' },
-            { key: 'total_amount', label: '金額', r: true, width: 86, render: (r) => money(r.total_amount) },
+            { key: 'total_amount', label: '金額', r: true, width: 86, render: (r) => moneyCell(r.total_amount, r.currency) },
             { key: 'ship_date', label: '出荷日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
             { key: 'status', label: '状態', width: 82, render: (r) => <Badge status={r.status} /> },
             {

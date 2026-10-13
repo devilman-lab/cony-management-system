@@ -674,9 +674,9 @@ $cash = PostJson "$B/cash-transactions" @{
   overseas_usd='30000'; overseas_cny='15000'; cash_amount='2000'
 }
 Check '入出金番号が採番される（8桁）' { $cash.cash_transaction_no -match '^\d{8}$' }
-Check '手形・相殺・小切手・集金・海外送金の合計が出る' {
-  # 100000+50000+20000+10000+5000+30000+15000+2000 = 232,000
-  [decimal]$cash.amount -eq 232000
+Check '手形・相殺・小切手・集金の合計が出る（海外送金$・CNY は外貨の額なので円の合計に足さない）' {
+  # 100000+50000+20000+10000+5000+2000 = 187,000（2026-10-13 再テスト: 以前は USD 30,000・CNY 15,000 も足して 232,000 にしていた）
+  [decimal]$cash.amount -eq 187000
 }
 Check '入出金一覧に内訳が並ぶ' {
   $list = Invoke-RestMethod "$B/cash-transactions?target_month=$month" -Headers $H
@@ -993,9 +993,15 @@ Check 'セット構成を照会できる' {
   $d = Invoke-RestMethod "$B/masters/sets/$($newSet.id)" -Headers $H
   @($d.components).Count -eq 2
 }
-Check 'セット構成は登録し直すと入れ替わる' {
-  $again = PostJson "$B/masters/sets" @{ sku_id=$setSku2.id; components=@(@{ component_sku_id=$newSku1.id; qty='5' }) }
-  $d = Invoke-RestMethod "$B/masters/sets/$($again.id)" -Headers $H
+# 2026-10-12（M-14）: 登録（POST）は新規だけ。登録済みのセット SKU に送ると 409 で断り、構成の入れ替えは編集（PUT）で行う
+Check '登録済みのセット SKU にもう一度登録すると409（黙って上書きしない）' {
+  try { PostJson "$B/masters/sets" @{ sku_id=$setSku2.id; components=@(@{ component_sku_id=$newSku1.id; qty='5' }) } | Out-Null; $false }
+  catch { $_.Exception.Response.StatusCode.value__ -eq 409 }
+}
+Check 'セット構成は編集で入れ替わる' {
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes((@{ components=@(@{ component_sku_id=$newSku1.id; qty='5' }) } | ConvertTo-Json -Depth 6))
+  Invoke-RestMethod "$B/masters/sets/$($newSet.id)" -Method Put -Headers $H -ContentType 'application/json; charset=utf-8' -Body $bytes | Out-Null
+  $d = Invoke-RestMethod "$B/masters/sets/$($newSet.id)" -Headers $H
   @($d.components).Count -eq 1 -and [decimal]$d.components[0].qty -eq 5
 }
 
@@ -1052,6 +1058,12 @@ $rule = PostJson "$B/masters/royalty-rules" @{
 }
 Check 'ロイヤリティ規定を登録できる' { [decimal]$rule.rate -eq 0.03 }
 Check '優先度が自動で計算される（ブランド指定=1）' { [int]$rule.scope_priority -eq 1 }
+# 販売先は規定の媒体の販売先でないと登録できない（2026-10-12 No.37）。先に取引先の媒体をそろえる
+Check '媒体の違う販売先を指定すると 400' {
+  (StatusOf { PostJson "$B/masters/royalty-rules" @{ payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id
+    customer_partner_id=$newPartner.id; is_excluded=$true; calc_base='出荷'; valid_from="$month-01" } }) -eq 400
+}
+PatchJson "$B/masters/partners/$($newPartner.id)" @{ media_id=$mediaForRule.id } | Out-Null
 $excl = PostJson "$B/masters/royalty-rules" @{
   payee_partner_id=$payee.id; media_id=$mediaForRule.id; brand_id=$brandForRule.id; customer_partner_id=$newPartner.id
   is_excluded=$true; calc_base='出荷'; valid_from="$month-01"
@@ -1745,6 +1757,20 @@ Write-Host '--- 在庫表・入荷登録・在庫調整' -ForegroundColor DarkCy
 RunVerify 'verify-fb1009-stock.mjs'
 Write-Host '--- 引当在庫（確保の見出し＋明細）' -ForegroundColor DarkCyan
 RunVerify 'verify-fb1009-reservations.mjs'
+
+Write-Host '=== 33. 全面受入テスト（2026-10-12）で一部合格だった件の回帰確認 ===' -ForegroundColor Cyan
+Write-Host '--- 一覧で編集・CSV（複数カテゴリー、範囲外の値、権限、下見と確定、先頭0）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-a.mjs'
+Write-Host '--- 商品・セット（JAN の左6桁と品番の付け替え、セットの上書き防止）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-b.mjs'
+Write-Host '--- ロイヤリティ（計算の基準、販売実績との一致、媒体違いの販売先、編集前の版）・得意先別商品・仕入品目の税' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-c.mjs'
+Write-Host '--- 帳票の折り返し・海外の得意先の税・販社CSVの取引条件・作業指示の印字' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-d.mjs'
+Write-Host '--- 在庫（閲覧者の入出荷履歴、入荷日、セット商品の入荷・調整、セットの確保の段）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-e.mjs'
+Write-Host '--- 売上側の通貨（取引先・受注・請求・入金・仕入）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1012-f.mjs'
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

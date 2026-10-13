@@ -23,7 +23,7 @@ interface CalcRow extends Record<string, unknown> {
 
 interface CalcDetail extends CalcRow {
   by_customer: { customer_name: string | null; qty: string; base_amount: string; royalty_amount: string }[];
-  lines: { customer_name: string | null; brand_name: string | null; sku_code: string; product_name: string; qty: string; base_amount: string; rate: string | null; royalty_amount: string }[];
+  lines: { calc_base: string | null; customer_name: string | null; brand_name: string | null; sku_code: string; product_name: string; qty: string; base_amount: string; rate: string | null; royalty_amount: string }[];
 }
 
 /** ロイヤリティ計算（Y-02）。規定は「ロイヤリティ規定」マスタで。 */
@@ -38,7 +38,7 @@ export default function RoyaltyPage() {
   const detail = useFetch<CalcDetail>(detailId ? `/billing/royalties/${detailId}` : null);
 
   const calculate = async () => {
-    if (!(await confirm(`${month} のロイヤリティを計算しますか`, '出荷済みの明細に規定を当てて、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
+    if (!(await confirm(`${month} のロイヤリティを計算しますか`, '規定の「計算の基準」に合わせて、この月の出荷・締めた請求・入金に規定を当て、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
     setBusy(true);
     try {
       const r = await api.post<{ calculations?: unknown[]; skipped_confirmed?: string[] } | unknown[]>('/billing/royalties/calculate', { target_month: month });
@@ -75,7 +75,7 @@ export default function RoyaltyPage() {
       {element}
       <PageHead
         title="ロイヤリティ計算"
-        sub="出荷金額（販売先への卸金額）に規定の料率をかけて、支払先ごとに月次の計算表を作ります。返品はマイナスで反映、端数は切り捨てです"
+        sub="販売先への卸金額に規定の料率をかけて、支払先ごとに月次の計算表を作ります。どの月に数えるかは規定の「計算の基準」で決まります（出荷＝出荷した月、売上＝締めて請求した月、入金＝入金（消込）された月に入金の割合で）。返品はマイナスで反映、端数は切り捨てです"
         right={
           <>
             <Link href="/masters/royalty-rules" className="btn btn-ghost">規定を確認する</Link>
@@ -92,6 +92,7 @@ export default function RoyaltyPage() {
           columns={[
             { key: 'payee_name', label: '支払先', render: (r) => <button type="button" className="font-semibold text-[var(--color-brand-700)] underline" onClick={() => setDetailId(r.id)}>{r.payee_name}</button> },
             { key: 'target_month', label: '対象月', width: 100, render: (r) => <Num>{r.target_month.slice(0, 7)}</Num> },
+            { key: 'calc_base', label: '基準', width: 90 },
             { key: 'total_base_amount', label: '対象金額（卸）', r: true, width: 140, render: (r) => money(r.total_base_amount) },
             { key: 'total_amount', label: 'ロイヤリティ', r: true, width: 130, render: (r) => <b>{money(r.total_amount)}</b> },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
@@ -122,12 +123,14 @@ export default function RoyaltyPage() {
               <CardHead title="明細" />
               <div className="max-h-[320px] overflow-auto">
                 <table className="tbl">
-                  <thead><tr><th>販売先</th><th>ブランド</th><th>SKU</th><th>商品</th><th className="r">数量</th><th className="r">対象金額</th><th className="r">料率</th><th className="r">ロイヤリティ</th></tr></thead>
-                  <tbody>{detail.data.lines.map((l, i) => <tr key={i}><td>{l.customer_name ?? ''}</td><td>{l.brand_name ?? ''}</td><td className="num">{l.sku_code}</td><td className="truncate">{l.product_name}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{money(l.base_amount)}</td><td className="r num">{l.rate ? `${(Number(l.rate) * 100).toFixed(2)}%` : '定額'}</td><td className="r num">{money(l.royalty_amount)}</td></tr>)}</tbody>
+                  <thead><tr><th>販売先</th><th>ブランド</th><th>SKU</th><th>商品</th><th style={{ width: 48 }}>基準</th><th className="r">数量</th><th className="r">対象金額</th><th className="r">料率</th><th className="r">ロイヤリティ</th></tr></thead>
+                  <tbody>{detail.data.lines.map((l, i) => <tr key={i}><td>{l.customer_name ?? ''}</td><td>{l.brand_name ?? ''}</td><td className="num">{l.sku_code}</td><td className="truncate">{l.product_name}</td><td>{l.calc_base ?? ''}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{money(l.base_amount)}</td><td className="r num">{l.rate ? `${(Number(l.rate) * 100).toFixed(2)}%` : '定額'}</td><td className="r num">{money(l.royalty_amount)}</td></tr>)}</tbody>
                 </table>
               </div>
             </Card>
-            <div className="text-[11px] text-[var(--color-ink-3)]">{ymd(detail.data.target_month)} 〜 月末の出荷が対象です。</div>
+            <div className="text-[11px] text-[var(--color-ink-3)]">
+              計算の基準「{detail.data.calc_base}」。{ymd(detail.data.target_month)} 〜 月末に、出荷は出荷したもの、売上はこの月に締めた請求に載ったもの、入金はこの月の入金（消込）を請求の明細の金額で按分したものが対象です。
+            </div>
           </div>
         )}
       </Modal>

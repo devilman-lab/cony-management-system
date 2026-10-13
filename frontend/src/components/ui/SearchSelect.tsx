@@ -519,12 +519,13 @@ export const skuItemName = (s: Pick<SkuRow, 'product_name' | 'sku_name' | 'item_
  * isSet を渡すと、セット商品（商品マスタで「セット商品」にしたもの）の SKU だけ／以外だけに絞る。
  */
 export const fetchSkusFor =
-  (partnerId?: number | null, opts?: { isSet?: boolean }) =>
+  (partnerId?: number | null, opts?: { isSet?: boolean; withoutSet?: boolean }) =>
   async (q: string): Promise<Option[]> => {
     const rows = await api.get<SkuRow[]>('/masters/skus', {
       q: q || undefined,
       partner_id: partnerId ?? undefined,
       is_set: opts?.isSet === undefined ? undefined : String(opts.isSet),
+      without_set: opts?.withoutSet ? 'true' : undefined,
       limit: 20,
     });
     return rows.map((s) => ({
@@ -546,8 +547,10 @@ export const fetchSkus = fetchSkusFor();
 /**
  * セット登録のセット SKU の欄用。商品マスタで「セット商品」にした商品の SKU だけを出す
  * （2026-10-09 マスター編②「商品マスタでセット登録したものだけ表示するようにしてほしい」）。
+ * すでにセット登録がある SKU は出さない。新規・コピーで選ぶと既存のセットの構成を上書きしてしまうため
+ * （M-14。直すときは一覧の「編集」から）。
  */
-export const fetchSetSkus = fetchSkusFor(null, { isSet: true });
+export const fetchSetSkus = fetchSkusFor(null, { isSet: true, withoutSet: true });
 
 export interface WorkInstructionRow {
   id: number;

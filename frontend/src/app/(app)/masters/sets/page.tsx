@@ -10,6 +10,7 @@ import { Badge, Button, Card, DataTable, ErrorBox, Input, Modal, Num, PageHead, 
 import { SearchSelect, fetchSetSkus, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 import { L, Section } from '@/components/masters/Form';
+import { MasterCsv } from '@/components/masters/MasterCsv';
 
 interface SetRow extends Record<string, unknown> {
   id: number;
@@ -45,6 +46,15 @@ const skuLabel = (c: { sku_code: string | null; product_name: string | null; col
   `${c.sku_code ?? ''}　${c.product_name ?? ''}${c.color_name ? ' ' + c.color_name : ''}${c.size_name ? ' ' + c.size_name : ''}`;
 /** 一覧の欄は折り返して全部見せる（2026-10-09 マスター編②「見切れているので全部出るように」） */
 const Wrap = ({ children }: { children: ReactNode }) => <span className="whitespace-normal break-words">{children}</span>;
+/**
+ * 選んだ SKU の全文（SKU　商品名 カラー サイズ）を欄の下に折り返して出す（No.23・M-16）。
+ * 選択欄は1行で、長い名前だと末尾のサイズが「…」で隠れていた。短い名前は欄の中で読めるので出さない。
+ */
+const LONG_LABEL = 30;
+const FullLabel = ({ o }: { o: Option | null }) =>
+  o && o.label.length > LONG_LABEL ? (
+    <div className="mt-0.5 text-[11.5px] leading-[1.4] text-[var(--color-ink-2)] whitespace-normal break-all">{o.label}</div>
+  ) : null;
 
 /** セット登録（M-10）。セット SKU と、その構成品（内訳）。出荷時は構成品の在庫から引く。 */
 export default function SetsPage() {
@@ -133,16 +143,21 @@ export default function SetsPage() {
       setListError(e);
     }
   };
+  /**
+   * 保存。編集は構成の入れ替え（PUT）、新規・コピーは新しく作るだけ（POST）。
+   * 新規・コピーで登録済みのセット SKU を送ると、サーバーが 409 で断る（M-14。以前は黙って上書きしていた）。
+   */
   const save = async () => {
     setError(null);
     setBusy(true);
     try {
-      await api.post('/masters/sets', {
-        sku_id: setSku?.id,
+      const body = {
         components: lines.filter((l) => l.sku).map((l, i) => ({ component_sku_id: l.sku!.id, qty: l.qty, sort_order: i + 1 })),
         note: note || null,
-      });
-      toast('セットを登録しました', 'good');
+      };
+      if (editingId) await api.put(`/masters/sets/${editingId}`, body);
+      else await api.post('/masters/sets', { sku_id: setSku?.id, ...body });
+      toast(editingId ? 'セットを更新しました' : 'セットを登録しました', 'good');
       setOpen(false);
       await list.reload();
     } catch (e) {
@@ -155,7 +170,7 @@ export default function SetsPage() {
   return (
     <div className="page-body">
       {element}
-      <PageHead title="セット登録" sub="セット商品の SKU と、その内訳（構成品と数量）。出荷すると構成品の在庫が減ります。登録し直すと内訳は入れ替わります" right={can('M-10', 'create') && <Button variant="primary" icon="plus" onClick={openNew}>新規登録</Button>} />
+      <PageHead title="セット登録" sub="セット商品の SKU と、その内訳（構成品と数量）。出荷すると構成品の在庫が減ります。内訳を直すときは一覧の「編集」から" right={<>{/* CSV 書き出しだけ（構成品ごとに1行。2026-10-12 受入 No.3） */}<MasterCsv slug="sets" functionId="M-10" exportOnly includeInactive />{can('M-10', 'create') && <Button variant="primary" icon="plus" onClick={openNew}>新規登録</Button>}</>} />
       <Card>
         <Toolbar><Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU・商品名で検索" className="!w-[240px]" /></Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
@@ -190,11 +205,22 @@ export default function SetsPage() {
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
 
-      <Modal open={open} title={editingId ? 'セットの編集' : 'セットの登録'} onClose={() => setOpen(false)} width={680} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!setSku || !lines.some((l) => l.sku)} onClick={save}>登録する</Button></>}>
+      {/* 長い構成品の名前（41字程度）でもサイズまで読めるよう広げる（No.23・M-16。以前は 680px） */}
+      <Modal open={open} title={editingId ? 'セットの編集' : 'セットの登録'} onClose={() => setOpen(false)} width={900} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!setSku || !lines.some((l) => l.sku)} onClick={save}>{editingId ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
-        {/* 候補は商品マスタで「セット商品」にした商品の SKU だけ（2026-10-09 マスター編②） */}
-        <L label="セット SKU" required hint="商品マスタで「セット商品」にした商品の SKU から選びます">
-          <SearchSelect value={setSku} onChange={setSetSku} fetchOptions={fetchSetSkus} placeholder="セット商品の SKU を検索" width="100%" disabled={!!editingId} />
+        {/*
+          候補は商品マスタで「セット商品」にした商品の SKU のうち、まだセット登録が無いものだけ（2026-10-09 マスター編②・M-14）。
+          編集ではセット SKU を変えられない
+        */}
+        <L
+          label="セット SKU"
+          required
+          hint={editingId ? 'セット SKU は変えられません。構成品と数量を直して「更新する」' : '商品マスタで「セット商品」にした商品の SKU から選びます。セット登録済みの SKU は出ません（直すときは一覧の「編集」から）'}
+        >
+          <div className="w-full">
+            <SearchSelect value={setSku} onChange={setSetSku} fetchOptions={fetchSetSkus} placeholder="セット商品の SKU を検索" width="100%" disabled={!!editingId} />
+            <FullLabel o={setSku} />
+          </div>
         </L>
         <div className="mt-3"><Section title="構成品" /></div>
         <table className="tbl mt-2">
@@ -202,7 +228,10 @@ export default function SetsPage() {
           <tbody>
             {lines.map((l, i) => (
               <tr key={i}>
-                <td><SearchSelect value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchSkus} placeholder="SKU・JAN・商品名" width="100%" /></td>
+                <td>
+                  <SearchSelect value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchSkus} placeholder="SKU・JAN・商品名" width="100%" />
+                  <FullLabel o={l.sku} />
+                </td>
                 <td><Input right value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} /></td>
                 <td className="c"><Button size="sm" variant="quiet" onClick={() => setLines(lines.filter((_, j) => j !== i))}>×</Button></td>
               </tr>

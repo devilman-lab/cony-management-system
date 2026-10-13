@@ -336,6 +336,9 @@ CREATE TABLE partners (
   -- 海外の取引先。消費税を免税（税抜扱い）または課税対象外として扱う（2026-10-09 マスター編②）。
   -- どちらで扱うかはシステム設定 OVERSEAS_TAX_TREATMENT で決める
   is_overseas                 BOOLEAN NOT NULL DEFAULT false,
+  -- 取引通貨。区分値 CURRENCY のコード（JPY・USD など）。受注・請求・入金はこの通貨で作る
+  -- （2026-10-12 No.39「売上仕入用の通貨」）。海外の取引先で使う想定
+  currency                    VARCHAR(3) NOT NULL DEFAULT 'JPY',
   -- ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。
   -- 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。
   closing_day                 SMALLINT,                      -- 締め日（99＝月末）
@@ -827,6 +830,8 @@ CREATE TABLE sales_orders (
   sales_category_id       BIGINT      NOT NULL REFERENCES sales_categories(id),
   trade_type              VARCHAR(10) NOT NULL DEFAULT '買取',
   sales_staff_id          BIGINT REFERENCES sales_staff(id),  -- 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）
+  -- 通貨。取引先の通貨で固定（引き金 trg_sales_orders_currency が入れる。2026-10-12 No.39）
+  currency                VARCHAR(3)  NOT NULL DEFAULT 'JPY',
   po_no                   VARCHAR(40),                        -- 先方の発注番号
   po_line_no              INTEGER,                            -- 先方の発注行番号（販社CSVに含まれる）
   order_date              DATE        NOT NULL,                -- 受注日（システム内部。締め・実績に使う）
@@ -1032,6 +1037,8 @@ CREATE TABLE invoices (
   closing_date           DATE        NOT NULL,
   period_from            DATE        NOT NULL,   -- 取引先別締め期間
   period_to              DATE        NOT NULL,
+  -- 通貨。締めた受注の通貨（＝取引先の通貨）。1つの請求に違う通貨は混ぜない（2026-10-12 No.39）
+  currency               VARCHAR(3)  NOT NULL DEFAULT 'JPY',
   prev_invoice_balance   money_amt NOT NULL DEFAULT 0,  -- 前回請求残高
   current_receipt_amount money_amt NOT NULL DEFAULT 0,  -- 今回入金額
   carryover_balance      money_amt NOT NULL DEFAULT 0,  -- 繰越残高
@@ -1060,6 +1067,45 @@ CREATE INDEX ix_invoices_partner ON invoices (partner_id, period_to DESC);
 -- 索引名は元の UNIQUE 制約と同じにしてある。重複したときの日本語の案内が名前で引かれているため。
 CREATE UNIQUE INDEX invoices_partner_id_period_to_key
   ON invoices (partner_id, period_to) WHERE status <> '取消';
+
+-- 受注の通貨は取引先の通貨で固定する（2026-10-12 No.39「売上仕入用の通貨」）。
+-- 受注入力・販社CSV・通販・Amazon など、どの経路で作った受注も同じ決まりになるよう引き金で入れる。
+-- 通貨を直接書き換えようとしても、取引先の通貨に戻る。
+CREATE OR REPLACE FUNCTION fn_sales_order_currency() RETURNS trigger AS $$
+BEGIN
+  SELECT p.currency INTO NEW.currency FROM cony.partners p WHERE p.id = NEW.partner_id;
+  NEW.currency := COALESCE(NEW.currency, 'JPY');
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_sales_orders_currency
+  BEFORE INSERT OR UPDATE OF partner_id, currency ON sales_orders
+  FOR EACH ROW EXECUTE FUNCTION fn_sales_order_currency();
+
+-- 取引先の通貨を直したら、まだ請求していない受注もその通貨にそろえる
+-- （登録の誤りを直したときに、締めで通貨が混ざって止まらないように）。
+-- 取消でない請求に載った受注は、送った請求書と食い違わないよう元の通貨のまま残す。
+CREATE OR REPLACE FUNCTION fn_partner_currency_follow() RETURNS trigger AS $$
+BEGIN
+  IF NEW.currency IS DISTINCT FROM OLD.currency THEN
+    UPDATE cony.sales_orders o
+       SET currency = NEW.currency
+     WHERE o.partner_id = NEW.id
+       AND o.currency <> NEW.currency
+       AND NOT EXISTS (
+             SELECT 1
+               FROM cony.shipments sh
+               JOIN cony.invoice_lines il ON il.shipment_id = sh.id
+               JOIN cony.invoices i ON i.id = il.invoice_id
+              WHERE sh.sales_order_id = o.id
+                AND i.status <> '取消');
+  END IF;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_partners_currency
+  AFTER UPDATE OF currency ON partners
+  FOR EACH ROW EXECUTE FUNCTION fn_partner_currency_follow();
 -- TODO(Q10) 未計上10%/8%、調整10%/8%、手数料の定義。暫定は手入力可
 
 -- (45) invoice_lines 請求明細
@@ -1113,6 +1159,8 @@ CREATE TABLE cash_receipts (
   partner_id          BIGINT NOT NULL REFERENCES partners(id),
   receipt_date        DATE   NOT NULL,
   amount              money_amt NOT NULL,
+  -- 通貨。消込先の請求と同じ通貨でないと消し込めない（2026-10-12 No.39）
+  currency            VARCHAR(3) NOT NULL DEFAULT 'JPY',
   invoice_id          BIGINT REFERENCES invoices(id),
   applied_amount      money_amt NOT NULL DEFAULT 0,
   cash_transaction_id BIGINT,   -- FK は cash_transactions 作成後に付与
@@ -1220,6 +1268,8 @@ CREATE TABLE cash_payments (
   partner_id          BIGINT NOT NULL REFERENCES partners(id),
   payment_date        DATE   NOT NULL,
   amount              money_amt NOT NULL,
+  -- 通貨。消込先の仕入と同じ通貨でないと消し込めない（2026-10-13 再テスト N5）
+  currency            VARCHAR(3) NOT NULL DEFAULT 'JPY',
   purchase_id         BIGINT REFERENCES purchases(id),
   applied_amount      money_amt NOT NULL DEFAULT 0,
   cash_transaction_id BIGINT,   -- FK は cash_transactions 作成後に付与
@@ -1303,6 +1353,9 @@ CREATE TABLE royalty_rules (
   -- 「媒体内の20社のうち2社だけ対象外」を 1行＋2行 で持ちつつ、画面には1件として見せるため。
   -- まとまりの鍵は COALESCE(rule_group_id, id)。代表行を消すと配下も一緒に消える。
   rule_group_id BIGINT REFERENCES royalty_rules(id) ON DELETE CASCADE,
+  -- 「編集前の版」になった日時。計算に使った行を、販売先の指定を変える編集で外したときに入る。
+  -- 月次計算の明細がこの行を指しているので消さずに残し、一覧には別の規定として出さない（2026-10-12 No.37）。
+  superseded_at TIMESTAMPTZ,
   is_active    BOOLEAN NOT NULL DEFAULT true,
   sort_order   INTEGER,
   note         TEXT,

@@ -14,6 +14,9 @@ interface OrderDetail {
   partner_id: number;
   partner_code: string;
   partner_name: string;
+  partner_is_overseas?: boolean;
+  /** 受注の通貨（取引先の通貨で固定。2026-10-12 No.39） */
+  currency?: string;
   delivery_destination_id: number | null;
   sales_category_id: number;
   trade_type: '委託' | '買取';
@@ -60,7 +63,7 @@ export default function EditOrderPage() {
         setDraft({
           ...base,
           order_type: o.order_type,
-          partner: { id: o.partner_id, label: o.partner_name, sub: o.partner_code, raw: { id: o.partner_id } },
+          partner: { id: o.partner_id, label: o.partner_name, sub: o.partner_code, raw: { id: o.partner_id, is_overseas: o.partner_is_overseas ?? false, currency: o.currency ?? 'JPY' } },
           delivery_destination_id: o.delivery_destination_id ? String(o.delivery_destination_id) : '',
           sales_category_id: String(o.sales_category_id),
           trade_type: o.trade_type,

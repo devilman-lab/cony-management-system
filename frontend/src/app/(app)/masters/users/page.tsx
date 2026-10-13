@@ -9,6 +9,7 @@ import { today, ymdhm } from '@/lib/format';
 import { Badge, Button, Card, CardHead, DataTable, ErrorBox, Input, Modal, Num, PageHead, Pager, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 import { Check, L } from '@/components/masters/Form';
+import { MasterCsv } from '@/components/masters/MasterCsv';
 
 interface Role { id: number; code: string; name: string; is_active?: boolean }
 interface UserRow extends Record<string, unknown> {
@@ -162,7 +163,7 @@ function UsersTab() {
   return (
     <div className="page-body">
       {element}
-      <PageHead title="利用者" sub="ログインする人と、その役割です。テスト版は4名まで登録してお試しください" right={can('M-17', 'create') && <Button variant="primary" icon="plus" onClick={openNew}>利用者を追加</Button>} />
+      <PageHead title="利用者" sub="ログインする人と、その役割です。テスト版は4名まで登録してお試しください" right={<>{/* CSV 書き出しだけ。パスワードは出さない（2026-10-12 受入 No.3） */}<MasterCsv slug="users" functionId="M-17" exportOnly includeInactive={inactive} />{can('M-17', 'create') && <Button variant="primary" icon="plus" onClick={openNew}>利用者を追加</Button>}</>} />
       <Card>
         <Toolbar right={<label className="flex items-center gap-1 text-[12px]"><input type="checkbox" checked={inactive} onChange={(e) => setInactive(e.target.checked)} />停止中も表示</label>} />
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}

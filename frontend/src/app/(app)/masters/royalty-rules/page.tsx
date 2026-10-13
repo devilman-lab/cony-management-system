@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 
 import { useSimpleMaster } from '@/lib/hooks';
 import { money, today, ymd } from '@/lib/format';
-import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
+import { Badge, Input, Num, Select, Textarea, useConfirm } from '@/components/ui';
 import {
   MultiSearchSelect,
   SearchSelect,
@@ -14,7 +14,8 @@ import {
   type Option,
 } from '@/components/ui/SearchSelect';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
-import { Check, L, Section } from '@/components/masters/Form';
+import { L, Section } from '@/components/masters/Form';
+import { MasterCsv } from '@/components/masters/MasterCsv';
 
 /** 販売先の指定のしかた。「どちらかを入力して反映させる」形（1001 ご要望）。 */
 type CustomerMode = '媒体全体' | '対象' | '対象外';
@@ -47,6 +48,8 @@ interface RuleRow extends Record<string, unknown> {
   customers: { id: number; name: string }[];
   customer_count: number;
   row_count: number;
+  /** 編集前の版として残している行の数（計算済みの月の根拠。一覧には別の規定として出さない） */
+  history_count?: number;
 }
 
 interface Form {
@@ -56,8 +59,6 @@ interface Form {
   media_id: string;
   customer_mode: CustomerMode;
   customers: Option[];
-  /** 販売先の候補を媒体で絞らない（1社が複数の媒体で売るとき） */
-  all_media_customers: boolean;
   calc_base: string;
   rate_pct: string;
   fixed_amount: string;
@@ -97,12 +98,15 @@ export default function RoyaltyRulesPage() {
   const fetchAll = useMemo(() => fetchPartners('royalty_payee'), []);
   const brands = useSimpleMaster('brands');
   const medias = useSimpleMaster('media');
+  const { confirm, element } = useConfirm();
 
   return (
     <MasterPage<RuleRow, Form>
       title="ロイヤリティ規定"
       sub="支払先ごとに、どのブランド（または商品）を、どの媒体のどの販売先に売ったときに、何％（または定額）を払うかを決めます。販売先は「対象」と「対象外」のどちらか一方を入れてください。料率を変えるときは既存の行を直さず、新しい適用開始日で足してください"
       functionId="Y-02"
+      // CSV 書き出しだけ（規定1件を1行。使わないものも出す。2026-10-12 受入 No.3）
+      headRight={<MasterCsv slug="royalty-rules" functionId="Y-02" exportOnly includeInactive />}
       listPath="/masters/royalty-rules"
       writePath="/masters/royalty-rules"
       modalWidth={720}
@@ -141,7 +145,24 @@ export default function RoyaltyRulesPage() {
             </Num>
           ),
         },
-        { key: 'is_active', label: '', width: 50, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
+        {
+          key: 'is_active',
+          label: '',
+          width: 60,
+          render: (r) => (
+            <>
+              {r.is_active ? '' : <Badge>無効</Badge>}
+              {(r.history_count ?? 0) > 0 && (
+                <span
+                  className="block text-[10.5px] text-[var(--color-ink-3)]"
+                  title="計算したあとで販売先の指定を直したため、直す前の内容を計算済みの月の根拠として残しています。計算には使いません"
+                >
+                  旧版 {r.history_count}
+                </span>
+              )}
+            </>
+          ),
+        },
       ]}
       rowKey={(r) => r.id}
       rowLabel={(r) => `${r.payee_name} の規定`}
@@ -152,7 +173,6 @@ export default function RoyaltyRulesPage() {
         media_id: '',
         customer_mode: '媒体全体',
         customers: [],
-        all_media_customers: false,
         calc_base: '出荷',
         rate_pct: '',
         fixed_amount: '',
@@ -167,8 +187,6 @@ export default function RoyaltyRulesPage() {
         media_id: s(r.media_id),
         customer_mode: r.customer_mode,
         customers: r.customers.map((c) => ({ id: c.id, label: c.name })),
-        // すでに入っている販売先が媒体の外にいることもあるため、編集では絞らずに開く
-        all_media_customers: true,
         calc_base: r.calc_base,
         rate_pct: r.rate ? String(Number(r.rate) * 100) : '',
         fixed_amount: dec(r.fixed_amount),
@@ -194,8 +212,8 @@ export default function RoyaltyRulesPage() {
       })}
       renderForm={(f, set) => {
         const mediaId = numOrNull(f.media_id);
-        const narrowed = !f.all_media_customers;
-        const waitingForMedia = narrowed && !mediaId;
+        // 販売先は規定の媒体の販売先からだけ選ぶ（他の媒体の販売先を入れると計算では 0 円になるため。API でも断る）
+        const waitingForMedia = !mediaId;
         const modes: [CustomerMode, string][] = [
           ['媒体全体', 'この媒体の全販売先が対象'],
           ['対象', '選んだ販売先だけが対象'],
@@ -203,6 +221,7 @@ export default function RoyaltyRulesPage() {
         ];
         return (
           <div className="flex flex-col gap-3">
+            {element}
             <div className="master-grid-2">
               <L label="支払先" required>
                 <SearchSelect
@@ -213,7 +232,10 @@ export default function RoyaltyRulesPage() {
                   width="100%"
                 />
               </L>
-              <L label="計算の基準" hint="どの時点の金額にかけるか。ふつうは「出荷」">
+              <L
+                label="計算の基準"
+                hint="どの月の金額として数えるか。出荷＝出荷した月に出荷金額で／売上＝締めて請求した月に請求に載せた金額で／入金＝請求に入金（消込）された月に、入金された割合の金額で。ふつうは「出荷」"
+              >
                 <Select value={f.calc_base} onChange={(e) => set({ calc_base: e.target.value })} className="!w-[110px]">
                   <option>出荷</option>
                   <option>売上</option>
@@ -224,8 +246,23 @@ export default function RoyaltyRulesPage() {
 
             <Section title="対象の範囲" />
             <div className="master-grid-2">
-              <L label="媒体" required hint="テレビ・カタログなど。販売先の候補はこの媒体で絞ります">
-                <Select value={f.media_id} onChange={(e) => set({ media_id: e.target.value, customers: [] })}>
+              <L label="媒体" required hint="テレビ・カタログなど。販売先はこの媒体の販売先（取引先マスタの媒体）から選びます">
+                <Select
+                  value={f.media_id}
+                  onChange={async (e) => {
+                    // 販売先はその媒体の販売先しか入れられないので、媒体を変えたら選んだ社を外す。
+                    // 黙って外すと気付かないので、選んでいるときは確かめる（再テスト R1）
+                    const mediaId = e.target.value;
+                    if (f.customers.length > 0) {
+                      const ok = await confirm(
+                        '媒体を変えますか',
+                        `選んだ販売先 ${f.customers.length} 社は前の媒体の販売先なので外れます。新しい媒体の販売先を選び直してください。`,
+                      );
+                      if (!ok) return;
+                    }
+                    set({ media_id: mediaId, customers: [] });
+                  }}
+                >
                   <option value="">選んでください</option>
                   {(medias.data?.items ?? []).map((m) => (
                     <option key={m.id} value={m.id}>
@@ -268,7 +305,18 @@ export default function RoyaltyRulesPage() {
                       type="radio"
                       name="customer_mode"
                       checked={f.customer_mode === mode}
-                      onChange={() => set({ customer_mode: mode, customers: mode === '媒体全体' ? [] : f.customers })}
+                      onChange={async () => {
+                        // 切り替えたら選んだ社を空にする。「対象外」で選んだ社がそのまま「対象」の社になり、
+                        // 意味が逆になったまま保存できていた（T3 No.38）
+                        if (f.customers.length > 0) {
+                          const ok = await confirm(
+                            `「${mode}」に切り替えますか`,
+                            `選んだ販売先 ${f.customers.length} 社を外してから切り替えます。「${mode}」の販売先を選び直してください。`,
+                          );
+                          if (!ok) return;
+                        }
+                        set({ customer_mode: mode, customers: [] });
+                      }}
                     />
                     <span>{mode}</span>
                     <span className="text-[11px] text-[var(--color-ink-3)]">{hint}</span>
@@ -282,18 +330,13 @@ export default function RoyaltyRulesPage() {
                     <MultiSearchSelect
                       values={f.customers}
                       onChange={(o) => set({ customers: o })}
-                      fetchOptions={narrowed ? fetchCustomers(mediaId) : fetchCustomers(null)}
+                      fetchOptions={fetchCustomers(mediaId)}
                       max={MAX_CUSTOMERS}
                       placeholder={waitingForMedia ? '先に媒体を選んでください' : '販売先を検索して追加…'}
                       disabled={waitingForMedia}
                       emptyLabel="まだ選んでいません"
                     />
                   </L>
-                  <Check
-                    checked={f.all_media_customers}
-                    onChange={(v) => set({ all_media_customers: v })}
-                    label="媒体で絞らずに、すべての販売先から選ぶ"
-                  />
                 </>
               )}
             </div>

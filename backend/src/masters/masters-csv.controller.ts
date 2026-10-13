@@ -6,13 +6,15 @@ import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { MastersCsvService } from './masters-csv.service';
-import { CSV_SLUGS, MASTER_CSV } from './masters-csv';
+import { CSV_SLUGS, MASTER_CSV, MASTER_CSV_EXPORT_ONLY } from './masters-csv';
 
 const ExportSchema = z.object({
   include_inactive: z
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+  /** 絞り込み（区分値のカテゴリーのコードなど。2026-10-12 受入 No.2） */
+  scope: z.string().trim().min(1).max(60).optional(),
 });
 type ExportQuery = z.infer<typeof ExportSchema>;
 
@@ -47,7 +49,7 @@ export class MastersCsvController {
 
   /** この人がこのマスタをこの操作でよいか。だめなら 403。 */
   private async assert(user: AuthenticatedUser, slug: string, action: 'print' | 'update'): Promise<void> {
-    const def = this.csv.def(slug);
+    const def = this.csv.meta(slug);
     const ok = await this.auth.can(user.id, def.functionId, action);
     if (!ok) throw new ForbiddenException(`${def.label}マスタの${action === 'print' ? '書き出し' : '取り込み'}を行う権限がありません`);
   }
@@ -63,7 +65,17 @@ export class MastersCsvController {
         key_labels: MASTER_CSV[slug].keyFields.map(
           (f) => MASTER_CSV[slug].columns.find((c) => c.field === f)?.label ?? f,
         ),
-      })),
+        export_only: false,
+      })).concat(
+        // 書き出しだけのもの（ロイヤリティ規定・セット・ユーザー）
+        Object.values(MASTER_CSV_EXPORT_ONLY).map((e) => ({
+          slug: e.slug,
+          label: e.label,
+          function_id: e.functionId,
+          key_labels: [],
+          export_only: true,
+        })),
+      ),
     };
   }
 
@@ -78,7 +90,14 @@ export class MastersCsvController {
       key_labels: def.keyFields.map((f) => def.columns.find((c) => c.field === f)?.label ?? f),
       columns: def.columns
         .filter((c) => !c.sensitive || showSensitive)
-        .map((c) => ({ label: c.label, kind: c.kind ?? 'text', ref: c.ref?.label ?? null, read_only: c.readOnly ?? false })),
+        .map((c) => ({
+          label: c.label,
+          kind: c.kind ?? 'text',
+          ref: c.ref?.label ?? null,
+          read_only: c.readOnly ?? false,
+          multi: Boolean(c.multi),
+          options: c.options ?? null,
+        })),
     };
   }
 
@@ -100,6 +119,7 @@ export class MastersCsvController {
       q: query.q,
       limit: query.limit,
       offset: query.offset,
+      scope: query.scope,
     });
   }
 
@@ -112,15 +132,16 @@ export class MastersCsvController {
     @Res() res: Response,
   ): Promise<void> {
     await this.assert(user, slug, 'print');
-    const def = this.csv.def(slug);
+    const def = this.csv.meta(slug);
     const showSensitive = await this.auth.canSeeSensitive(user.id);
-    const csv = await this.csv.exportCsv(slug, query.include_inactive, showSensitive);
+    const csv = await this.csv.exportCsv(slug, query.include_inactive, showSensitive, query.scope);
+    const scoped = query.scope ? `_${query.scope}` : '';
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const name = `${def.label}_${stamp}.csv`;
+    const name = `${def.label}${scoped}_${stamp}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${slug}-${stamp}.csv"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      `attachment; filename="${slug}${scoped}-${stamp}.csv"; filename*=UTF-8''${encodeURIComponent(name)}`,
     );
     res.end(csv);
   }
@@ -128,6 +149,10 @@ export class MastersCsvController {
   /**
    * CSV を取り込む。
    * 既定は下見（dry_run）。画面で中身を確かめてから、もう一度 dry_run=false で送ります。
+   *
+   * 取り込みそのものは「更新」の権限で通すが、新しい行を作るには「作成」、
+   * 有効→無効（使わない）には画面の「使わない」と同じ権限（ふつうは「削除」）が要る。
+   * 足りない行は下見で行ごとのエラーになる（2026-10-12 受入 No.3 D-2。以前は更新の権限だけで追加・無効化ができた）。
    */
   @Post(':slug/import')
   @HttpCode(200)
@@ -136,8 +161,13 @@ export class MastersCsvController {
     @Body(new ZodValidationPipe(ImportSchema)) body: ImportBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    const def = this.csv.def(slug); // 書き出しだけのマスタはここで 404
     await this.assert(user, slug, 'update');
-    const showSensitive = await this.auth.canSeeSensitive(user.id);
-    return this.csv.importCsv(slug, body.content_base64, body.dry_run, showSensitive, user.id);
+    const [showSensitive, canCreate, canDeactivate] = await Promise.all([
+      this.auth.canSeeSensitive(user.id),
+      this.auth.can(user.id, def.functionId, 'create'),
+      this.auth.can(user.id, def.functionId, def.deactivateAction ?? 'delete'),
+    ]);
+    return this.csv.importCsv(slug, body.content_base64, body.dry_run, showSensitive, user.id, { canCreate, canDeactivate });
   }
 }

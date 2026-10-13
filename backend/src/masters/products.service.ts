@@ -57,6 +57,113 @@ export function describeUsages(usages: Usage[]): string {
     .join('、');
 }
 
+// ============================================================================
+// JAN の左6桁ルール（2026-10-01 ご要望。2026-10-12 品番の付け替えも見るように）
+// ============================================================================
+
+/** JAN が「品番の左6桁が違う商品」と重なっている組み合わせ1件。 */
+export interface JanClash {
+  /** こちら側の SKU（新しく作る SKU ではまだ無いので null） */
+  sku_code: string | null;
+  jan: string;
+  /** 同じ JAN を持っている相手の SKU と、その品番 */
+  other_sku_code: string;
+  other_product_code: string;
+}
+
+/**
+ * 「SKU A の JAN 4992…016 は 品番 Q2A001（SKU Q2A001-0101-100）でも使われています」の形にする。
+ * 多いときは3件まで出して残りは件数だけ（どの JAN を直せばよいかが分かれば足りる）。
+ */
+export function describeJanClashes(clashes: JanClash[]): string {
+  const head = clashes.slice(0, 3).map(
+    (c) =>
+      `${c.sku_code ? `SKU ${c.sku_code} の ` : ''}JAN ${c.jan} は品番 ${c.other_product_code}（SKU ${c.other_sku_code}）で使われています`,
+  );
+  return head.join('、') + (clashes.length > 3 ? ` ほか${clashes.length - 3}件` : '');
+}
+
+/** 決まりの説明。エラー文の最後に付ける。 */
+export const JAN_RULE_NOTE = '品番の左6桁が違う商品に同じ JAN は付けられません（左6桁が同じ品番の中でなら付けられます）';
+
+/**
+ * 商品の品番を newCode に変えたとき、その商品の SKU の JAN が「品番の左6桁が違う商品」と重ならないか。
+ *
+ * JAN の決まりは skus の引き金 trg_skus_jan が見ているが、引き金は SKU を書いたときにしか動かない。
+ * 品番だけを付け替えるとすり抜け、そのあと相手の商品の SKU を保存しようとすると、JAN を触っていないのに
+ * 断られる状態になっていた（No.16）。スキーマは変えず、品番を変える入口でここを呼んで断る。
+ */
+export async function janClashesForProductCode(db: ConyDatabase, productId: number, newCode: string): Promise<JanClash[]> {
+  const rows = await sql<JanClash>`
+    select s.sku_code, s.jan, o.sku_code as other_sku_code, op.product_code as other_product_code
+      from skus s
+      join skus o on o.jan = s.jan and o.id <> s.id and o.product_id <> s.product_id
+      join products op on op.id = o.product_id
+     where s.product_id = ${productId}
+       and s.jan is not null
+       and left(op.product_code, 6) <> left(${newCode}, 6)
+     order by s.sku_code, o.sku_code`.execute(db);
+  return rows.rows;
+}
+
+/**
+ * SKU に jan を付けたとき（新規・JAN の変更・別の商品への付け替え）、品番の左6桁が違う商品と重ならないか。
+ * 引き金でも止まるが、引き金の文言には相手の品番の左6桁しか出ないため、先にここで相手の品番・SKU まで引く。
+ */
+export async function janClashesForSku(
+  db: ConyDatabase,
+  sku: { id?: number | null; sku_code?: string | null; product_id: number; jan: string },
+): Promise<JanClash[]> {
+  const rows = await sql<{ other_sku_code: string; other_product_code: string }>`
+    select o.sku_code as other_sku_code, op.product_code as other_product_code
+      from skus o
+      join products op on op.id = o.product_id
+     where o.jan = ${sku.jan}
+       and o.id <> ${sku.id ?? -1}
+       and left(op.product_code, 6) <> (select left(p.product_code, 6) from products p where p.id = ${sku.product_id})
+     order by o.sku_code`.execute(db);
+  return rows.rows.map((r) => ({ sku_code: sku.sku_code ?? null, jan: sku.jan, ...r }));
+}
+
+/**
+ * SKU の CSV 取り込み・一覧で編集で、行ごとに JAN の左6桁ルールを見る関数を作る（No.16）。
+ * 行ごとに問い合わせると数千行で遅いので、今の SKU（existing）と品番を先に1回だけ読んでおく。
+ * 返す関数は、決まりに触れればエラー文を、触れなければ null を返す。
+ * JAN も商品も変えない行は見ない（決まりに合わなくなっていた SKU の、ほかの欄だけを直すのを止めない）。
+ */
+export async function skuJanChecker(
+  db: ConyDatabase,
+  existing: Record<string, unknown>[],
+): Promise<(values: Record<string, unknown>, found: Record<string, unknown> | undefined) => string | null> {
+  const codeOf = new Map(
+    (await db.selectFrom('products').select(['id', 'product_code']).execute()).map((p) => [Number(p.id), p.product_code]),
+  );
+  const byJan = new Map<string, Record<string, unknown>[]>();
+  for (const s of existing) {
+    if (!s.jan) continue;
+    const k = String(s.jan);
+    byJan.set(k, [...(byJan.get(k) ?? []), s]);
+  }
+  const left6 = (productId: unknown) => (codeOf.get(Number(productId)) ?? '').slice(0, 6);
+
+  return (values, found) => {
+    const jan = values.jan !== undefined ? values.jan : found?.jan;
+    const productId = values.product_id !== undefined ? values.product_id : found?.product_id;
+    if (!jan || productId === null || productId === undefined) return null;
+    if (found && String(found.jan ?? '') === String(jan) && Number(found.product_id) === Number(productId)) return null;
+    const mine = left6(productId);
+    const clashes: JanClash[] = (byJan.get(String(jan)) ?? [])
+      .filter((o) => Number(o.id) !== Number(found?.id ?? -1) && left6(o.product_id) !== mine)
+      .map((o) => ({
+        sku_code: String(values.sku_code ?? found?.sku_code ?? '') || null,
+        jan: String(jan),
+        other_sku_code: String(o.sku_code),
+        other_product_code: codeOf.get(Number(o.product_id)) ?? '',
+      }));
+    return clashes.length > 0 ? `${describeJanClashes(clashes)}。${JAN_RULE_NOTE}` : null;
+  };
+}
+
 export interface ProductListQuery {
   q?: string;
   brand_id?: number;
@@ -84,6 +191,11 @@ export interface SkuSearchQuery {
    * セット登録のセット SKU の欄に、セット商品にした商品の SKU だけを出すため（2026-10-09 マスター編②）。
    */
   is_set?: boolean;
+  /**
+   * true なら、すでにセット登録がある SKU を外す。セット登録の新規・コピーのセット SKU の欄で使う
+   * （登録済みのセットを選ぶと構成を上書きしてしまっていたため。M-14）。
+   */
+  without_set?: boolean;
 }
 
 @Injectable()
@@ -234,6 +346,9 @@ export class ProductsService {
       .where('p.is_active', '=', true);
 
     if (query.is_set !== undefined) q = q.where('p.is_set', '=', query.is_set);
+    if (query.without_set) {
+      q = q.where((eb) => eb.not(eb.exists(eb.selectFrom('set_headers as h').select('h.id').whereRef('h.sku_id', '=', 's.id'))));
+    }
     if (query.q) {
       const like = `%${query.q}%`;
       q = q.where((eb) =>

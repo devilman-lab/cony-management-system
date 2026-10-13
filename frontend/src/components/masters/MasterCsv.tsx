@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -43,6 +43,9 @@ export function MasterCsv({
   name,
   includeInactive,
   onImported,
+  exportOnly,
+  scope,
+  hint,
 }: {
   slug: string;
   functionId: string;
@@ -50,7 +53,13 @@ export function MasterCsv({
   name?: string;
   /** 一覧の「使わないものも表示」と合わせる */
   includeInactive: boolean;
-  onImported: () => void | Promise<void>;
+  onImported?: () => void | Promise<void>;
+  /** 書き出しだけ（ロイヤリティ規定・セット・ユーザー。1件が複数の行にまたがり、取込には向かない） */
+  exportOnly?: boolean;
+  /** 絞り込み（区分値のカテゴリーのコードなど）。書き出しをこの範囲にする */
+  scope?: string;
+  /** 取り込み画面に足す案内（複数のコードの区切り方など） */
+  hint?: ReactNode;
 }) {
   const { can } = useAuth();
   const toast = useToast();
@@ -63,13 +72,13 @@ export function MasterCsv({
   const [fileName, setFileName] = useState('');
 
   const canExport = can(functionId, 'print');
-  const canImport = can(functionId, 'update');
+  const canImport = !exportOnly && can(functionId, 'update');
   if (!canExport && !canImport) return null;
 
   const exportCsv = async () => {
     try {
       await api.download(`/masters/csv/${slug}/export`, {
-        query: { include_inactive: includeInactive ? 'true' : undefined },
+        query: { include_inactive: includeInactive ? 'true' : undefined, scope: scope || undefined },
       });
     } catch (e) {
       toast(e instanceof Error ? e.message : '書き出せませんでした', 'bad');
@@ -124,7 +133,7 @@ export function MasterCsv({
       toast(`${r.added}件を追加、${r.updated}件を変更しました`, 'good');
       setOpen(false);
       reset();
-      await onImported();
+      await onImported?.();
     } catch (e) {
       setError(e);
     } finally {
@@ -188,6 +197,8 @@ export function MasterCsv({
             先に「CSV書き出し」で今の内容を出し、Excel で直してから取り込むのが確実です。
             <b>見出しの行はそのまま残してください。</b>
             CSVに載っている列だけを書き換えます（載っていない列はそのままです）。
+            新しい行の追加には画面の「新規登録」と、有効を無効にするには画面の「使わない」と同じ権限が要ります。
+            {hint ? <> {hint}</> : null}
           </div>
 
           <div className="flex items-center gap-2">

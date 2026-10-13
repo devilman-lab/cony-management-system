@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch } from '@/lib/hooks';
-import { money, monthRange, qty, thisMonth } from '@/lib/format';
+import { isYen, moneyIn, monthRange, qty, thisMonth } from '@/lib/format';
 import { Button, Card, CardHead, ErrorBox, Input, Modal, PageHead, Select, Toolbar } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
 
@@ -86,7 +86,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="page-body">
-      <PageHead title="販売実績" sub="軸（3つまで）と指標を選んで集計します。出荷済みの実績が対象で、サンプル出荷は含みません" />
+      <PageHead title="販売実績" sub="軸（3つまで）と指標を選んで集計します。出荷済みの実績が対象で、サンプル出荷は含みません。金額は通貨ごとに分けて出します（外貨の行は原価・ロイヤリティ・利益を出しません）" />
       <div className="grid-split-sidebar">
         <div className="flex flex-col gap-3.5">
           <Card>
@@ -142,16 +142,23 @@ export default function AnalyticsPage() {
                   {result?.rows.map((row, i) => (
                     <tr key={i}>
                       {result.dimensions.map((d) => <td key={d}>{row[d] ?? ''}</td>)}
-                      {result.measures.map((m) => <td key={m} className="r num">{COUNT_MEASURES.has(m) ? qty(row[m]) : money(row[m])}</td>)}
+                      {/* 金額は行の通貨で出す。外貨の行の原価・ロイヤリティ・利益は円と引き算できないので空欄（2026-10-12 No.39） */}
+                      {result.measures.map((m) => <td key={m} className="r num">{COUNT_MEASURES.has(m) ? qty(row[m]) : row[m] === null && !isYen(row['通貨']) ? '—' : moneyIn(row[m], row['通貨'])}</td>)}
                     </tr>
                   ))}
                 </tbody>
                 {result && result.rows.length > 1 && (
                   <tfoot>
-                    <tr>
-                      <td colSpan={result.dimensions.length} className="font-bold">合計</td>
-                      {result.measures.map((m) => <td key={m} className="r num font-bold">{COUNT_MEASURES.has(m) ? qty(result.rows.reduce((a, r) => a + Number(r[m] ?? 0), 0)) : money(result.rows.reduce((a, r) => a + Number(r[m] ?? 0), 0))}</td>)}
-                    </tr>
+                    {/* 合計は通貨ごとに1行（ドルの売上を円の売上に足さない。2026-10-12 No.39） */}
+                    {[...new Set(result.rows.map((r) => r['通貨'] ?? 'JPY'))].map((cur) => {
+                      const rows = result.rows.filter((r) => (r['通貨'] ?? 'JPY') === cur);
+                      return (
+                        <tr key={cur}>
+                          <td colSpan={result.dimensions.length} className="font-bold">合計（{cur}）</td>
+                          {result.measures.map((m) => <td key={m} className="r num font-bold">{COUNT_MEASURES.has(m) ? qty(rows.reduce((a, r) => a + Number(r[m] ?? 0), 0)) : rows.every((r) => r[m] === null) && !isYen(cur) ? '—' : moneyIn(rows.reduce((a, r) => a + Number(r[m] ?? 0), 0), cur)}</td>)}
+                        </tr>
+                      );
+                    })}
                   </tfoot>
                 )}
               </table>

@@ -13,6 +13,11 @@ interface GridColumn {
   kind: 'text' | 'number' | 'decimal' | 'bool' | 'date' | 'digits';
   ref: string | null;
   read_only: boolean;
+  /** 複数のコードを「、」で区切って入れる欄（取引先カテゴリー） */
+  multi?: boolean;
+  /** 選べる値（画面の選択肢と同じ）。これ以外は保存で止まる */
+  options?: (string | number)[] | null;
+  options_label?: string | null;
 }
 
 interface GridData {
@@ -39,11 +44,20 @@ const widthOf = (c: GridColumn): number => {
   if (c.kind === 'number') return 90;
   if (c.kind === 'decimal') return 110;
   if (c.kind === 'date') return 130;
+  if (c.multi) return 200;
   if (c.ref) return 150;
   return c.label.length > 8 ? 190 : 150;
 };
 
 const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+
+/** 見出しにのせる案内（どのマスタのコードを入れるか・選べる値） */
+const headHint = (c: GridColumn): string | undefined => {
+  if (c.multi) return `${c.ref}マスタのコードを入れます。いくつでも「、」で区切って入れられます（先頭が代表）`;
+  if (c.ref) return `${c.ref}マスタのコードを入れます`;
+  if (c.options && c.options.length > 0) return `${c.options_label ?? c.options.join('・')} のどれかを入れます`;
+  return undefined;
+};
 
 /**
  * 一覧の中で直接編集する（2026-10-01 ご要望
@@ -53,7 +67,16 @@ const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
  * そのため、ここで直せるものは CSV でも直せ、検査の仕方も同じになります。
  * 相手のマスタ（ブランドなど）はコードで持ちます。
  */
-export function MasterGrid({ slug, canEdit }: { slug: string; canEdit: boolean }) {
+export function MasterGrid({
+  slug,
+  canEdit,
+  scope,
+}: {
+  slug: string;
+  canEdit: boolean;
+  /** 絞り込み（区分値のカテゴリーのコードなど） */
+  scope?: string;
+}) {
   const toast = useToast();
   const [data, setData] = useState<GridData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +96,7 @@ export function MasterGrid({ slug, canEdit }: { slug: string; canEdit: boolean }
       const r = await api.get<GridData>(`/masters/csv/${slug}/rows`, {
         q: dq || undefined,
         include_inactive: inactive ? 'true' : undefined,
+        scope: scope || undefined,
         limit: 50,
         offset,
       });
@@ -83,7 +107,7 @@ export function MasterGrid({ slug, canEdit }: { slug: string; canEdit: boolean }
     } finally {
       setLoading(false);
     }
-  }, [slug, dq, inactive, offset]);
+  }, [slug, dq, inactive, offset, scope]);
 
   useEffect(() => {
     void load();
@@ -190,10 +214,11 @@ export function MasterGrid({ slug, canEdit }: { slug: string; canEdit: boolean }
                   key={c.field}
                   className="sticky top-0 z-10 bg-[#f4f7f8] text-left px-2 py-1.5 border-b border-r border-[var(--color-line)] whitespace-nowrap"
                   style={{ minWidth: widthOf(c) }}
-                  title={c.ref ? `${c.ref}マスタのコードを入れます` : undefined}
+                  title={headHint(c)}
                 >
                   {c.label}
                   {c.read_only && <span className="text-[10px] text-[var(--color-ink-3)]">（鍵）</span>}
+                  {c.multi && <span className="text-[10px] text-[var(--color-ink-3)]">（複数は「、」区切り）</span>}
                 </th>
               ))}
             </tr>
@@ -229,6 +254,7 @@ export function MasterGrid({ slug, canEdit }: { slug: string; canEdit: boolean }
                             disabled={locked}
                             right={c.kind === 'number' || c.kind === 'decimal'}
                             type={c.kind === 'date' ? 'date' : 'text'}
+                            placeholder={c.multi && !locked ? '例 TV、CAT' : undefined}
                             onChange={(e) => setCell(row, c.field, e.target.value)}
                             className="!h-[26px] !text-[12px]"
                           />

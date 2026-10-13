@@ -7,6 +7,7 @@ import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { skuNameExpr } from '../masters/products.service';
 import { ShipmentsService } from '../shipping/shipments.service';
 import { CONTENT_WIDTH, ReportDoc, money, qty, ymd, type Column } from './pdf-builder';
+import { amountIn, amountWithCode, currencyDigits, isYen } from '../common/currency';
 import { mergeToPdf, type MergeInput } from './pdf-merge';
 
 /** 納品書の様式。設定 DELIVERY_NOTE_DEFAULT_FORM の選択肢と一致させる。 */
@@ -150,7 +151,12 @@ export class ReportsService {
       ]);
       const address = this.addressOf(sh);
       if (address) doc.line(`納品先住所　${address}`);
-      if (sh.work_instruction) doc.line(`作業指示　　${sh.work_instruction}`);
+      // 作業指示は名称と本文。納品先の画面の案内どおり、本文を折り返して全文印字する
+      // （以前は名称だけで、倉庫に指示の中身が届かなかった。2026-10-12 受入テスト No.12）。
+      if (sh.work_instruction) {
+        const body = (sh.work_instruction_body ?? '').trim();
+        doc.labeled('作業指示', body ? `${sh.work_instruction}\n${body}` : sh.work_instruction);
+      }
       // 納品ルールは納品先の編集画面から外したが（2026-10-01 のご指摘）、
       // すでに値が入っている納品先のために印字は残す。設定が無ければ行ごと出ない。
       if (sh.delivery_rule) doc.line(`納品ルール　${sh.delivery_rule}`);
@@ -341,10 +347,12 @@ export class ReportsService {
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       doc.y += 4;
 
+      // 外貨の受注（取引先の通貨が円以外。2026-10-12 No.39）は、通貨を書き、金額を小数2桁で出す
+      if (!isYen(sh.currency)) doc.line(`通貨　${sh.currency}`);
       const columns = this.deliveryColumns(chosen);
       doc.table(
         columns,
-        lines.map((l) => this.deliveryRow(chosen, l)),
+        lines.map((l) => this.deliveryRow(chosen, l, (v) => amountIn(v, sh.currency))),
       );
 
       // 合計数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
@@ -354,12 +362,17 @@ export class ReportsService {
         doc.totals([['合計数量', totalQty]]);
       } else {
         const subtotal = this.sum(lines.map((l) => l.amount));
-        const tax = await this.taxOf(lines);
+        // 海外の得意先は消費税 0。請求書（締め）と同じく、明細の税率にかかわらず 0 にし、
+        // 扱い（免税（税抜扱い）／課税対象外）を請求書と同じ言い方で書く（2026-10-12 受入テスト M-02）。
+        // 海外の印を付ける前に 10% で登録した受注でも、請求書と金額が食い違わないようにするため。
+        const overseasLabel = sh.partner_is_overseas ? await this.settings.overseasTaxLabel() : null;
+        const tax = overseasLabel ? 0 : await this.taxOf(lines, sh.currency);
+        if (overseasLabel) doc.line(`消費税　${overseasLabel}`);
         doc.totals([
           ['合計数量', totalQty],
-          ['小計（税抜）', money(subtotal)],
-          ['消費税', money(tax)],
-          ['合計（税込）', money(Number(subtotal) + Number(tax))],
+          ['小計（税抜）', amountWithCode(subtotal, sh.currency)],
+          ['消費税', amountWithCode(tax, sh.currency)],
+          [overseasLabel ? '合計' : '合計（税込）', amountWithCode(Number(subtotal) + Number(tax), sh.currency)],
         ]);
       }
       if (sh.delivery_note_remarks) {
@@ -446,6 +459,8 @@ export class ReportsService {
       if (iv.invoice_contact_name?.trim()) head.push(['ご担当者', iv.invoice_contact_name.trim()]);
       // 発行日は貴社ご指示により既定で印刷しない（設定 INVOICE_PRINT_ISSUE_DATE）。
       if (printIssueDate && iv.issued_at) head.push(['発行日', ymd(iv.issued_at)]);
+      // 外貨の請求（取引先の通貨が円以外。2026-10-12 No.39）は通貨を書き、金額を小数2桁で出す
+      if (!isYen(iv.currency)) head.push(['通貨', iv.currency]);
       if (iv.po_no) head.push(['発注番号', iv.po_no]);
       doc.keyValues(head);
 
@@ -471,8 +486,8 @@ export class ReportsService {
           // 国内の 0% 税率と見分けがつかないため）
           taxes.map((t) => [
             iv.is_overseas ? overseasTaxLabel : `${Number(t.tax_rate)}%`,
-            money(t.taxable_base),
-            money(t.tax_amount),
+            amountIn(t.taxable_base, iv.currency),
+            amountIn(t.tax_amount, iv.currency),
           ]),
         );
         doc.y += 4;
@@ -481,19 +496,19 @@ export class ReportsService {
       if (iv.is_overseas) doc.line(`消費税　${overseasTaxLabel}`);
 
       doc.totals([
-        ['前回請求残高', money(iv.prev_invoice_balance)],
-        ['今回入金額', money(iv.current_receipt_amount)],
-        ['繰越残高', money(iv.carryover_balance)],
-        ['出荷', money(iv.shipment_amount)],
-        ['返品額', money(iv.return_amount)],
-        ['未計上10%', money(iv.unposted_10)],
-        ['未計上8%', money(iv.unposted_8)],
-        ['調整10%', money(iv.adjust_10)],
-        ['調整8%', money(iv.adjust_8)],
-        ['手数料', money(iv.fee_amount)],
-        ['送料', money(iv.shipping_fee_amount)],
-        ['当月請求額', money(iv.current_invoice_amount)],
-        ['今回請求残高', money(iv.current_balance)],
+        ['前回請求残高', amountWithCode(iv.prev_invoice_balance, iv.currency)],
+        ['今回入金額', amountWithCode(iv.current_receipt_amount, iv.currency)],
+        ['繰越残高', amountWithCode(iv.carryover_balance, iv.currency)],
+        ['出荷', amountWithCode(iv.shipment_amount, iv.currency)],
+        ['返品額', amountWithCode(iv.return_amount, iv.currency)],
+        ['未計上10%', amountWithCode(iv.unposted_10, iv.currency)],
+        ['未計上8%', amountWithCode(iv.unposted_8, iv.currency)],
+        ['調整10%', amountWithCode(iv.adjust_10, iv.currency)],
+        ['調整8%', amountWithCode(iv.adjust_8, iv.currency)],
+        ['手数料', amountWithCode(iv.fee_amount, iv.currency)],
+        ['送料', amountWithCode(iv.shipping_fee_amount, iv.currency)],
+        ['当月請求額', amountWithCode(iv.current_invoice_amount, iv.currency)],
+        ['今回請求残高', amountWithCode(iv.current_balance, iv.currency)],
       ]);
 
       if (lines.length > 0) {
@@ -512,9 +527,9 @@ export class ReportsService {
             l.line_no,
             l.item_name,
             qty(l.qty),
-            money(l.unit_price),
+            amountIn(l.unit_price, iv.currency),
             `${Number(l.tax_rate)}%`,
-            money(l.amount),
+            amountIn(l.amount, iv.currency),
           ]),
         );
       }
@@ -574,6 +589,11 @@ export class ReportsService {
         'd.delivery_note_print1 as delivery_note_print1',
         'd.delivery_note_print2 as delivery_note_print2',
         'wi.name as work_instruction',
+        'wi.instruction_body as work_instruction_body',
+        // 海外の得意先は納品書の消費税を 0 にする（請求書と同じ扱い）
+        'p.is_overseas as partner_is_overseas',
+        // 受注の通貨（取引先の通貨で固定。2026-10-12 No.39）。納品書の金額に添える
+        'o.currency as currency',
         'dr.name as delivery_rule',
         'sc.name as slip_issue_class',
       ])
@@ -714,6 +734,8 @@ export class ReportsService {
       jan: string | null;
       retail_price: string | null;
     },
+    // 金額の見せ方。外貨の受注は小数2桁（2026-10-12 No.39）。指定が無ければ今までどおり円
+    fmt: (v: string | number | null) => string = money,
   ) {
     switch (form) {
       case '単価なし':
@@ -725,8 +747,8 @@ export class ReportsService {
           l.jan ?? '',
           l.item_name,
           qty(l.qty),
-          money(l.unit_price),
-          money(l.amount),
+          fmt(l.unit_price),
+          fmt(l.amount),
         ];
       case '上代あり':
         // 上代は得意先別商品マスタ。未登録なら空欄にし、金額欄も上代×数量で出す。
@@ -735,8 +757,8 @@ export class ReportsService {
           l.sku_code ?? '',
           l.item_name,
           qty(l.qty),
-          money(l.retail_price),
-          l.retail_price === null ? '' : money(Number(l.retail_price) * Number(l.qty)),
+          fmt(l.retail_price),
+          l.retail_price === null ? '' : fmt(Number(l.retail_price) * Number(l.qty)),
         ];
       default:
         return [
@@ -745,8 +767,8 @@ export class ReportsService {
           l.sku_code ?? '',
           l.item_name,
           qty(l.qty),
-          money(l.unit_price),
-          money(l.amount),
+          fmt(l.unit_price),
+          fmt(l.amount),
         ];
     }
   }
@@ -762,8 +784,12 @@ export class ReportsService {
     return this.formOf(v) ?? '単価あり';
   }
 
-  /** 税率別に計算して合算する。端数処理は設定（既定は切捨て）に従う。 */
-  private async taxOf(lines: { tax_rate: string; amount: string }[]): Promise<number> {
+  /**
+   * 税率別に計算して合算する。端数処理は設定（既定は切捨て）に従う。
+   * 端数は通貨の最小単位で処理する（円は1円、外貨は小数2桁。請求の締めと同じ。2026-10-13 再テスト N3）。
+   */
+  private async taxOf(lines: { tax_rate: string; amount: string }[], currency?: string | null): Promise<number> {
+    const scale = 10 ** currencyDigits(currency);
     const mode = await this.settings.text('TAX_ROUNDING_MODE', 'floor');
     const byRate = new Map<number, number>();
     for (const l of lines) {
@@ -772,10 +798,11 @@ export class ReportsService {
     }
     let total = 0;
     for (const [rate, base] of byRate) {
-      const raw = (base * rate) / 100;
-      total += mode === 'ceil' ? Math.ceil(raw) : mode === 'round' ? Math.round(raw) : Math.floor(raw);
+      // 小数の誤差（552.4999… など）で1単位ずれないよう、桁を上げた値をいったん整えてから丸める
+      const raw = Number((((base * rate) / 100) * scale).toFixed(6));
+      total += (mode === 'ceil' ? Math.ceil(raw) : mode === 'round' ? Math.round(raw) : Math.floor(raw)) / scale;
     }
-    return total;
+    return Number(total.toFixed(currencyDigits(currency)));
   }
 
   /** 差出人。9/15 ご回答では会社名のみ印刷。住所・電話が空なら「TEL」の見出しごと出さない。 */

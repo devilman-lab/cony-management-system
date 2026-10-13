@@ -119,23 +119,47 @@ export class ReportDoc {
     this.doc.moveDown(0.6);
   }
 
-  /** 「ラベル：値」を1行ずつ。左右2段組み。 */
+  /**
+   * 「ラベル：値」を1行ずつ。左右2段組み。
+   *
+   * 長い得意先名などは欄の中で折り返す。以前は段の高さが 15pt 固定だったため、
+   * 折り返した2行目が次の段（出荷倉庫・納品先No など）に重なって読めなかった
+   * （2026-10-12 受入テスト）。段ごとに、左右で高いほうの文字の高さだけ下げる。
+   */
   keyValues(rows: [string, string][], columns = 2): void {
     const colWidth = CONTENT_WIDTH / columns;
     const lineHeight = 15;
-    const startY = this.doc.y;
     this.doc.fontSize(9);
 
-    rows.forEach(([label, value], i) => {
-      const col = i % columns;
-      const row = Math.floor(i / columns);
-      const x = MARGIN + col * colWidth;
-      const y = startY + row * lineHeight;
-      this.doc.text(`${label}：${value}`, x, y, { width: colWidth - 8, lineBreak: false });
-    });
+    for (let start = 0; start < rows.length; start += columns) {
+      const cells = rows.slice(start, start + columns).map(([label, value]) => `${label}：${value}`);
+      const height = Math.max(
+        lineHeight,
+        ...cells.map((t) => Math.ceil(this.doc.heightOfString(t, { width: colWidth - 8 })) + 3),
+      );
+      if (this.doc.y + height > this.bottom) this.newPage();
+      const y = this.doc.y;
+      cells.forEach((text, col) => {
+        this.doc.text(text, MARGIN + col * colWidth, y, { width: colWidth - 8 });
+      });
+      this.doc.y = y + height;
+    }
+    this.doc.y += 6;
+  }
 
-    const lines = Math.ceil(rows.length / columns);
-    this.doc.y = startY + lines * lineHeight + 6;
+  /**
+   * 見出しつきの文章（作業指示の本文など）。見出しの右に本文を折り返して全文出し、
+   * 2行目以降も本文の左端にそろえる。高さは本文の長さで決まる。
+   */
+  labeled(label: string, text: string, labelWidth = 54, size = 9): void {
+    this.doc.fontSize(size);
+    const width = CONTENT_WIDTH - labelWidth;
+    const height = Math.ceil(this.doc.heightOfString(text || ' ', { width })) + 2;
+    if (this.doc.y + height > this.bottom) this.newPage();
+    const y = this.doc.y;
+    this.doc.text(label, MARGIN, y, { width: labelWidth, lineBreak: false });
+    this.doc.text(text, MARGIN + labelWidth, y, { width });
+    this.doc.y = y + height;
   }
 
   /** 左寄せの1行。 */
@@ -155,15 +179,16 @@ export class ReportDoc {
    * 罫線は上下と見出しの下だけにしてある（頂いた帳票サンプルに合わせた）。
    */
   table(columns: Column[], rows: Cell[][]): void {
-    const rowHeight = 16;
     this.tableHeader(columns);
 
     for (const row of rows) {
-      if (this.doc.y + rowHeight > this.bottom - 40) {
+      // 行の高さは、いちばん長く折り返すセルで決まる（長い品名は2〜3行になる）
+      const height = this.rowHeight(columns, row, 9);
+      if (this.doc.y + height > this.bottom - 40) {
         this.newPage();
         this.tableHeader(columns);
       }
-      this.tableRow(columns, row, 9);
+      this.tableRow(columns, row, 9, height);
     }
     this.rule();
   }
@@ -198,26 +223,48 @@ export class ReportDoc {
    */
   private tableHeader(columns: Column[]): void {
     this.rule();
-    this.tableRow(columns, columns.map((c) => c.label), 9);
+    const labels = columns.map((c) => c.label);
+    this.tableRow(columns, labels, 9, this.rowHeight(columns, labels, 9));
     this.rule();
   }
 
-  private tableRow(columns: Column[], row: Cell[], size: number): void {
+  /**
+   * 1行の高さ。1行に収まれば今までどおり 16pt、折り返すセルがあれば、
+   * その文字の高さ＋上下の余白（3pt ずつ）まで広げる。
+   *
+   * 以前は 16pt 固定で、欄に入りきらない品名が折り返して次の行や
+   * 「合計数量」「小計」に重なり、読めなかった（2026-10-12 受入テスト M-10）。
+   * SKU の商品名＋カラー＋サイズを品名にしたことで、長い品名が普通に出るようになっている。
+   */
+  private rowHeight(columns: Column[], row: Cell[], size: number): number {
+    this.doc.fontSize(size);
+    let text = 0;
+    columns.forEach((col, i) => {
+      const value = cellText(row[i]);
+      if (value === '') return;
+      text = Math.max(text, this.doc.heightOfString(value, { width: col.width - 4, align: col.align ?? 'left' }));
+    });
+    return Math.max(16, Math.ceil(text) + 6);
+  }
+
+  private tableRow(columns: Column[], row: Cell[], size: number, height: number): void {
     const y = this.doc.y;
     let x = MARGIN;
     this.doc.fontSize(size);
 
     columns.forEach((col, i) => {
-      const text = row[i] === null || row[i] === undefined ? '' : String(row[i]);
-      this.doc.text(text, x + 2, y + 3, {
+      // 折り返して全文を出す（末尾を「…」で切ると、SKU ごとの違い（(W)・キャップ付など）が読めない）
+      this.doc.text(cellText(row[i]), x + 2, y + 3, {
         width: col.width - 4,
         align: col.align ?? 'left',
-        lineBreak: false,
-        ellipsis: true,
       });
       x += col.width;
     });
 
-    this.doc.y = y + 16;
+    this.doc.y = y + height;
   }
+}
+
+function cellText(value: Cell): string {
+  return value === null || value === undefined ? '' : String(value);
 }

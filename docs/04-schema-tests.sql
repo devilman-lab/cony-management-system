@@ -1143,6 +1143,48 @@ BEGIN
 END $b28$;
 
 -- ----------------------------------------------------------------------------
+-- T42  受注の通貨は取引先の通貨で固定（2026-10-12 No.39「売上仕入用の通貨」）
+--   どの経路で受注を作っても取引先の通貨になること、通貨だけを書き換えても戻ること、
+--   取引先の通貨を直すと、まだ請求していない受注もそろうことを確かめる。
+-- ----------------------------------------------------------------------------
+DO $b30$
+DECLARE v_order_id bigint; v_cur text;
+BEGIN
+  INSERT INTO partners (partner_code, name1, is_customer, closing_day, is_overseas, currency)
+  VALUES ('USD1', '海外テスト販社', true, 99, true, 'USD');
+
+  -- 円を指定して作っても、取引先の通貨（USD）になる
+  INSERT INTO sales_orders (order_no, order_type, partner_id, sales_category_id, order_date, direct_name, currency)
+  SELECT 'SO-TEST-USD', '直送', p.id, sc.id, CURRENT_DATE, 'Test', 'JPY'
+    FROM partners p, sales_categories sc WHERE p.partner_code = 'USD1' AND sc.code = 'WEB'
+  RETURNING id, currency INTO v_order_id, v_cur;
+  IF v_cur <> 'USD' THEN
+    RAISE EXCEPTION 'T42 失敗: 受注の通貨が取引先の通貨にならない（%）', v_cur USING ERRCODE='TF001';
+  END IF;
+
+  -- 通貨だけを書き換えても取引先の通貨に戻る
+  UPDATE sales_orders SET currency = 'JPY' WHERE id = v_order_id RETURNING currency INTO v_cur;
+  IF v_cur <> 'USD' THEN
+    RAISE EXCEPTION 'T42 失敗: 受注の通貨を取引先と違う通貨に書き換えられた（%）', v_cur USING ERRCODE='TF001';
+  END IF;
+
+  -- 取引先の通貨を直すと、未請求の受注もそろう
+  UPDATE partners SET currency = 'EUR' WHERE partner_code = 'USD1';
+  SELECT currency INTO v_cur FROM sales_orders WHERE id = v_order_id;
+  IF v_cur <> 'EUR' THEN
+    RAISE EXCEPTION 'T42 失敗: 取引先の通貨を直しても未請求の受注がそろわない（%）', v_cur USING ERRCODE='TF001';
+  END IF;
+
+  -- 既存の取引先は円のまま
+  SELECT currency INTO v_cur FROM partners WHERE partner_code = 'P001';
+  IF v_cur <> 'JPY' THEN
+    RAISE EXCEPTION 'T42 失敗: 取引先の通貨の既定値が円でない（%）', v_cur USING ERRCODE='TF001';
+  END IF;
+
+  RAISE NOTICE 'T42 OK  受注の通貨は取引先の通貨で固定（未請求の受注は取引先に合わせて変わる）';
+END $b30$;
+
+-- ----------------------------------------------------------------------------
 -- 完了
 -- ----------------------------------------------------------------------------
 DO $b29$

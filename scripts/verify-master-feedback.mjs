@@ -168,10 +168,12 @@ await check('No.37 計算に使った後でも、販売先を外す編集がで�
   const r = await call('PATCH', `/masters/royalty-rules/${rule.id}`, A, ruleBody([cust[0].id]));
   return r.status === 200 || `${r.status} ${JSON.stringify(r.body)}`;
 });
-await check('No.37 外した販売先の行は「使わない」で残り、まとまりから外れる（計算の根拠は残る）', async () => {
+// 2026-10-12（T3 No.37 D3）: 外した行はまとまりから切り離さず「編集前の版」としてぶら下げる
+// （切り離すと、利用者の作っていない「無効」の規定が一覧に増え、「有効に戻す」で復活していた）
+await check('No.37 外した販売先の行は「使わない」で残り、編集前の版としてまとまりにぶら下がる（計算の根拠は残る）', async () => {
   const rows = await groupRows();
   const c2 = rows.find((r) => Number(r.customer_partner_id) === cust[1].id);
-  return (c2 && c2.is_active === false && c2.rule_group_id === null) || rows;
+  return (c2 && c2.is_active === false && Number(c2.rule_group_id) === rule.id) || rows;
 });
 await check('No.37 外した販売先を戻すと、前の行を使い直す（重複エラーにならない）', async () => {
   const r = await call('PATCH', `/masters/royalty-rules/${rule.id}`, A, ruleBody([cust[0].id, cust[1].id]));

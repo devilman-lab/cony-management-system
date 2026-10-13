@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 
 import { api, type Paged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useFetch, useList } from '@/lib/hooks';
-import { money, today, ymd } from '@/lib/format';
+import { useCodes, useFetch, useList } from '@/lib/hooks';
+import { moneyCell, moneyWithCurrency, today, ymd } from '@/lib/format';
 import { Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -14,6 +14,8 @@ interface ReceiptRow extends Record<string, unknown> {
   id: number;
   receipt_date: string;
   amount: string;
+  /** 通貨（2026-10-12 No.39）。消込先の請求と同じ通貨でないと消し込めない */
+  currency: string;
   applied_amount: string | null;
   partner_id: number;
   partner_name: string;
@@ -27,13 +29,18 @@ interface InvoiceOpt {
   invoice_no: string;
   period_to: string;
   current_balance: string;
+  /** 消し込んだ入金を引いた残り */
+  unapplied_balance: string;
+  currency: string;
   status: string;
 }
 
 /** NUMERIC は "1500.00" の形で返る。入力欄に入れるときだけ見た目を整える（数値には通さない）。 */
 const plain = (v: string | null | undefined): string => (v ?? '').replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
 
-const emptyForm = () => ({ partner: null as Option | null, date: today(), amount: '', invoice_id: '', applied: '', note: '' });
+const emptyForm = () => ({ partner: null as Option | null, date: today(), amount: '', currency: 'JPY', invoice_id: '', applied: '', note: '' });
+/** 取引先の通貨（2026-10-12 No.39）。入金の通貨の初期値にする */
+const partnerCurrency = (o: Option | null) => (o?.raw as { currency?: string } | undefined)?.currency || 'JPY';
 
 /** 入金登録・消込（B-05）。請求を選ぶと、その請求に消し込む。 */
 export default function PaymentsPage() {
@@ -41,6 +48,7 @@ export default function PaymentsPage() {
   const toast = useToast();
   const { confirm, element } = useConfirm();
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
+  const currencies = useCodes('CURRENCY');
 
   const [partner, setPartner] = useState<Option | null>(null);
   const [from, setFrom] = useState('');
@@ -69,6 +77,7 @@ export default function PaymentsPage() {
       partner: { id: r.partner_id, label: r.partner_name },
       date: String(r.receipt_date).slice(0, 10),
       amount: plain(r.amount),
+      currency: r.currency || 'JPY',
       invoice_id: r.invoice_id ? String(r.invoice_id) : '',
       applied: '',
       note: r.note ?? '',
@@ -79,6 +88,17 @@ export default function PaymentsPage() {
 
   const save = async () => {
     setError(null);
+    // 残りを超えて消し込むときは確かめる（残り 0 の請求にもう一度消し込むと、黙って残りがマイナスになっていた。再テスト R4）
+    const target = options.find((i) => String(i.id) === f.invoice_id);
+    const applying = Number((editing ? f.amount : f.applied || f.amount) || 0);
+    const alreadyMine = editing && editing.invoice_id === target?.id ? Number(editing.applied_amount ?? 0) : 0;
+    if (target && applying > Number(target.unapplied_balance) + alreadyMine) {
+      const ok = await confirm(
+        '請求の残りを超えて消し込みますか',
+        `${target.invoice_no} の残りは ${moneyWithCurrency(String(Number(target.unapplied_balance) + alreadyMine), target.currency)} です。${moneyWithCurrency(String(applying), target.currency)} を消し込むと残りがマイナス（過入金）になります。`,
+      );
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       if (editing) {
@@ -87,6 +107,7 @@ export default function PaymentsPage() {
         await api.patch(`/billing/cash-receipts/${editing.id}`, {
           receipt_date: f.date,
           amount: f.amount,
+          currency: f.currency,
           invoice_id: f.invoice_id ? Number(f.invoice_id) : null,
           note: f.note || null,
         });
@@ -96,6 +117,7 @@ export default function PaymentsPage() {
           partner_id: f.partner?.id,
           receipt_date: f.date,
           amount: f.amount,
+          currency: f.currency,
           invoice_id: f.invoice_id ? Number(f.invoice_id) : null,
           applied_amount: f.invoice_id ? f.applied || f.amount : null,
           note: f.note || null,
@@ -114,7 +136,7 @@ export default function PaymentsPage() {
   };
 
   const remove = async (r: ReceiptRow) => {
-    const what = r.invoice_no ? `${ymd(r.receipt_date)} の ${money(r.amount)} 円（${r.invoice_no} に消込済み）を削除します。` : `${ymd(r.receipt_date)} の ${money(r.amount)} 円を削除します。`;
+    const what = r.invoice_no ? `${ymd(r.receipt_date)} の ${moneyWithCurrency(r.amount, r.currency)}（${r.invoice_no} に消込済み）を削除します。` : `${ymd(r.receipt_date)} の ${moneyWithCurrency(r.amount, r.currency)}を削除します。`;
     if (!(await confirm('この入金を削除しますか', `${what}消し込んだ分の売掛残高は戻ります。`, true))) return;
     setRemovingId(r.id);
     try {
@@ -152,9 +174,9 @@ export default function PaymentsPage() {
           columns={[
             { key: 'receipt_date', label: '入金日', width: 110, render: (r) => <Num>{ymd(r.receipt_date)}</Num> },
             { key: 'partner_name', label: '取引先' },
-            { key: 'amount', label: '入金額', r: true, width: 120, render: (r) => money(r.amount) },
+            { key: 'amount', label: '入金額', r: true, width: 120, render: (r) => moneyCell(r.amount, r.currency) },
             { key: 'invoice_no', label: '消込先の請求', width: 150, render: (r) => <Num>{r.invoice_no ?? '（未消込）'}</Num> },
-            { key: 'applied_amount', label: '消込額', r: true, width: 120, render: (r) => money(r.applied_amount) },
+            { key: 'applied_amount', label: '消込額', r: true, width: 120, render: (r) => moneyCell(r.applied_amount, r.currency) },
             // 備考は「編集」を押すと訂正の画面で読める。列に出すと表が画面より広くなり、
             // 1024px の画面で「編集」「削除」が右にはみ出して押せなくなるため、ここには出さない
             // （買掛・支払の一覧と同じ列数にそろえてある）。
@@ -188,7 +210,7 @@ export default function PaymentsPage() {
         <FormRow label="取引先" required hint={editing ? '訂正では変えられません。相手が違うときは削除して入れ直してください' : undefined}>
           {editing
             ? <span className="text-[12.5px]">{editing.partner_name}</span>
-            : <SearchSelect value={f.partner} onChange={(o) => setF({ ...f, partner: o, invoice_id: '' })} fetchOptions={fetchCustomers} placeholder="取引先を検索" width="100%" />}
+            : <SearchSelect value={f.partner} onChange={(o) => setF({ ...f, partner: o, invoice_id: '', currency: partnerCurrency(o) })} fetchOptions={fetchCustomers} placeholder="取引先を検索" width="100%" />}
         </FormRow>
         <FormRow label="入金日" required>
           <Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="!w-[150px]" />
@@ -196,18 +218,51 @@ export default function PaymentsPage() {
         <FormRow label="入金額" required>
           <Input right value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} className="!w-[150px]" />
         </FormRow>
-        <FormRow label="消込先の請求" hint={editing ? '選び直すと消込が付け替わります' : '選ぶと消し込みます'}>
-          <Select value={f.invoice_id} onChange={(e) => setF({ ...f, invoice_id: e.target.value })} disabled={!f.partner}>
+        {/*
+          通貨（2026-10-12 No.39）。取引先の通貨が初期値。
+          請求を選んでも入金の通貨は変えない（2026-10-13 再テスト N1。円の入金がドルとして消し込まれていた）。
+          通貨が違う請求は選べない。登録済みの入金の通貨は訂正では変えない（違うときは削除して入れ直す）。
+        */}
+        <FormRow label="通貨" hint={editing ? '訂正では変えられません。違うときは削除して入れ直してください' : '消込先の請求と同じ通貨でないと消し込めません'}>
+          {editing ? (
+            <b className="num text-[12.5px]">{f.currency}</b>
+          ) : (
+            <Select
+              value={f.currency}
+              onChange={(e) => {
+                const cur = e.target.value;
+                // 選んでいた請求の通貨と違えば、消込先を外す（違う通貨の請求には消し込めない）
+                const inv = options.find((i) => String(i.id) === f.invoice_id);
+                setF({ ...f, currency: cur, invoice_id: inv && inv.currency !== cur ? '' : f.invoice_id });
+              }}
+              className="!w-[140px]"
+            >
+              {(currencies.data?.values ?? []).map((c) => <option key={c.code} value={c.code}>{c.code}（{c.name}）</option>)}
+              {!(currencies.data?.values ?? []).some((c) => c.code === f.currency) && <option value={f.currency}>{f.currency}</option>}
+            </Select>
+          )}
+        </FormRow>
+        <FormRow label="消込先の請求" hint={`${editing ? '選び直すと消込が付け替わります' : '選ぶと消し込みます'}。入金と同じ通貨（${f.currency}）の請求だけ選べます`}>
+          <Select value={f.invoice_id} onChange={(e) => setF({ ...f, invoice_id: e.target.value })} disabled={!f.partner} className="!w-full">
             <option value="">（消し込まない）</option>
             {linkedMissing && <option value={String(linkedMissing.invoice_id)}>{linkedMissing.invoice_no}　（今の消込先）</option>}
             {options
               .filter((i) => i.status !== '取消')
               .map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.invoice_no}　{ymd(i.period_to)}締め　残高 {money(i.current_balance)}
+                <option key={i.id} value={i.id} disabled={i.currency !== f.currency}>
+                  {i.invoice_no}　{ymd(i.period_to)}締め　残り {moneyWithCurrency(i.unapplied_balance, i.currency)}（請求 {moneyWithCurrency(i.current_balance, i.currency)}）{i.currency !== f.currency ? '　※通貨が違うため選べません' : ''}
                 </option>
               ))}
           </Select>
+          {/* 選んだあとは欄の幅で「残り」が切れるので、下にも出す（再テスト R4） */}
+          {(() => {
+            const sel = options.find((i) => String(i.id) === f.invoice_id);
+            return sel ? (
+              <div className="mt-1 text-[11.5px] text-[var(--color-ink-2)]">
+                残り <b className="num">{moneyWithCurrency(sel.unapplied_balance, sel.currency)}</b>（請求 {moneyWithCurrency(sel.current_balance, sel.currency)}）
+              </div>
+            ) : null;
+          })()}
         </FormRow>
         {!editing && f.invoice_id && (
           <FormRow label="消込額" hint="空なら入金額と同じ">

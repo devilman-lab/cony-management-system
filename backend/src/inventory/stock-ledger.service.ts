@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { sql, type Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 
 import type { DB } from '../db/schema';
 
@@ -44,6 +44,32 @@ export class StockLedgerService {
 
     if (!row) throw new BadRequestException(`品質区分「${quality}」が登録されていません`);
     return row.id;
+  }
+
+  /**
+   * セット商品の SKU を入荷・在庫調整に入れさせない。
+   *
+   * セット商品は在庫を持たない（在庫表にも出さない）。入荷・調整でセット SKU の在庫を作ると、
+   * 誰にも見えず引当にも使われない在庫ができる（2026-10-12 受入テスト）。
+   * 「セット商品」にした商品の SKU と、セット登録（set_headers）にある SKU の両方を断る
+   * （在庫表の除外・CSV 取込と同じ決め方）。文言は CSV 取込とそろえる。
+   */
+  async assertNoSetSkus(db: Kysely<DB>, lines: { line_no: number; sku_id: number }[]): Promise<void> {
+    if (lines.length === 0) return;
+    const sets = await db
+      .selectFrom('skus as s')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .select(['s.id as id', 's.sku_code as sku_code'])
+      .where('s.id', 'in', [...new Set(lines.map((l) => l.sku_id))])
+      // かっこで囲む（前の条件と and でつながるため。囲まないと or が全体に掛かる）
+      .where(sql<boolean>`(p.is_set or exists (select 1 from set_headers sh where sh.sku_id = s.id))`)
+      .execute();
+    if (sets.length === 0) return;
+    const messages = lines.flatMap((l) => {
+      const hit = sets.find((s) => Number(s.id) === Number(l.sku_id));
+      return hit ? [`${l.line_no}行目：商品コード「${hit.sku_code}」はセット商品です`] : [];
+    });
+    throw new BadRequestException(`${messages.join('／')}。セット商品は在庫を持たないため、構成品で入荷・調整してください`);
   }
 
   /**
@@ -98,6 +124,11 @@ export class StockLedgerService {
     movementType: MovementType,
     ref: { table: string; id: number },
     userId: number,
+    /**
+     * 履歴の日付（YYYY-MM-DD）。入荷確定で、登録した入荷日を履歴の日付にするとき（在庫編 Z-14）。
+     * 時刻は記録した時刻のままにする（同じ日の中の並びが記録の順になるように）。省略すると今。
+     */
+    movedOn?: string | null,
   ): Promise<void> {
     const before = await trx
       .selectFrom('stocks as s')
@@ -133,6 +164,9 @@ export class StockLedgerService {
         qty: delta,
         qty_before: before.qty_on_hand,
         qty_after: String(after),
+        ...(movedOn
+          ? { moved_at: sql<Date>`(${movedOn}::date + (now() at time zone 'Asia/Tokyo')::time) at time zone 'Asia/Tokyo'` }
+          : {}),
         created_by: userId,
       })
       .execute();

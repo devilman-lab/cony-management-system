@@ -51,6 +51,8 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
    * 指定すると見出しの右にボタンが出る（1001 のご要望）。
    */
   csvSlug?: string;
+  /** CSV 取り込み画面に足す案内（複数のコードの区切り方など） */
+  csvHint?: ReactNode;
   onSaved?: (row: Record<string, unknown>, editing: T | null) => void;
   /**
    * 本体を保存したあと、続けて別の経路で保存するもの（商品の SKU など）。
@@ -208,7 +210,8 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
         right={
           <>
             {p.headRight}
-            {p.csvSlug && (
+            {/* 一覧で編集は直す人だけに出す。閲覧者には出さない（押すと権限エラーになっていた。2026-10-12 受入 No.2） */}
+            {p.csvSlug && can(p.functionId, 'update') && (
               <Button icon={gridMode ? 'list' : 'edit'} onClick={() => setGridMode((v) => !v)}>
                 {gridMode ? '通常の一覧に戻す' : '一覧で編集'}
               </Button>
@@ -218,6 +221,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
                 slug={p.csvSlug}
                 functionId={p.functionId}
                 includeInactive={inactive}
+                hint={p.csvHint}
                 onImported={() => list.reload()}
               />
             )}
@@ -231,7 +235,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
           （1001 ご要望「一覧に全ての項目を表示し、一覧内で編集ができるようにしてほしい」）。
           保存は CSV取込と同じ経路を通るので、検査のしかたも同じになる。
         */}
-        {gridMode && p.csvSlug ? (
+        {gridMode && p.csvSlug && can(p.functionId, 'update') ? (
           <MasterGrid slug={p.csvSlug} canEdit={can(p.functionId, 'update')} />
         ) : (
         <>

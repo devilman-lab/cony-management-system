@@ -75,6 +75,12 @@ const toSku = (k: Record<string, unknown>): Sku => ({
   pack_division: s(k.pack_division), is_active: k.is_active !== false,
 });
 const emptySku = (): Sku => ({ _key: skuKeySeq++, sku_code: '', sku_name: '', jan: '', fba_jan: '', shop_product_code: '', cost_price: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true });
+/**
+ * 入数区分の説明（No.15「ここでいう入数区分の意味はなんでしょう？」への回答と同じ内容。R5 第2章・第3章）。
+ * SKU 表の見出しのツールチップと、表の下の注記に出す。
+ */
+const PACK_DIVISION_HINT =
+  '入数区分は SKU コード末尾の区分です。100＝単品、200＝2枚組 など、同じ品番・カラー・サイズで入数違いを分けるための番号です（例 FT1196-0306-100 の「100」）';
 /** 数値を末尾の 0 なしで（3000.0000 → 3000） */
 const dec = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
 
@@ -334,7 +340,12 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, onError, error, show
   // （M-07「原価・有効の列が横にずらさないと見えない」）。カラーは「シフォンピンク」が切れない幅。
   // SKUの商品名（widths[2]）は表の残りの幅を使う（ここの値は最低の幅）。
   // 合計より狭い画面（タブレットなど）では表を横にずらす（列が潰れて見えなくならないように）
-  const widths = [62, 140, 170, 150, 90, 124, 124, 120, 64, ...(showCost ? [94] : []), 40];
+  // 2026-10-12（M-07）: サイズ欄が 78px で「5L-6Lゆったり」のような長いサイズ名が切れていた。
+  // カラー・サイズの選択欄は字を少し小さく・余白を詰め（SKU_SELECT）、サイズ欄を広げた。
+  // 合計は以前と同じ約 1176px に収め（SKUの商品名・ショップ商品コード・入数区分・原価の欄を少し詰めた）、1280 でも横に溢れない
+  const widths = [62, 140, 130, 160, 150, 124, 124, 100, 60, ...(showCost ? [86] : []), 40];
+  const SKU_SELECT = '!text-[12px] !pl-1.5 !pr-5';
+  const nameOf = (list: { id: number; name: string }[], id: string) => list.find((x) => String(x.id) === id)?.name ?? '';
   return (
     <div className="flex flex-col gap-2">
       {element}
@@ -351,7 +362,9 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, onError, error, show
               <th style={{ width: widths[5] }}>JAN</th>
               <th style={{ width: widths[6] }}>FBA用JAN</th>
               <th style={{ width: widths[7] }}>ショップ<br />商品コード</th>
-              <th style={{ width: widths[8] }}>入数区分</th>
+              <th style={{ width: widths[8] }} title={PACK_DIVISION_HINT} className="cursor-help">
+                入数<wbr />区分<span aria-hidden className="ml-0.5 text-[var(--color-ink-3)]">ⓘ</span>
+              </th>
               {showCost && <th style={{ width: widths[9] }}>原価</th>}
               <th style={{ width: widths[widths.length - 1] }}>有効</th>
             </tr>
@@ -371,12 +384,13 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, onError, error, show
                 <td><Input value={k.sku_code} onChange={(e) => upd(k._key, { sku_code: e.target.value })} /></td>
                 {/* 空なら商品の商品名を使う。薄い字で商品名を見せておく */}
                 <td><Input value={k.sku_name} onChange={(e) => upd(k._key, { sku_name: e.target.value })} placeholder={productName || '商品と同じ'} title={k.sku_name || productName} /></td>
-                <td><Select value={k.color_id} onChange={(e) => upd(k._key, { color_id: e.target.value })}><option value="">（なし）</option>{colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
-                <td><Select value={k.size_id} onChange={(e) => upd(k._key, { size_id: e.target.value })}><option value="">（なし）</option>{sizes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
+                {/* 欄に入りきらない名前でも、マウスを載せると選んだ名前の全文が出る */}
+                <td><Select value={k.color_id} onChange={(e) => upd(k._key, { color_id: e.target.value })} className={SKU_SELECT} title={nameOf(colors, k.color_id)}><option value="">（なし）</option>{colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
+                <td><Select value={k.size_id} onChange={(e) => upd(k._key, { size_id: e.target.value })} className={SKU_SELECT} title={nameOf(sizes, k.size_id)}><option value="">（なし）</option>{sizes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></td>
                 <td><Input value={k.jan} onChange={(e) => upd(k._key, { jan: e.target.value })} placeholder="13桁" /></td>
                 <td><Input value={k.fba_jan} onChange={(e) => upd(k._key, { fba_jan: e.target.value })} placeholder="13桁" /></td>
                 <td><Input value={k.shop_product_code} onChange={(e) => upd(k._key, { shop_product_code: e.target.value })} /></td>
-                <td><Input value={k.pack_division} onChange={(e) => upd(k._key, { pack_division: e.target.value })} /></td>
+                <td><Input value={k.pack_division} onChange={(e) => upd(k._key, { pack_division: e.target.value })} title={PACK_DIVISION_HINT} /></td>
                 {/* サイズで原価が変わるとき用。空欄なら商品の原価を使う（1001 ご要望） */}
                 {showCost && <td><Input right value={k.cost_price} onChange={(e) => upd(k._key, { cost_price: e.target.value })} placeholder="商品と同じ" /></td>}
                 <td className="c"><input type="checkbox" checked={k.is_active} onChange={(e) => upd(k._key, { is_active: e.target.checked })} disabled={!k.id} /></td>
@@ -385,6 +399,8 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, onError, error, show
           </tbody>
         </table>
       </div>
+      {/* 入数区分の意味（No.15）。見出しのツールチップだけだと気づきにくいので、表の下にも小さく出す */}
+      <div className="text-[10.5px] text-[var(--color-ink-3)]">※ {PACK_DIVISION_HINT}</div>
       <div className="flex gap-2">
         <Button size="sm" icon="plus" onClick={() => onChange([...skus, emptySku()])}>SKU を追加</Button>
         {onSave && (

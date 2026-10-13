@@ -5,6 +5,7 @@ import { NumberingService } from '../common/numbering.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { OVERSEAS_TAX_RATE } from '../orders/order-defaults';
 import { decode, decodeAuto, encodingLabel, parseCsv, type DetectedEncoding } from './csv';
 
 export interface OmsImportInput {
@@ -229,7 +230,7 @@ export class OmsImportService {
     // 通販は個人宛の直送。取引先は受注ルートに対応する1件を使う。
     const partner = await trx
       .selectFrom('partners')
-      .select(['id'])
+      .select(['id', 'is_overseas'])
       .where('is_customer', '=', true)
       .where('is_active', '=', true)
       .orderBy(sql`case when partner_code = ${partnerCode} then 1 else 0 end`, 'asc')
@@ -387,6 +388,8 @@ export class OmsImportService {
           qty: r.qty,
           unit_price: r.unit_price,
           amount: sql<string>`${r.qty}::numeric * ${r.unit_price}::numeric`,
+          // 海外の得意先は受注入力と同じく 0%（請求・納品書と合わせる。2026-10-12 M-02）。国内は列の既定（10%）
+          tax_rate: partner.is_overseas ? OVERSEAS_TAX_RATE : undefined,
           created_by: userId,
         })
         .execute();

@@ -8,7 +8,8 @@ import { useCodes, useList, useWarehouses } from '@/lib/hooks';
 import { qty as fmtQty, today, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, useConfirm } from '@/components/ui';
 import { InlineText } from '@/components/inventory/InlineEdit';
-import { SearchSelect, fetchSkus, type Option } from '@/components/ui/SearchSelect';
+import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
+import { SearchSelect, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
 
 interface AdjLine {
@@ -89,7 +90,7 @@ interface ImportResult {
     warehouse_name: string;
     reason_name: string;
     note: string | null;
-    lines: { row: number; sku_code: string; product_name: string; qty: string; from_quality: string | null; to_quality: string | null; note: string | null }[];
+    lines: { row: number; sku_code: string; product_name: string; color_name?: string | null; size_name?: string | null; qty: string; from_quality: string | null; to_quality: string | null; note: string | null }[];
   }[];
   errors: { row: number; message: string }[];
 }
@@ -106,6 +107,9 @@ export default function AdjustmentsPage() {
   const toast = useToast();
   const { confirm, element } = useConfirm();
   const warehouses = useWarehouses();
+  // 倉庫の初期値は入荷と同じ「コニー倉庫」（略称が一致するもの。「コニー倉庫(EC)」は拾わない）。
+  // 一覧の先頭を初期値にしていたため (EC) に入りやすく、棚卸差異を入れる倉庫を取り違えやすかった（2026-10-12 受入テスト）
+  const defaultWarehouse = (warehouses.data ?? []).find((w) => w.short_name === 'コニー倉庫') ?? warehouses.data?.[0];
   const reasons = useCodes('ADJUSTMENT_REASON');
   const list = useList<AdjRow>('/inventory/adjustments', {});
 
@@ -162,7 +166,7 @@ export default function AdjustmentsPage() {
     setBusy(true);
     // ロットは画面から外した（Z-18）。API は受け付けるが送らない
     const body = {
-      warehouse_id: Number(warehouseId || warehouses.data?.[0]?.id),
+      warehouse_id: Number(warehouseId || defaultWarehouse?.id),
       adjustment_date: date,
       reason_code: reason,
       note: note || null,
@@ -400,13 +404,15 @@ export default function AdjustmentsPage() {
         open={open}
         title={editing ? `在庫調整の編集（${editing.adjustment_no}）` : '在庫調整の登録'}
         onClose={() => setOpen(false)}
-        width={900}
+        // 画面の幅に合わせて広げる（1280 なら画面いっぱい、広い画面では 1400px まで）。
+        // 900px 固定だと商品欄が狭く、選んだ商品が商品コードの途中で切れていた（Z-17）
+        width={1400}
         footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '保存する' : '登録する'}</Button></>}
       >
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         <div className="master-grid-2">
           <FormRow label="倉庫" required>
-            <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <Select value={warehouseId || String(defaultWarehouse?.id ?? '')} onChange={(e) => setWarehouseId(e.target.value)}>
               {(warehouses.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.short_name}</option>)}
             </Select>
           </FormRow>
@@ -430,14 +436,18 @@ export default function AdjustmentsPage() {
                 <th className="r" style={{ width: 80 }}>増減</th>
                 <th style={{ width: 130 }}>品質（前）</th>
                 <th style={{ width: 130 }}>品質（後）</th>
-                <th>メモ</th>
+                {/* メモは幅を決め、残りを商品の列に回す（選んだ商品のカラー・サイズまで見えるように） */}
+                <th style={{ width: 180 }}>メモ</th>
                 <th style={{ width: 96 }} />
               </tr>
             </thead>
             <tbody>
               {lines.map((l) => (
                 <tr key={l.key}>
-                  <td><SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchSkus} placeholder="商品コード・JAN・商品名" width="100%" /></td>
+                  <td>
+                    <SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchStockSkus} placeholder="商品コード・JAN・商品名" width="100%" />
+                    <PickedSkuText value={l.sku} />
+                  </td>
                   <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" placeholder="-1" /></td>
                   <td><Select value={l.from_quality} onChange={(e) => setLine(l.key, { from_quality: e.target.value })} className="!h-[26px]">{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
                   <td><Select value={l.to_quality} onChange={(e) => setLine(l.key, { to_quality: e.target.value })} className="!h-[26px]">{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
@@ -531,7 +541,8 @@ export default function AdjustmentsPage() {
                           <td>{li === 0 ? a.reason_name : ''}</td>
                           <td>{li === 0 ? (a.note ?? '') : ''}</td>
                           <td className="num">{l.sku_code}</td>
-                          <td>{l.product_name}</td>
+                          {/* カラー・サイズも出す（同じ商品の M と L を下見で見分けるため。2026-10-12 受入テスト） */}
+                          <td className="whitespace-normal">{`${l.product_name}${l.color_name ? ' ' + l.color_name : ''}${l.size_name ? ' ' + l.size_name : ''}`}</td>
                           <td className="r num">{fmtQty(l.qty)}</td>
                           <td>{l.from_quality || l.to_quality ? `${l.from_quality ?? ''}→${l.to_quality ?? ''}` : ''}</td>
                           <td>{l.note ?? ''}</td>

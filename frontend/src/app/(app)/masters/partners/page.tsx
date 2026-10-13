@@ -3,7 +3,7 @@
 import { useState } from 'react';
 
 import { api } from '@/lib/api';
-import { useSimpleMaster } from '@/lib/hooks';
+import { useCodes, useSimpleMaster } from '@/lib/hooks';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
 import { Check, L, PostalLookup, Section } from '@/components/masters/Form';
@@ -18,6 +18,8 @@ interface PartnerRow extends Record<string, unknown> {
   is_royalty_payee: boolean;
   /** 海外の取引先（2026-10-09 マスター編②） */
   is_overseas: boolean;
+  /** 取引通貨（2026-10-12 No.39）。受注・請求書・入金はこの通貨になる */
+  currency: string;
   closing_day: number | null;
   default_trade_type: string | null;
   media_name: string | null;
@@ -35,6 +37,7 @@ interface Form {
   is_supplier: boolean;
   is_royalty_payee: boolean;
   is_overseas: boolean;
+  currency: string;
   sales_staff_id: string;
   media_id: string;
   partner_category_id: string;
@@ -64,7 +67,7 @@ const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 const dec = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
 
 const EMPTY: Form = {
-  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false, is_royalty_payee: false, is_overseas: false,
+  partner_code: '', name1: '', name2: '', short_name: '', is_customer: true, is_supplier: false, is_royalty_payee: false, is_overseas: false, currency: 'JPY',
   sales_staff_id: '', media_id: '', partner_category_id: '', category_ids: [] as number[], invoice_registration_no: '', invoice_note: '', invoice_addressee: '', invoice_contact_name: '',
   shipping_fee_threshold: '', shipping_fee_amount: '', default_trade_type: '', closing_day: '', payment_month_offset: '', payment_day: '',
   postal_code: '', address1: '', address2: '', tel: '', fax: '', sort_order: '', note: '',
@@ -79,6 +82,8 @@ export default function PartnersPage() {
   const staff = useSimpleMaster('sales_staff');
   const media = useSimpleMaster('media');
   const categories = useSimpleMaster('partner_categories');
+  // 取引通貨の選択肢。「分類・区分・設定」の「通貨」タブで増やせる（2026-10-12 No.39）
+  const currencies = useCodes('CURRENCY');
 
   return (
     <MasterPage<PartnerRow, Form>
@@ -86,6 +91,7 @@ export default function PartnersPage() {
       sub="得意先・仕入先。締め日・支払条件・既定の販売担当・送料の特別条件はここで決めます"
       functionId="M-01"
       csvSlug="partners"
+      csvHint="取引先カテゴリーコードは「TV、CAT」のように「、」で区切ればいくつでも入れられます（先頭が代表。「|」で区切っても読めます）。"
       listPath="/masters/partners"
       writePath="/masters/partners"
       extraFilters={{
@@ -125,10 +131,13 @@ export default function PartnersPage() {
         { key: 'media_name', label: '媒体', width: 76, render: (r) => r.media_name ?? '' },
         { key: 'sales_staff_name', label: '販売担当', width: 72, render: (r) => r.sales_staff_name ?? '' },
         { key: 'default_trade_type', label: '取引', width: 44, render: (r) => r.default_trade_type ?? '' },
+        { key: 'currency', label: '通貨', width: 44, render: (r) => r.currency ?? '' },
         { key: 'closing_day', label: '締め日', r: true, width: 56, render: (r) => (r.closing_day ? (r.closing_day >= 99 ? '末日' : `${r.closing_day}日`) : '') },
         { key: 'is_active', label: '', width: 44, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
+      // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
+      rowLabel={(r) => `取引先 ${r.partner_code}　${r.name1}`}
       empty={() => EMPTY}
       toForm={async (r) => {
         const d = await api.get<Record<string, unknown>>(`/masters/partners/${r.id}`);
@@ -152,6 +161,7 @@ export default function PartnersPage() {
         is_supplier: f.is_supplier,
         is_royalty_payee: f.is_royalty_payee,
         is_overseas: f.is_overseas,
+        currency: f.currency || 'JPY',
         sales_staff_id: numOrNull(f.sales_staff_id),
         media_id: numOrNull(f.media_id),
         partner_category_id: numOrNull(f.partner_category_id),
@@ -190,6 +200,14 @@ export default function PartnersPage() {
             {/* 海外の取引先（2026-10-09 マスター編②）。得意先なら請求の消費税が 0、仕入先なら仕入明細の税区分の初期値が非課税／不課税になる */}
             <L label="海外" hint="消費税の扱い（免税（税抜扱い）／課税対象外）は「分類・区分・設定 ＞ システム設定」で決めます">
               <Check checked={f.is_overseas} onChange={(v) => set({ is_overseas: v })} label="海外の取引先" />
+            </L>
+            {/* 取引通貨（2026-10-12 No.39）。受注はこの通貨で作られ、請求書・入金もこの通貨になる */}
+            <L label="通貨" hint="受注・請求書・入金はこの通貨になります。変えると、まだ請求していない受注の通貨も変わります（金額はそのまま）">
+              <Select value={f.currency || 'JPY'} onChange={(e) => set({ currency: e.target.value })} className="!w-[140px]">
+                {(currencies.data?.values ?? []).map((c) => <option key={c.code} value={c.code}>{c.code}（{c.name}）</option>)}
+                {/* 「使わない」にした通貨のままの取引先も、そのまま開いて保存できるように */}
+                {f.currency && !(currencies.data?.values ?? []).some((c) => c.code === f.currency) && <option value={f.currency}>{f.currency}</option>}
+              </Select>
             </L>
             <L label="取引先カテゴリー" hint="いくつでも選べます（テレビとカタログ両方など）" wide>
               <div className="flex flex-wrap gap-x-3 gap-y-1">

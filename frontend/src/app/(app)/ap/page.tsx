@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { api, type Paged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useFetch } from '@/lib/hooks';
-import { money, monthRange, thisMonth, today, ymd } from '@/lib/format';
+import { useCodes, useFetch } from '@/lib/hooks';
+import { formatTotals, moneyCell, moneyIn, moneyWithCurrency, monthRange, sumByCurrency, thisMonth, today, ymd } from '@/lib/format';
 import { Button, Card, CardHead, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -14,6 +14,8 @@ interface ApRow extends Record<string, unknown> {
   partner_id: number;
   partner_code: string;
   partner_name: string;
+  /** 通貨（2026-10-12 No.39）。円以外の仕入がある仕入先は、通貨ごとに行が分かれる */
+  currency: string;
   carryover_amount: string;
   purchase_amount: string;
   payment_amount: string;
@@ -27,6 +29,8 @@ interface PaymentRow extends Record<string, unknown> {
   partner_code: string;
   supplier_name: string;
   amount: string;
+  /** 支払の通貨。対象の仕入の通貨、無ければ仕入先の通貨（2026-10-12 No.39） */
+  currency: string;
   applied_amount: string | null;
   purchase_id: number | null;
   purchase_no: string | null;
@@ -38,13 +42,18 @@ interface PurchaseOpt {
   id: number;
   purchase_no: string;
   total_amount: string;
+  /** 支払った額を引いた残り */
+  unpaid_amount: string;
+  currency: string;
   status: string;
 }
 
 /** NUMERIC は "1500.00" の形で返る。入力欄に入れるときだけ見た目を整える（数値には通さない）。 */
 const plain = (v: string | null | undefined): string => (v ?? '').replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
 
-const emptyForm = () => ({ partner: null as Option | null, date: today(), amount: '', purchase_id: '', note: '' });
+const emptyForm = () => ({ partner: null as Option | null, date: today(), amount: '', currency: 'JPY', purchase_id: '', note: '' });
+/** 仕入先の通貨（2026-10-13 再テスト N5）。支払の通貨の初期値にする */
+const partnerCurrency = (o: Option | null) => (o?.raw as { currency?: string } | undefined)?.currency || 'JPY';
 
 const PAY_LIMIT = 50;
 
@@ -54,6 +63,7 @@ export default function ApPage() {
   const toast = useToast();
   const { confirm, element } = useConfirm();
   const fetchSuppliers = useMemo(() => fetchPartners('supplier'), []);
+  const currencies = useCodes('CURRENCY');
   const [month, setMonth] = useState(thisMonth());
   const range = monthRange(month);
   const list = useFetch<ApRow[]>('/ap-balances', { from: range.from, to: range.to });
@@ -99,6 +109,7 @@ export default function ApPage() {
       partner: { id: r.partner_id, label: r.supplier_name },
       date: String(r.payment_date).slice(0, 10),
       amount: plain(r.amount),
+      currency: r.currency || 'JPY',
       purchase_id: r.purchase_id ? String(r.purchase_id) : '',
       note: r.note ?? '',
     });
@@ -125,6 +136,7 @@ export default function ApPage() {
           partner_id: f.partner?.id,
           payment_date: f.date,
           amount: f.amount,
+          currency: f.currency,
           purchase_id: f.purchase_id ? Number(f.purchase_id) : null,
           note: f.note || null,
         });
@@ -142,7 +154,7 @@ export default function ApPage() {
   };
 
   const remove = async (r: PaymentRow) => {
-    if (!(await confirm('この支払を削除しますか', `${ymd(r.payment_date)}　${r.supplier_name}　${money(r.amount)} 円を削除します。消した分だけ買掛残高が戻ります。`, true))) return;
+    if (!(await confirm('この支払を削除しますか', `${ymd(r.payment_date)}　${r.supplier_name}　${moneyWithCurrency(r.amount, r.currency)}を削除します。消した分だけ買掛残高が戻ります。`, true))) return;
     setRemovingId(r.id);
     try {
       await api.delete(`/payments/${r.id}`);
@@ -171,19 +183,24 @@ export default function ApPage() {
         <Toolbar>
           <span className="text-[11.5px] text-[var(--color-ink-3)]">対象月</span>
           <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="!w-[150px]" />
+          {/* 残高の合計は通貨ごと（ドルの残高を円の残高に足さない。2026-10-12 No.39） */}
+          {(list.data ?? []).length > 0 && (
+            <span className="text-[11.5px] text-[var(--color-ink-2)]">残高の合計 <b className="num">{formatTotals(sumByCurrency(list.data ?? [], (r) => r.balance, (r) => r.currency))}</b></span>
+          )}
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<ApRow>
           columns={[
             { key: 'partner_code', label: 'コード', width: 100 },
             { key: 'partner_name', label: '仕入先' },
-            { key: 'carryover_amount', label: '前月繰越', r: true, width: 130, render: (r) => money(r.carryover_amount) },
-            { key: 'purchase_amount', label: '仕入・経費', r: true, width: 130, render: (r) => money(r.purchase_amount) },
-            { key: 'payment_amount', label: '支払', r: true, width: 130, render: (r) => money(r.payment_amount) },
-            { key: 'balance', label: '残高', r: true, width: 130, render: (r) => <b>{money(r.balance)}</b> },
+            { key: 'currency', label: '通貨', width: 56 },
+            { key: 'carryover_amount', label: '前月繰越', r: true, width: 130, render: (r) => moneyIn(r.carryover_amount, r.currency) },
+            { key: 'purchase_amount', label: '仕入・経費', r: true, width: 130, render: (r) => moneyIn(r.purchase_amount, r.currency) },
+            { key: 'payment_amount', label: '支払', r: true, width: 130, render: (r) => moneyIn(r.payment_amount, r.currency) },
+            { key: 'balance', label: '残高', r: true, width: 130, render: (r) => <b>{moneyIn(r.balance, r.currency)}</b> },
           ]}
           rows={list.data ?? []}
-          rowKey={(r) => r.partner_id}
+          rowKey={(r) => `${r.partner_id}-${r.currency}`}
           loading={list.loading}
         />
       </Card>
@@ -203,7 +220,7 @@ export default function ApPage() {
             columns={[
               { key: 'payment_date', label: '支払日', width: 110, render: (r) => <Num>{ymd(r.payment_date)}</Num> },
               { key: 'supplier_name', label: '仕入先' },
-              { key: 'amount', label: '支払額', r: true, width: 120, render: (r) => money(r.amount) },
+              { key: 'amount', label: '支払額', r: true, width: 120, render: (r) => moneyCell(r.amount, r.currency) },
               { key: 'purchase_no', label: '対象の仕入', width: 150, render: (r) => <Num>{r.purchase_no ?? '（指定なし）'}</Num> },
               { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[200px]">{r.note ?? ''}</span> },
               {
@@ -238,15 +255,37 @@ export default function ApPage() {
         <FormRow label="仕入先" required hint={editing ? '訂正では変えられません。相手が違うときは削除して入れ直してください' : undefined}>
           {editing
             ? <span className="text-[12.5px]">{editing.supplier_name}</span>
-            : <SearchSelect value={f.partner} onChange={(o) => setF({ ...f, partner: o, purchase_id: '' })} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" />}
+            : <SearchSelect value={f.partner} onChange={(o) => setF({ ...f, partner: o, purchase_id: '', currency: partnerCurrency(o) })} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" />}
         </FormRow>
         <FormRow label="支払日" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="!w-[150px]" /></FormRow>
         <FormRow label="支払額" required><Input right value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} className="!w-[150px]" /></FormRow>
-        <FormRow label="対象の仕入" hint={editing ? '外すと「指定しない」に戻ります。取消済みの仕入は出ません' : '任意。取消済みの仕入は出ません'}>
+        {/*
+          通貨（2026-10-13 再テスト N5）。仕入先の通貨が初期値。仕入を選んでも支払の通貨は変えない。
+          通貨が違う仕入は選べない。登録済みの支払の通貨は訂正では変えない（違うときは削除して入れ直す）。
+        */}
+        <FormRow label="通貨" hint={editing ? '訂正では変えられません。違うときは削除して入れ直してください' : '対象の仕入と同じ通貨でないと消し込めません'}>
+          {editing ? (
+            <b className="num text-[12.5px]">{f.currency}</b>
+          ) : (
+            <Select
+              value={f.currency}
+              onChange={(e) => {
+                const cur = e.target.value;
+                const pu = options.find((x) => String(x.id) === f.purchase_id);
+                setF({ ...f, currency: cur, purchase_id: pu && pu.currency !== cur ? '' : f.purchase_id });
+              }}
+              className="!w-[140px]"
+            >
+              {(currencies.data?.values ?? []).map((c) => <option key={c.code} value={c.code}>{c.code}（{c.name}）</option>)}
+              {!(currencies.data?.values ?? []).some((c) => c.code === f.currency) && <option value={f.currency}>{f.currency}</option>}
+            </Select>
+          )}
+        </FormRow>
+        <FormRow label="対象の仕入" hint={`${editing ? '外すと「指定しない」に戻ります。取消済みの仕入は出ません' : '任意。取消済みの仕入は出ません'}。支払と同じ通貨（${f.currency}）の仕入だけ選べます`}>
           <Select value={f.purchase_id} onChange={(e) => setF({ ...f, purchase_id: e.target.value })} disabled={!f.partner}>
             <option value="">（指定しない）</option>
             {linkedMissing && <option value={String(linkedMissing.purchase_id)}>{linkedMissing.purchase_no}　（今の対象）</option>}
-            {options.map((p) => <option key={p.id} value={p.id}>{p.purchase_no}　{money(p.total_amount)}</option>)}
+            {options.map((p) => <option key={p.id} value={p.id} disabled={p.currency !== f.currency}>{p.purchase_no}　残り {moneyWithCurrency(p.unpaid_amount, p.currency)}（仕入 {moneyWithCurrency(p.total_amount, p.currency)}）{p.currency !== f.currency ? '　※通貨が違うため選べません' : ''}</option>)}
           </Select>
         </FormRow>
         <FormRow label="備考"><Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></FormRow>

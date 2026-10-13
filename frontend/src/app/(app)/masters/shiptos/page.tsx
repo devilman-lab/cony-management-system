@@ -88,6 +88,8 @@ export default function ShiptosPage() {
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
+      // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
+      rowLabel={(r) => `納品先 ${r.delivery_code}　${r.name}（${r.partner_name}）`}
       empty={() => ({
         partner: partner, delivery_code: '', name: '', partner_delivery_no: '', consignee: '', delivery_note_print1: '', delivery_note_print2: '',
         work_instruction: null, default_warehouse_id: '', slip_issue_class_code_id: '',

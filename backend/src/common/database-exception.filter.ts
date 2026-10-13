@@ -6,6 +6,7 @@ interface PgError {
   constraint?: string;
   detail?: string;
   table?: string;
+  message?: string;
 }
 
 /**
@@ -15,7 +16,7 @@ interface PgError {
  * ただ、そのまま返すと利用者には「Internal server error」としか見えない。
  * どの決まりに触れたのかを日本語で返す。
  */
-const CONSTRAINT_MESSAGES: Record<string, string> = {
+export const CONSTRAINT_MESSAGES: Record<string, string> = {
   ck_reservations_period: '期間の開始日が終了日より後になっています',
   ck_stocks_available: '有効在庫を超えて引き当てることはできません',
   ck_stocks_on_hand: '実在庫をマイナスにはできません',
@@ -44,7 +45,7 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   ck_ext_status: '取込の状態は 取込済／変換済／エラー／取消 のいずれかです',
 };
 
-const UNIQUE_MESSAGES: Record<string, string> = {
+export const UNIQUE_MESSAGES: Record<string, string> = {
   external_orders_channel_external_order_no_key: 'この受注は取込済みです（同じ受注番号があります）',
   invoices_partner_id_period_to_key: 'この取引先・締め期間の請求はすでに作られています',
   ux_partner_products_code: 'この取引先で同じ専用コードがすでに使われています',
@@ -69,6 +70,17 @@ const UNIQUE_MESSAGES: Record<string, string> = {
     'この納品先コードはすでに使われています（納品先コードは全社で1つに限ります）',
   set_headers_sku_id_key: 'この SKU のセットはすでに登録されています',
 };
+
+/**
+ * JAN の左6桁ルールの引き金（fn_check_sku_jan）が断ったときの文言。引き金は「この JAN コードは品番 Q2A001 の
+ * 商品で使われています…」と相手の品番（左6桁）を入れて断る。固定の文言（UNIQUE_MESSAGES.ux_skus_jan）に置き換えると
+ * 相手が分からず直せないため、引き金の文言をそのまま使う（No.16）。引き金の断りでなければ null。
+ * ふだんは API が先に相手の品番・SKU コードまで引いて断るので、ここは同時に保存したとき・CSV の同じファイル内で重なったときの砦。
+ */
+export function skuJanTriggerMessage(pg: { code?: string; constraint?: string; message?: string }): string | null {
+  if (pg.code !== '23505' || pg.constraint !== 'ux_skus_jan' || !pg.message?.startsWith('この JAN コードは品番')) return null;
+  return `${pg.message}（左6桁が同じ品番の中でなら付けられます）`;
+}
 
 @Catch()
 export class DatabaseExceptionFilter implements ExceptionFilter {
@@ -117,6 +129,8 @@ export class DatabaseExceptionFilter implements ExceptionFilter {
   }
 
   private describe(pg: PgError, constraint: string): { status: number; message: string } {
+    const jan = skuJanTriggerMessage(pg);
+    if (jan) return { status: HttpStatus.CONFLICT, message: jan };
     switch (pg.code) {
       case '23514':
         return {

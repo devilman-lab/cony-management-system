@@ -2,11 +2,13 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { sql, type Transaction } from 'kysely';
 
 import { NumberingService } from '../common/numbering.service';
+import { SettingsService } from '../common/settings.service';
 import { ReservationsService } from '../inventory/reservations.service';
 import { AllocationService, type AllocationOutcome } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
+import { OVERSEAS_TAX_RATE, isOverseasPartner, orderTradeType } from './order-defaults';
 
 export type OrderType = '卸' | '直送' | '通販' | 'サンプル';
 export type LineType = '商品' | 'セット商品' | '内訳商品' | '販促品' | '送料' | '値引' | '非商品';
@@ -85,6 +87,7 @@ export class OrdersService {
     private readonly numbering: NumberingService,
     private readonly allocation: AllocationService,
     private readonly reservations: ReservationsService,
+    private readonly settings: SettingsService,
   ) {}
 
   async create(input: CreateOrderInput, userId: number): Promise<OrderWriteResult> {
@@ -136,7 +139,7 @@ export class OrdersService {
         .returning(['id', 'order_no'])
         .executeTakeFirstOrThrow();
 
-      await this.insertLines(trx, order.id, input.lines, userId);
+      await this.insertLines(trx, order.id, input.lines, userId, await isOverseasPartner(trx, input.partner_id));
 
       // 引当在庫（販売カテゴリーの枠）から減らす。枠を超えれば 400（9/17 ご確認②）。
       await this.reservations.consume(trx, order.id, { strict: true });
@@ -159,7 +162,7 @@ export class OrdersService {
   /**
    * 取引条件の初期値は取引先マスタの既定値（確認事項③）。
    * 取引先の既定値には仕入先向けの「仕入」もあるが（1001 ご要望）、受注の取引条件は
-   * 委託・買取の2つだけなので、それ以外のときは買取にする。
+   * 委託・買取の2つだけなので、それ以外のときは買取にする（取込と同じ orderTradeType を使う）。
    */
   private async defaultTradeType(trx: Transaction<DB>, partnerId: number): Promise<'委託' | '買取'> {
     const p = await trx
@@ -167,7 +170,7 @@ export class OrdersService {
       .select('default_trade_type')
       .where('id', '=', partnerId)
       .executeTakeFirst();
-    return p?.default_trade_type === '委託' ? '委託' : '買取';
+    return orderTradeType(p?.default_trade_type);
   }
 
   private writeResult(
@@ -188,12 +191,17 @@ export class OrdersService {
    * 明細の投入。
    * 金額は qty × unit_price を SQL 側で計算する。JavaScript の数値に通すと
    * 小数の誤差が出るため、金額の計算はデータベースから出さない。
+   *
+   * 海外の得意先は、画面で選んだ税率にかかわらず 0% で入れる。請求（締め）は海外を 0% で
+   * 計算するので、受注・納品書を 10% のままにすると得意先に渡す書類どうしで金額が
+   * 食い違う（2026-10-12 受入テスト M-02）。
    */
   private async insertLines(
     trx: Transaction<DB>,
     orderId: number,
     lines: OrderLineInput[],
     userId: number,
+    overseas: boolean,
   ): Promise<void> {
     await trx
       .insertInto('sales_order_lines')
@@ -208,7 +216,7 @@ export class OrdersService {
           item_name: line.item_name,
           qty: line.qty,
           unit_price: line.unit_price,
-          tax_rate: line.tax_rate ?? '10.00',
+          tax_rate: overseas ? OVERSEAS_TAX_RATE : (line.tax_rate ?? '10.00'),
           amount: sql<string>`${line.qty}::numeric * ${line.unit_price}::numeric`,
           created_by: userId,
         })),
@@ -298,6 +306,8 @@ export class OrdersService {
           'o.ship_date as ship_date',
           'o.delivery_date as delivery_date',
           'o.trade_type as trade_type',
+          // 通貨（取引先の通貨で固定。2026-10-12 No.39）。一覧の金額に通貨を添えるため
+          'o.currency as currency',
           'o.is_billable as is_billable',
           'o.is_cancelled as is_cancelled',
           'o.sales_staff_id as sales_staff_id',
@@ -377,7 +387,25 @@ export class OrdersService {
       .orderBy('l.line_no', 'asc')
       .execute();
 
-    return { ...order, lines };
+    // 海外の得意先は消費税の欄に「免税（税抜扱い）」／「課税対象外」と出す（請求書・納品書と同じ表記）
+    const partner = await this.db
+      .selectFrom('partners')
+      .select('is_overseas')
+      .where('id', '=', order.partner_id)
+      .executeTakeFirst();
+    const overseas = partner?.is_overseas === true;
+    return {
+      ...order,
+      partner_is_overseas: overseas,
+      overseas_tax_label: overseas ? await this.settings.overseasTaxLabel() : null,
+      lines,
+    };
+  }
+
+  /** 受注の得意先が海外か（修正のあとの得意先で見る）。 */
+  private async isOverseasOrder(trx: Transaction<DB>, orderId: number): Promise<boolean> {
+    const o = await trx.selectFrom('sales_orders').select('partner_id').where('id', '=', orderId).executeTakeFirstOrThrow();
+    return isOverseasPartner(trx, o.partner_id);
   }
 
   /**
@@ -436,7 +464,14 @@ export class OrdersService {
           )
           .execute();
         await trx.deleteFrom('sales_order_lines').where('sales_order_id', '=', id).execute();
-        await this.insertLines(trx, id, lines, userId);
+        await this.insertLines(trx, id, lines, userId, await this.isOverseasOrder(trx, id));
+      } else if (input.partner_id !== undefined && (await this.isOverseasOrder(trx, id))) {
+        // 明細を渡さずに得意先だけ海外の取引先に替えたときも、税率を 0% にそろえる
+        await trx
+          .updateTable('sales_order_lines')
+          .set({ tax_rate: OVERSEAS_TAX_RATE })
+          .where('sales_order_id', '=', id)
+          .execute();
       }
 
       await this.reservations.consume(trx, id, { strict: true });

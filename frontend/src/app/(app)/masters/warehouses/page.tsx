@@ -51,6 +51,8 @@ export default function WarehousesPage() {
       title="倉庫"
       sub="在庫を置く場所です。委託先（販売先に預けている在庫）も倉庫として登録し、取引先と結びつけます"
       functionId="M-14"
+      // 一覧で編集・CSV 書き出し／取込（2026-10-12 受入 No.2・No.3）
+      csvSlug="warehouses"
       listPath="/masters/warehouses"
       writePath="/masters/warehouses"
       noSearch
@@ -63,6 +65,8 @@ export default function WarehousesPage() {
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
+      // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
+      rowLabel={(r) => `倉庫 ${r.warehouse_code}　${r.short_name}`}
       empty={() => ({ warehouse_code: '', short_name: '', is_consignment: false, partner: null, media_id: '', postal_code: '', address1: '', address2: '', tel: '', fax: '', sort_order: '', note: '' })}
       toForm={(r) => ({
         warehouse_code: r.warehouse_code, short_name: r.short_name, is_consignment: r.is_consignment,

@@ -11,7 +11,6 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { sql } from 'kysely';
 import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
@@ -20,7 +19,7 @@ import { NumberingService } from '../common/numbering.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { CASH_FIELD_LABELS, FieldLabelPipe, PAYMENT_FIELD_LABELS } from './field-label.pipe';
-import { PurchasingService, assertCashAmounts } from './purchasing.service';
+import { CASH_TOTAL, PurchasingService, assertCashAmounts } from './purchasing.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const ym = z.string().regex(/^\d{4}-\d{2}$/, '対象年月は YYYY-MM の形式で入力してください');
@@ -97,6 +96,8 @@ const PaymentSchema = z.object({
   partner_id: z.number().int().positive(),
   payment_date: ymd,
   amount: paymentAmount,
+  /** 通貨（2026-10-13 再テスト N5）。省略時は対象の仕入の通貨、仕入を選ばなければ仕入先の通貨。 */
+  currency: z.string().regex(/^[A-Z]{3}$/, '通貨は英大文字3文字のコードで選んでください（例 JPY・USD）').optional(),
   purchase_id: z.number().int().positive().nullish(),
   applied_amount: positive.nullish(),
   note: z.string().nullish(),
@@ -111,6 +112,8 @@ const PaymentUpdateSchema = z
     amount: paymentAmount.optional(),
     // null を送ると消込を外す。項目ごと省略したときは今の消込先を残す。
     purchase_id: z.number().int().positive().nullish(),
+    /** 通貨（2026-10-13 再テスト N5）。対象の仕入と同じ通貨でないと消し込めない。 */
+    currency: z.string().regex(/^[A-Z]{3}$/, '通貨は英大文字3文字のコードで選んでください（例 JPY・USD）').optional(),
     note: z.string().nullish(),
   })
   .refine((b) => Object.keys(b).length > 0, '直す項目を1つ以上入力してください');
@@ -311,11 +314,8 @@ export class PurchasingController {
       // 合計は入力された手段の合計。金額の足し算は SQL 側で行う。
       await trx
         .updateTable('cash_transactions')
-        .set({
-          amount: sql<string>`coalesce(cash_amount,0) + coalesce(transfer_amount,0) + coalesce(card_amount,0) + coalesce(bill_amount1,0)
-                            + coalesce(bill_amount2,0) + coalesce(offset_amount,0) + coalesce(check_amount,0)
-                            + coalesce(collection_amount,0) + coalesce(overseas_usd,0) + coalesce(overseas_cny,0)`,
-        })
+        // 海外送金は行の通貨と同じときだけ合計に入れる（2026-10-13 再テスト。CASH_TOTAL）
+        .set({ amount: CASH_TOTAL })
         .where('id', '=', created.id)
         .execute();
 
@@ -348,6 +348,8 @@ export class PurchasingController {
         'c.transaction_date as transaction_date',
         'c.partner_id as partner_id',
         'p.name1 as partner_name',
+        // 通貨（2026-10-12 No.39）。一覧の金額に添え、合計は通貨ごとに出す
+        'c.currency as currency',
         'c.amount as amount',
         'c.cash_amount as cash_amount',
         'c.transfer_amount as transfer_amount',

@@ -6,6 +6,7 @@ import { ReservationsService } from '../inventory/reservations.service';
 import { AllocationService } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { OVERSEAS_TAX_RATE, orderTradeType } from '../orders/order-defaults';
 import { applyTransform, decode, parseCsv } from './csv';
 
 export interface ImportInput {
@@ -265,7 +266,7 @@ export class PartnerOrderImportService {
     const partner = partnerCode
       ? await trx
           .selectFrom('partners')
-          .select(['id', 'default_trade_type'])
+          .select(['id', 'default_trade_type', 'is_overseas'])
           .where('partner_code', '=', partnerCode)
           .executeTakeFirst()
       : undefined;
@@ -372,7 +373,9 @@ export class PartnerOrderImportService {
         partner_id: partner.id,
         delivery_destination_id: destination.id,
         sales_category_id: sql<number>`(select id from sales_categories order by sort_order nulls last, code limit 1)`,
-        trade_type: partner.default_trade_type ?? undefined,
+        // 既定の取引区分が仕入先向けの「仕入」だと受注に入れられない（ck_so_trade で取込全体が止まっていた。
+        // 2026-10-12 受入テスト No.5）。受注入力と同じ読み替えを使う。
+        trade_type: orderTradeType(partner.default_trade_type),
         po_no: head['po_no'] ?? externalOrderNo,
         po_line_no: head['po_line_no'] ? Number(head['po_line_no']) : null,
         order_date: head['order_date'] ?? head['ship_date'] ?? sql<string>`current_date`,
@@ -404,6 +407,8 @@ export class PartnerOrderImportService {
           qty: line.values['qty'] ?? '0',
           unit_price: line.values['unit_price'] ?? '0',
           amount: sql<string>`${line.values['qty'] ?? '0'}::numeric * ${line.values['unit_price'] ?? '0'}::numeric`,
+          // 海外の得意先は受注入力と同じく 0%（請求・納品書と合わせる。2026-10-12 M-02）。国内は列の既定（10%）
+          tax_rate: partner.is_overseas ? OVERSEAS_TAX_RATE : undefined,
           created_by: userId,
         })
         .execute();

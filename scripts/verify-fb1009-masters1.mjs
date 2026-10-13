@@ -140,7 +140,8 @@ await check('M-02 取引先の「海外」を編集で外せ、戻せる', async
 await check('M-02 取引先 CSV の書き出しに「海外」列があり、海外の取引先は「有効」', async () => {
   const csv = (await raw('/masters/csv/partners/export', A)).toString('utf8').replace(/^﻿/, '');
   // セルはすべて "…" で囲まれて出る。今回の行にはカンマを含む値が無いので単純に割る
-  const cells = (line) => line.split(',').map((c) => c.replace(/^"|"$/g, ''));
+  // コードは頭の 0 を守るため ="..." の形で出る（2026-10-12 受入 No.3 D-7）ので外して比べる
+  const cells = (line) => line.split(',').map((c) => c.replace(/^"|"$/g, '').replace(/^=""(.*)""$/, '$1'));
   const lines = csv.split(/\r?\n/);
   const head = cells(lines[0]);
   const idx = head.indexOf('海外');

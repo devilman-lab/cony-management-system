@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api, ApiError } from '@/lib/api';
-import { useSalesCategories, useSimpleMaster, useWarehouses } from '@/lib/hooks';
-import { money, today } from '@/lib/format';
+import { useFetch, useSalesCategories, useSimpleMaster, useWarehouses } from '@/lib/hooks';
+import { isYen, moneyIn, moneyWithCurrency, plainDecimal, today } from '@/lib/format';
 import { Button, Card, CardHead, ErrorBox, FormRow, Input, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchDestinations, fetchPartners, fetchSkusFor, skuItemName, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -52,6 +52,22 @@ export interface OrderDraft {
 }
 
 let keySeq = 1;
+
+/**
+ * 海外の得意先（取引先マスタの「海外」）か。海外の得意先は消費税 0%（請求書・納品書と同じ。2026-10-12 M-02）。
+ * サーバーも海外の得意先の明細は 0% で登録する。
+ */
+const isOverseasPartner = (o: Option | null) => Boolean((o?.raw as { is_overseas?: boolean } | undefined)?.is_overseas);
+/**
+ * 取引先の通貨（2026-10-12 No.39）。受注の通貨は取引先の通貨で固定（サーバーの引き金が入れる）。
+ * 1つの請求書に違う通貨が混ざらないよう、受注入力では変えられない。
+ */
+const partnerCurrency = (o: Option | null) => (o?.raw as { currency?: string } | undefined)?.currency || 'JPY';
+/** 国内に戻したときの税率。商品の税率、無ければ 10%。 */
+const domesticRate = (l: LineDraft) => {
+  const r = (l.sku?.raw as Partial<SkuRow> | undefined)?.tax_rate;
+  return r !== undefined && r !== null ? Number(r).toFixed(2) : '10.00';
+};
 export const emptyLine = (): LineDraft => ({ key: keySeq++, line_type: '商品', sku: null, item_name: '', qty: '1', unit_price: '0', tax_rate: '10.00', partner_product_id: null });
 
 export const emptyOrder = (): OrderDraft => ({
@@ -142,6 +158,10 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
   const warehouses = useWarehouses();
   const staff = useSimpleMaster('sales_staff');
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
+  // 海外の得意先の消費税の表記（免税（税抜扱い）／課税対象外）。システム設定で決まる
+  const overseasTax = useFetch<{ tax_rate: string; label: string }>('/orders/overseas-tax');
+  const overseas = isOverseasPartner(d.partner);
+  const currency = partnerCurrency(d.partner);
 
   const set = <K extends keyof OrderDraft>(k: K, v: OrderDraft[K]) => setD((s) => ({ ...s, [k]: v }));
   const setLine = (key: number, patch: Partial<LineDraft>) =>
@@ -157,7 +177,17 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
 
   // 取引先を選んだら納品先・取引条件・販売担当を引き継ぐ
   const onPartner = useCallback(async (o: Option | null) => {
-    setD((s) => ({ ...s, partner: o, delivery_destination_id: '' }));
+    setD((s) => {
+      // 海外の得意先にしたら明細の税率を 0% に、海外から国内に戻したら商品の税率に戻す
+      const toOverseas = isOverseasPartner(o);
+      const fromOverseas = isOverseasPartner(s.partner);
+      const lines = toOverseas
+        ? s.lines.map((l) => ({ ...l, tax_rate: '0.00' }))
+        : fromOverseas
+          ? s.lines.map((l) => ({ ...l, tax_rate: domesticRate(l) }))
+          : s.lines;
+      return { ...s, partner: o, delivery_destination_id: '', lines };
+    });
     setDestinations([]);
     if (!o) return;
     const p = o.raw as PartnerRow;
@@ -200,7 +230,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     setLine(key, {
       sku: o,
       item_name: skuName,
-      tax_rate: Number(s.tax_rate).toFixed(2),
+      tax_rate: isOverseasPartner(d.partner) ? '0.00' : Number(s.tax_rate).toFixed(2),
       line_type: s.is_set ? 'セット商品' : '商品',
       partner_product_id: null,
       note: undefined,
@@ -220,7 +250,8 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
         );
         if (pp) {
           setLine(key, {
-            unit_price: pp.unit_price,
+            // 得意先別の単価は "12.5000" の形で返るので、入力欄には "12.5" で入れる（再テスト R4）
+            unit_price: plainDecimal(pp.unit_price),
             partner_product_id: pp.id,
             // 販売名が未登録（null・空）なら SKU の品名のままにする。undefined を入れると品名が失われ、
             // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
@@ -290,6 +321,13 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
               <FormRow label="取引先" required>
                 <SearchSelect value={d.partner} onChange={onPartner} fetchOptions={fetchCustomers} placeholder="取引先コード・名称で検索" width="100%" />
               </FormRow>
+              {/* 通貨は取引先マスタの通貨で固定（2026-10-12 No.39）。円以外の取引先のときだけ出す */}
+              {d.partner && !isYen(currency) && (
+                <FormRow label="通貨">
+                  <b className="num">{currency}</b>
+                  <span className="text-[10.5px] text-[var(--color-ink-3)]">取引先の通貨です。単価・金額はこの通貨で入れます（変えるときは取引先マスタで）</span>
+                </FormRow>
+              )}
               <FormRow label="納品先" required={d.order_type === '卸'}>
                 <Select value={d.delivery_destination_id} onChange={(e) => {
                   const id = e.target.value;
@@ -448,13 +486,13 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                           <Input right value={l.unit_price} onChange={(e) => setLine(l.key, { unit_price: e.target.value })} className="!h-[26px] !w-[90px]" />
                         </td>
                         <td className="c">
-                          <Select value={l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} className="!h-[26px] !w-[72px]">
+                          <Select value={overseas ? '0.00' : l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} disabled={overseas} title={overseas ? '海外の得意先は 0% です' : undefined} className="!h-[26px] !w-[72px]">
                             <option value="10.00">10%</option>
                             <option value="8.00">8%</option>
                             <option value="0.00">0%</option>
                           </Select>
                         </td>
-                        <td className="r num font-semibold">{money(Number(l.qty || 0) * Number(l.unit_price || 0))}</td>
+                        <td className="r num font-semibold">{moneyIn(Number(l.qty || 0) * Number(l.unit_price || 0), currency)}</td>
                         <td className="c">
                           <button type="button" className="btn btn-quiet !px-1.5 !h-6" onClick={() => set('lines', d.lines.filter((x) => x.key !== l.key))} aria-label="行を削除" disabled={d.lines.length === 1}>
                             ×
@@ -470,7 +508,14 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
               <span className="text-[var(--color-ink-3)]">明細</span>
               <b className="num">{d.lines.length} 行</b>
               <span className="text-[var(--color-ink-3)]">合計（税抜）</span>
-              <b className="num">{money(total)} 円</b>
+              <b className="num">{moneyWithCurrency(total, currency)}</b>
+              {overseas && (
+                <>
+                  <span className="text-[var(--color-ink-3)]">消費税</span>
+                  <b>{overseasTax.data?.label ?? '0%'}</b>
+                  <span className="text-[10.5px] text-[var(--color-ink-3)]">海外の得意先のため税率 0%（請求書・納品書も同じ）</span>
+                </>
+              )}
               <span className="text-[var(--color-ink-3)]">送料調整</span>
               <Input right value={d.shipping_fee_adjustment} onChange={(e) => set('shipping_fee_adjustment', e.target.value)} className="!h-[24px] !w-[90px]" placeholder="自動" />
               <span className="text-[10.5px] text-[var(--color-ink-3)]">入れると自動計算の送料を上書きします（直送はここに入力）</span>

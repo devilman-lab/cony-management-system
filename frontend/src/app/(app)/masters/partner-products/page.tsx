@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { useAuth } from '@/lib/auth';
 import { useSimpleMaster } from '@/lib/hooks';
-import { money } from '@/lib/format';
+import { moneyCell } from '@/lib/format';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
@@ -28,6 +28,8 @@ interface PpRow extends Record<string, unknown> {
   sales_name2: string | null;
   unit_price: string;
   retail_price: string | null;
+  /** 取引先の通貨（2026-10-13 再テスト）。外貨の単価は「USD 12.50」と出す */
+  partner_currency?: string;
   cost_price: string | null;
   partner_color: string | null;
   partner_size: string | null;
@@ -50,6 +52,12 @@ interface Form {
   partner: Option | null;
   sku: Option | null;
   partner_product_code: string;
+  /**
+   * 先方の商品コードに自社SKUから写したコード。手で打ったコードと見分けるために覚えておく。
+   * SKU を「×」で外しても消さない（外して選び直したときも、写したままのコードなら新しい SKU に追従させるため）。
+   * 保存はしない。
+   */
+  copied_code: string;
   partner_jan: string;
   jan_code: string;
   shipping_jan: string;
@@ -113,17 +121,19 @@ export default function PartnerProductsPage() {
         { key: 'size_name', label: 'サイズ', width: 48, render: (r) => r.size_name ?? '' },
         { key: 'partner_product_code', label: '先方コード', width: 70, render: (r) => <Num>{r.partner_product_code ?? ''}</Num> },
         { key: 'partner_jan', label: '先方JAN', width: 100, nowrap: true, render: (r) => <Num>{r.partner_jan ?? ''}</Num> },
-        { key: 'unit_price', label: '卸単価', r: true, width: 62, render: (r) => money(r.unit_price) },
-        { key: 'retail_price', label: '上代', r: true, width: 62, render: (r) => money(r.retail_price) },
+        { key: 'unit_price', label: '卸単価', r: true, width: 62, render: (r) => moneyCell(r.unit_price, r.partner_currency) },
+        { key: 'retail_price', label: '上代', r: true, width: 62, render: (r) => moneyCell(r.retail_price, r.partner_currency) },
         { key: 'is_active', label: '', width: 36, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
-      empty={() => ({ partner, sku: null, partner_product_code: '', partner_jan: '', jan_code: '', shipping_jan: '', old_unit_price: '', price_changed_date: '', sales_name: '', sales_name2: '', unit_price: '', retail_price: '', cost_price: '', partner_color: '', partner_size: '', color_name: '', size_name: '', memo: '', sort_order: '', note: '' })}
+      // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
+      rowLabel={(r) => `得意先別商品 ${r.partner_code} ${r.partner_name} × ${r.sku_code}${r.sales_name ? `（${r.sales_name}）` : ` ${r.product_name}`}`}
+      empty={() => ({ partner, sku: null, partner_product_code: '', copied_code: '', partner_jan: '', jan_code: '', shipping_jan: '', old_unit_price: '', price_changed_date: '', sales_name: '', sales_name2: '', unit_price: '', retail_price: '', cost_price: '', partner_color: '', partner_size: '', color_name: '', size_name: '', memo: '', sort_order: '', note: '' })}
       toForm={(r) => ({
         partner: { id: r.partner_id, label: r.partner_name, sub: r.partner_code },
         // 候補（fetchSkus）と同じ書き方。編集画面ではカラー・サイズまで全部見せる（2026-10-09 マスター編② M-19）
         sku: { id: r.sku_id, label: `${r.sku_code}　${r.product_name}${r.color_name ? ' ' + r.color_name : ''}${r.size_name ? ' ' + r.size_name : ''}` },
-        partner_product_code: s(r.partner_product_code), partner_jan: s(r.partner_jan), jan_code: s(r.jan_code),
+        partner_product_code: s(r.partner_product_code), copied_code: r.partner_product_code === r.sku_code ? r.sku_code : '', partner_jan: s(r.partner_jan), jan_code: s(r.jan_code),
         shipping_jan: s(r.shipping_jan), old_unit_price: dec(r.old_unit_price), price_changed_date: r.price_changed_date ? String(r.price_changed_date).slice(0, 10) : '',
         sales_name: s(r.sales_name), sales_name2: s(r.sales_name2), unit_price: dec(r.unit_price), retail_price: dec(r.retail_price), cost_price: dec(r.cost_price),
         partner_color: s(r.partner_color), partner_size: s(r.partner_size), color_name: s(r.print_color_name), size_name: s(r.print_size_name),
@@ -175,10 +185,12 @@ export default function PartnerProductsPage() {
                   // 先方の商品コードが空、または前に選んだ SKU のコードを写したままのときは、自社SKUコードを写す。
                   // 多くの取引先で同じコードを使うため、都度手で打つと打ち間違いの元になる（1001 のご指摘）。
                   // 選び直したときに前の SKU のコードが残り、食い違ったまま保存できていた。
+                  // 「×」で外してから選び直したときも追従させる（外すと前の SKU が空になるので、写したコードは copied_code で覚えておく。T3 No.30）。
                   const skuCode = (o?.raw as { sku_code?: string } | undefined)?.sku_code ?? '';
                   const prevCode = f.sku ? f.sku.label.split('　')[0] : '';
                   const current = f.partner_product_code.trim();
-                  set(skuCode && (current === '' || current === prevCode) ? { sku: o, partner_product_code: skuCode } : { sku: o });
+                  const copied = current === '' || current === f.copied_code || current === prevCode;
+                  set(skuCode && copied ? { sku: o, partner_product_code: skuCode, copied_code: skuCode } : { sku: o });
                 }}
                 fetchOptions={fetchSkus}
                 placeholder="SKU・JAN・商品名で検索"

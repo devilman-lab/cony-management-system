@@ -102,9 +102,10 @@ export class ReservationsService {
    * strict=false（CSV取込）では、枠を超えても止めずに知らせるだけにする。
    * 枠が登録されていない商品はそのまま通す（枠は任意）。
    *
-   * セット商品（Z-31）: セット SKU の枠があればそれを減らす。無ければ構成品の枠を
+   * セット商品（Z-31）: セット SKU の枠と構成品の枠の段を比べ、上の段のほうで減らす
+   * （同じ段ならセット SKU の枠。セット SKU の枠が無ければ構成品）。構成品で減らすときは
    * 「構成数 × セット数」ずつ減らす。通販CSVのように内訳商品の行が付いている受注は、
-   * セット SKU の枠が無ければ内訳商品の行がそれぞれ構成品の枠を減らす（二重に減らさない）。
+   * 構成品で減らすときは内訳商品の行がそれぞれ構成品の枠を減らす（二重に減らさない）。
    */
   async consume(trx: Transaction<DB>, orderId: number, opts: { strict: boolean }): Promise<string[]> {
     const scope = await this.orderScope(trx, orderId);
@@ -131,9 +132,11 @@ export class ReservationsService {
 
     const warnings: string[] = [];
     const over: string[] = [];
-    const report = (lineNo: number, msg: string) => {
-      if (opts.strict) over.push(msg);
-      else warnings.push(`${lineNo}行目：引当在庫の枠を超えています（${msg}）`);
+    // 足りない確保ごとに「何行目の何が・どの確保で・いくつ要って・いくつ残っているか」を出す（2026-10-12）
+    const report = async (lineNo: number, what: string, need: string, frame: { id: number; remaining: string }) => {
+      const msg = `${what}：必要 ${trimQty(need)} / 残り ${trimQty(frame.remaining)}（確保：${await this.describeFrame(trx, frame.id)}）`;
+      if (opts.strict) over.push(`${lineNo}行目 ${msg}`);
+      else warnings.push(`${lineNo}行目：引当在庫（確保数）を超えています（${msg}）`);
     };
 
     const hasChild = new Set(lines.map((l) => l.parent_line_no).filter((n): n is number => n !== null));
@@ -145,10 +148,20 @@ export class ReservationsService {
       if (line.line_type !== 'セット商品' || !line.sku_id || !line.positive) continue;
 
       const frame = await this.pickFrame(trx, scope, line.sku_id, line.qty);
-      if (frame) {
+      const components = await this.components(trx, line.sku_id, line.qty);
+      // 構成品の枠を先に選んでおく（段を比べるため。減らすのは下で決めてから）
+      const picked: { c: (typeof components)[number]; cf: Awaited<ReturnType<ReservationsService['pickFrame']>> }[] = [];
+      for (const c of components) picked.push({ c, cf: await this.pickFrame(trx, scope, c.sku_id, c.need) });
+      const componentTier = Math.min(...picked.map((p) => p.cf?.tier ?? Infinity));
+
+      // セット SKU の枠と構成品の枠の段（取引先指定 → 媒体指定 → どちらも無し）を比べる（Z-31）。
+      // 構成品の枠のほうが上の段なら構成品で減らす。同じ段ならセット SKU の枠を使う。
+      // セット SKU の枠を先に見るだけだと、取引先 P1 のセット受注が、媒体で共有している
+      // セット SKU の確保を食い、P1 に取っておいた構成品の確保が使われなかった（2026-10-12 受入テスト）。
+      if (frame && frame.tier <= componentTier) {
         setHandled.add(line.line_no);
         if (!frame.enough) {
-          report(line.line_no, `${line.sku_code ?? ''}（${line.item_name}）必要 ${trimQty(line.qty)} / 引当在庫の残り ${trimQty(frame.remaining)}`);
+          await report(line.line_no, `${line.sku_code ?? ''}（${line.item_name}）`, line.qty, frame);
           continue;
         }
         await this.take(trx, frame.id, line.qty);
@@ -159,17 +172,12 @@ export class ReservationsService {
       // 内訳商品の行が付いていれば、その行が構成品の枠を減らす
       if (hasChild.has(line.line_no)) continue;
 
-      // セット SKU の枠が無い手入力のセット行: 構成品の枠を「構成数 × セット数」ずつ減らす
-      const components = await this.components(trx, line.sku_id, line.qty);
+      // 手入力のセット行: 構成品の枠を「構成数 × セット数」ずつ減らす
       let marker: number | null = null;
-      for (const c of components) {
-        const cf = await this.pickFrame(trx, scope, c.sku_id, c.need);
+      for (const { c, cf } of picked) {
         if (!cf) continue;
         if (!cf.enough) {
-          report(
-            line.line_no,
-            `${line.sku_code ?? ''}（${line.item_name}）の構成品 ${c.sku_code} 必要 ${trimQty(c.need)} / 引当在庫の残り ${trimQty(cf.remaining)}`,
-          );
+          await report(line.line_no, `${line.sku_code ?? ''}（${line.item_name}）の構成品 ${c.sku_code}`, c.need, cf);
           continue;
         }
         await this.take(trx, cf.id, c.need);
@@ -189,7 +197,7 @@ export class ReservationsService {
       const frame = await this.pickFrame(trx, scope, line.sku_id, line.qty);
       if (!frame) continue;
       if (!frame.enough) {
-        report(line.line_no, `${line.sku_code ?? ''}（${line.item_name}）必要 ${trimQty(line.qty)} / 引当在庫の残り ${trimQty(frame.remaining)}`);
+        await report(line.line_no, `${line.sku_code ?? ''}（${line.item_name}）`, line.qty, frame);
         continue;
       }
       await this.take(trx, frame.id, line.qty);
@@ -197,10 +205,8 @@ export class ReservationsService {
     }
 
     if (over.length > 0) {
-      throw new BadRequestException({
-        message: '引当在庫（販売カテゴリーの枠）を超えています。枠を増やしてから登録してください',
-        over,
-      });
+      // 以前は「販売カテゴリーの枠」と出していたが、今の確保は取引先・媒体ごと。どの確保が足りないかは over に1行ずつ出す
+      throw new BadRequestException({ message: '引当在庫（確保数）を超えています。', over });
     }
     return warnings;
   }
@@ -236,7 +242,11 @@ export class ReservationsService {
         scope ??= await this.orderScope(trx, orderId);
         const components = await this.components(trx, line.sku_id, line.qty);
         for (const c of components) {
-          const frameId = await this.findTakenFrame(trx, scope, c.sku_id, c.need, line.frame_group_id);
+          // 結んだ枠（最初に減らした構成品の枠）はそのまま戻す。ほかの構成品は当て方で引き直す
+          const frameId =
+            c.sku_id === line.frame_sku_id
+              ? (line.reservation_id as number)
+              : await this.findTakenFrame(trx, scope, c.sku_id, c.need, line.frame_group_id);
           if (frameId !== null) await this.giveBack(trx, frameId, c.need);
         }
       }
@@ -278,7 +288,7 @@ export class ReservationsService {
     scope: OrderScope,
     skuId: number,
     need: string,
-  ): Promise<{ id: number; remaining: string; enough: boolean } | null> {
+  ): Promise<{ id: number; remaining: string; enough: boolean; tier: number } | null> {
     const rows = await trx
       .selectFrom('reservations as r')
       .select([
@@ -295,8 +305,43 @@ export class ReservationsService {
       .forUpdate()
       .execute();
     if (rows.length === 0) return null;
-    const top = rows.filter((r) => r.tier === rows[0].tier);
-    return top.find((r) => r.enough) ?? top[0];
+    const top = rows.filter((r) => Number(r.tier) === Number(rows[0].tier));
+    const hit = top.find((r) => r.enough) ?? top[0];
+    return { ...hit, tier: Number(hit.tier) };
+  }
+
+  /**
+   * 足りない確保を、利用者が一覧で探せる言葉にする（販売期間・取引先または媒体・販売カテゴリー・項目）。
+   * 「どの確保が足りないのか」が出ないと、どれを増やせばよいか分からないため（2026-10-12 受入テスト）。
+   */
+  private async describeFrame(trx: Transaction<DB>, frameId: number): Promise<string> {
+    const f = await trx
+      .selectFrom('reservations as r')
+      .leftJoin('reservation_groups as g', 'g.id', 'r.group_id')
+      .leftJoin('partners as p', 'p.id', 'r.partner_id')
+      .leftJoin('media as m', 'm.id', 'r.media_id')
+      .innerJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
+      .select([
+        'r.period_from as period_from',
+        'r.period_to as period_to',
+        'p.name1 as partner_name',
+        'm.name as media_name',
+        'sc.name as sales_category_name',
+        'g.item_label as item_label',
+      ])
+      .where('r.id', '=', frameId)
+      .executeTakeFirstOrThrow();
+    const who = f.partner_name
+      ? `取引先 ${f.partner_name}`
+      : f.media_name
+        ? `媒体 ${f.media_name}`
+        : '取引先・媒体の指定なし';
+    return [
+      `販売期間 ${slash(f.period_from)}〜${slash(f.period_to)}`,
+      who,
+      `販売カテゴリー ${f.sales_category_name}`,
+      `項目 ${f.item_label ?? 'なし'}`,
+    ].join('・');
   }
 
   /** 構成品の枠を戻す先。結んだ枠と同じ確保を優先し、無ければ当て方で引き直す。 */

@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 
+import { useAuth } from '@/lib/auth';
 import { useList, useWarehouses } from '@/lib/hooks';
 import { qty, ymdhm } from '@/lib/format';
-import { Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar } from '@/components/ui';
+import { Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, type Column } from '@/components/ui';
 
 interface MoveRow extends Record<string, unknown> {
   id: number;
@@ -13,8 +14,9 @@ interface MoveRow extends Record<string, unknown> {
   ref_table: string;
   ref_id: number;
   qty: string;
-  qty_before: string;
-  qty_after: string;
+  /** 実在庫そのもの。在庫を更新できない人には API が返さない（在庫編 Z-02） */
+  qty_before?: string;
+  qty_after?: string;
   sku_code: string;
   product_name: string;
   warehouse_name: string;
@@ -25,6 +27,10 @@ const TYPES = ['入荷', '出荷', '出荷取消', '引当', '引当解除', '�
 const REF: Record<string, string> = { shipments: '出荷', sales_order_lines: '受注', receipts: '入荷', returns: '返品', stock_adjustments: '在庫調整', refurbishments: '再生' };
 
 export default function MovesPage() {
+  const { can } = useAuth();
+  // 「前」「後」は実在庫そのもの。在庫表で実在庫を隠す人（在庫を更新できない人）には列ごと出さない
+  // （在庫編 Z-02。在庫表と同じ条件。API もこの人には返さない）
+  const showQty = can('S-01', 'update');
   const warehouses = useWarehouses();
   const [type, setType] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
@@ -66,8 +72,12 @@ export default function MovesPage() {
             { key: 'product_name', label: '商品' },
             { key: 'warehouse_name', label: '倉庫', width: 72 },
             { key: 'qty', label: '増減', r: true, width: 62, render: (r) => <span className={Number(r.qty) < 0 ? 'text-[var(--color-crit-500)]' : ''}>{Number(r.qty) > 0 ? '+' : ''}{qty(r.qty)}</span> },
-            { key: 'qty_before', label: '前', r: true, width: 58, render: (r) => qty(r.qty_before) },
-            { key: 'qty_after', label: '後', r: true, width: 58, render: (r) => qty(r.qty_after) },
+            ...(showQty
+              ? ([
+                  { key: 'qty_before', label: '前', r: true, width: 58, render: (r) => qty(r.qty_before) },
+                  { key: 'qty_after', label: '後', r: true, width: 58, render: (r) => qty(r.qty_after) },
+                ] as Column<MoveRow>[])
+              : []),
             { key: 'ref_table', label: '元伝票', width: 96, render: (r) => `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}` },
             { key: 'user_name', label: '担当', width: 72, render: (r) => r.user_name ?? '' },
           ]}

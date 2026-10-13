@@ -17,6 +17,7 @@ export const PAYMENT_FIELD_LABELS: Record<string, string> = {
   amount: '支払額',
   applied_amount: '消込額',
   purchase_id: '対象の仕入',
+  currency: '通貨',
 };
 
 /** 入出金の画面で使っている欄の名前。英語の項目名がそのまま出ないようにする。 */

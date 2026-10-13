@@ -28,6 +28,11 @@ const SkuSearchSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === 'true')),
+  /** true＝すでにセット登録がある SKU を外す（セット登録の新規・コピーのセット SKU 欄。M-14） */
+  without_set: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 type SkuSearchQuery = z.infer<typeof SkuSearchSchema>;

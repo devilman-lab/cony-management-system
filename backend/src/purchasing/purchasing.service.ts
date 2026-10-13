@@ -76,6 +76,8 @@ export interface CashPaymentInput {
   partner_id: number;
   payment_date: string;
   amount: string;
+  /** 通貨。省略時は消込先の仕入の通貨、仕入を選ばなければ仕入先の通貨（2026-10-13 再テスト N5）。 */
+  currency?: string;
   purchase_id?: number | null;
   applied_amount?: string | null;
   note?: string | null;
@@ -87,8 +89,32 @@ export interface UpdateCashPaymentInput {
   amount?: string;
   /** null を渡すと消込を外す。省略のときは今の消込先を残す。 */
   purchase_id?: number | null;
+  /** 通貨。消込先の仕入と同じ通貨でないと消し込めない。消し込んだままでは直せない（2026-10-13 再テスト N5）。 */
+  currency?: string;
   note?: string | null;
 }
+
+/**
+ * 支払と消込先の仕入の通貨がそろっているか（2026-10-13 再テスト N5）。
+ * 円の支払をドルの仕入に消し込むと、買掛残高の数字に意味が無くなるため断る。
+ */
+function assertSamePaymentCurrency(paymentCurrency: string, purchaseCurrency: string, purchaseNo: string): void {
+  if (paymentCurrency !== purchaseCurrency) {
+    throw new BadRequestException(
+      `支払の通貨（${paymentCurrency}）と仕入「${purchaseNo}」の通貨（${purchaseCurrency}）が違うため、消し込めません。通貨を合わせるか、対象の仕入を選び直してください`,
+    );
+  }
+}
+
+/**
+ * 入出金の合計（2026-10-13 再テスト）。手段ごとの内訳を足す。手数料は差し引きなので入れない。
+ * 海外送金 (USD)(CNY) は換算していないので、行の通貨と同じときだけ合計に入れる
+ * （円の行に USD 100 を足して「10,100 円」にしない）。docs/migrations/2026-10-12_sales_currency.sql の 8 と同じ式。
+ */
+export const CASH_TOTAL = sql<string>`coalesce(cash_amount,0) + coalesce(transfer_amount,0) + coalesce(card_amount,0) + coalesce(bill_amount1,0)
+  + coalesce(bill_amount2,0) + coalesce(offset_amount,0) + coalesce(check_amount,0) + coalesce(collection_amount,0)
+  + case when currency = 'USD' then coalesce(overseas_usd,0) else 0 end
+  + case when currency = 'CNY' then coalesce(overseas_cny,0) else 0 end`;
 
 /** 入出金の金額欄。呼び方は画面（入出金処理）に出ているものに合わせる。 */
 const CASH_MEANS = [
@@ -364,8 +390,13 @@ export class PurchasingService {
           'p.division as division',
           'p.purchase_date as purchase_date',
           'p.total_amount as total_amount',
+          // 通貨（2026-10-12 No.39）。一覧の金額に添え、合計は通貨ごとに出す
+          'p.currency as currency',
           'p.status as status',
           's.name1 as supplier_name',
+          // 支払った額と残り。支払の登録の「対象の仕入」で、残りを見て選べるように（再テスト R4）
+          sql<string>`coalesce((select sum(cp.amount) from cash_payments cp where cp.purchase_id = p.id), 0)`.as('paid_amount'),
+          sql<string>`p.total_amount - coalesce((select sum(cp.amount) from cash_payments cp where cp.purchase_id = p.id), 0)`.as('unpaid_amount'),
         ])
         .orderBy('p.purchase_date', 'desc')
         .orderBy('p.purchase_no', 'desc')
@@ -441,10 +472,12 @@ export class PurchasingService {
 
   /** 支払の登録と消込。 */
   async createPayment(input: CashPaymentInput, userId: number) {
+    // 通貨（2026-10-13 再テスト N5）。指定が無ければ消込先の仕入の通貨、仕入も無ければ仕入先の通貨。
+    let currency = input.currency;
     if (input.purchase_id) {
       const purchase = await this.db
         .selectFrom('purchases')
-        .select(['id', 'purchase_no', 'supplier_partner_id', 'status'])
+        .select(['id', 'purchase_no', 'supplier_partner_id', 'status', 'currency'])
         .where('id', '=', input.purchase_id)
         .executeTakeFirst();
       if (!purchase) throw new NotFoundException('消込先の仕入が見つかりません');
@@ -457,6 +490,12 @@ export class PurchasingService {
           `仕入「${purchase.purchase_no}」は取消済みです。別の仕入を選ぶか、消込先を空にしてください`,
         );
       }
+      currency ??= purchase.currency;
+      assertSamePaymentCurrency(currency, purchase.currency, purchase.purchase_no);
+    }
+    if (currency === undefined) {
+      const partner = await this.db.selectFrom('partners').select('currency').where('id', '=', input.partner_id).executeTakeFirst();
+      currency = partner?.currency ?? 'JPY';
     }
 
     const applied = input.applied_amount ?? (input.purchase_id ? input.amount : '0');
@@ -470,6 +509,7 @@ export class PurchasingService {
         partner_id: input.partner_id,
         payment_date: input.payment_date,
         amount: input.amount,
+        currency,
         purchase_id: input.purchase_id ?? null,
         applied_amount: applied,
         note: input.note ?? null,
@@ -509,6 +549,8 @@ export class PurchasingService {
           's.partner_code as partner_code',
           's.name1 as supplier_name',
           'cp.amount as amount',
+          // 支払の通貨（2026-10-13 再テスト N5 で支払そのものに持たせた）
+          'cp.currency as currency',
           'cp.applied_amount as applied_amount',
           'cp.purchase_id as purchase_id',
           'pu.purchase_no as purchase_no',
@@ -536,7 +578,7 @@ export class PurchasingService {
     return this.db.transaction().execute(async (trx) => {
       const current = await trx
         .selectFrom('cash_payments')
-        .select(['id', 'partner_id', 'amount', 'applied_amount', 'purchase_id'])
+        .select(['id', 'partner_id', 'amount', 'currency', 'applied_amount', 'purchase_id'])
         .where('id', '=', id)
         .forUpdate()
         .executeTakeFirst();
@@ -548,11 +590,19 @@ export class PurchasingService {
       }
 
       const nextPurchaseId = input.purchase_id === undefined ? current.purchase_id : input.purchase_id;
+      const nextCurrency = input.currency ?? current.currency;
+      // 登録済みの支払の通貨は、消込先を選んだついでには変えない（入金と同じ。2026-10-13 再テスト N1・N5）
+      if (nextCurrency !== current.currency && nextPurchaseId !== null) {
+        throw new BadRequestException(
+          `消し込んだまま支払の通貨は直せません（${current.currency} → ${nextCurrency}）。` +
+            '通貨が違う仕入には消し込めないので、対象の仕入を「指定しない」にして通貨を直すか、支払を削除して入れ直してください',
+        );
+      }
 
       if (nextPurchaseId !== null) {
         const purchase = await trx
           .selectFrom('purchases')
-          .select(['id', 'purchase_no', 'supplier_partner_id', 'status'])
+          .select(['id', 'purchase_no', 'supplier_partner_id', 'status', 'currency'])
           .where('id', '=', nextPurchaseId)
           .executeTakeFirst();
         if (!purchase) throw new NotFoundException('消込先の仕入が見つかりません');
@@ -565,6 +615,7 @@ export class PurchasingService {
             `仕入「${purchase.purchase_no}」は取消済みです。別の仕入を選ぶか、消込先を空にしてください`,
           );
         }
+        assertSamePaymentCurrency(nextCurrency, purchase.currency, purchase.purchase_no);
       }
 
       // 金額か消込先を触ったときだけ消込額を引き直す。一部消込にしてある額を勝手に戻さないため。
@@ -584,6 +635,7 @@ export class PurchasingService {
         updated_at: new Date(),
       };
       if (input.payment_date !== undefined) patch.payment_date = input.payment_date;
+      if (input.currency !== undefined) patch.currency = input.currency;
       if (input.note !== undefined) patch.note = input.note ?? null;
 
       await trx
@@ -701,11 +753,8 @@ export class PurchasingService {
       // 合計は登録のときと同じ組み立て。金額の足し算は SQL 側で行う。
       await trx
         .updateTable('cash_transactions')
-        .set({
-          amount: sql<string>`coalesce(cash_amount,0) + coalesce(transfer_amount,0) + coalesce(card_amount,0) + coalesce(bill_amount1,0)
-                            + coalesce(bill_amount2,0) + coalesce(offset_amount,0) + coalesce(check_amount,0)
-                            + coalesce(collection_amount,0) + coalesce(overseas_usd,0) + coalesce(overseas_cny,0)`,
-        })
+        // 海外送金は行の通貨と同じときだけ合計に入れる（2026-10-13 再テスト。CASH_TOTAL）
+        .set({ amount: CASH_TOTAL })
         .where('id', '=', id)
         .execute();
 
@@ -758,24 +807,41 @@ export class PurchasingService {
    * 取り消した仕入は繰越にも期間内にも入れない。
    */
   async apBalances(query: { from: string; to: string }) {
+    // 通貨ごとに分ける（2026-10-12 No.39）。ドルの仕入を円の残高に足さない。
+    // 取引先の通貨の行は必ず出し、ほかの通貨の仕入がある取引先は、その通貨の行も出す。
+    // 支払は支払そのものの通貨で数える（2026-10-13 再テスト N5）。
+    const PAYMENT_CURRENCY = sql`cp.currency`;
     return this.db
       .selectFrom((eb) =>
         eb
           .selectFrom('partners as p')
+          .innerJoinLateral(
+            (lb) =>
+              lb
+                .selectFrom(sql<{ currency: string }>`(select p.currency as currency
+                       union select pu.currency from purchases pu
+                        where pu.supplier_partner_id = p.id and pu.status <> '取消'
+                       union select cp.currency from cash_payments cp where cp.partner_id = p.id)`.as('cx'))
+                .select('cx.currency')
+                .as('cur'),
+            (join) => join.onTrue(),
+          )
           .select([
             'p.id as partner_id',
             'p.partner_code as partner_code',
             'p.name1 as partner_name',
+            'cur.currency as currency',
             sql<string>`(select coalesce(sum(pu.total_amount),0) from purchases pu
-                          where pu.supplier_partner_id = p.id and pu.status <> '取消'
+                          where pu.supplier_partner_id = p.id and pu.status <> '取消' and pu.currency = cur.currency
                             and pu.purchase_date < ${query.from})
                       - (select coalesce(sum(cp.amount),0) from cash_payments cp
-                          where cp.partner_id = p.id and cp.payment_date < ${query.from})`.as('carryover_amount'),
+                          where cp.partner_id = p.id and ${PAYMENT_CURRENCY} = cur.currency
+                            and cp.payment_date < ${query.from})`.as('carryover_amount'),
             sql<string>`(select coalesce(sum(pu.total_amount),0) from purchases pu
-                          where pu.supplier_partner_id = p.id and pu.status <> '取消'
+                          where pu.supplier_partner_id = p.id and pu.status <> '取消' and pu.currency = cur.currency
                             and pu.purchase_date >= ${query.from} and pu.purchase_date <= ${query.to})`.as('purchase_amount'),
             sql<string>`(select coalesce(sum(cp.amount),0) from cash_payments cp
-                          where cp.partner_id = p.id
+                          where cp.partner_id = p.id and ${PAYMENT_CURRENCY} = cur.currency
                             and cp.payment_date >= ${query.from} and cp.payment_date <= ${query.to})`.as('payment_amount'),
           ])
           .where('p.is_supplier', '=', true)
@@ -786,12 +852,16 @@ export class PurchasingService {
         'ap.partner_id',
         'ap.partner_code',
         'ap.partner_name',
+        'ap.currency',
         'ap.carryover_amount',
         'ap.purchase_amount',
         'ap.payment_amount',
         sql<string>`ap.carryover_amount + ap.purchase_amount - ap.payment_amount`.as('balance'),
       ])
       .orderBy('ap.partner_code', 'asc')
+      // 円の行を先に
+      .orderBy(sql`ap.currency <> 'JPY'`)
+      .orderBy('ap.currency', 'asc')
       .execute();
   }
 }

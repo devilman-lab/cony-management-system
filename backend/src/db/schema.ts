@@ -416,6 +416,8 @@ export interface PartnersTable {
   is_royalty_payee: Generated<boolean>;
   /** 海外の取引先。消費税を免税（税抜扱い）または課税対象外として扱う（2026-10-09 マスター編②）。 どちらで扱うかはシステム設定 OVERSEAS_TAX_TREATMENT で決める  [BOOLEAN] */
   is_overseas: Generated<boolean>;
+  /** 取引通貨。区分値 CURRENCY のコード（JPY・USD など）。受注・請求・入金はこの通貨で作る （2026-10-12 No.39「売上仕入用の通貨」）。海外の取引先で使う想定  [VARCHAR(3)] */
+  currency: Generated<string>;
   /** ロイヤリティは royalty_rules に一本化したため、取引先側では持たない（v1.5）。 支払先であるかどうかは、その取引先を指す規定があるかどうかで決まる。 締め日（99＝月末）  [SMALLINT] */
   closing_day: number | null;
   /** [SMALLINT] */
@@ -1220,6 +1222,8 @@ export interface SalesOrdersTable {
   trade_type: Generated<string>;
   /** 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）  [-> sales_staff / BIGINT] */
   sales_staff_id: number | null;
+  /** 通貨。取引先の通貨で固定（引き金 trg_sales_orders_currency が入れる。2026-10-12 No.39）  [VARCHAR(3)] */
+  currency: Generated<string>;
   /** 先方の発注番号  [VARCHAR(40)] */
   po_no: string | null;
   /** 先方の発注行番号（販社CSVに含まれる）  [INTEGER] */
@@ -1541,6 +1545,8 @@ export interface InvoicesTable {
   period_from: string;
   /** [DATE] */
   period_to: string;
+  /** 通貨。締めた受注の通貨（＝取引先の通貨）。1つの請求に違う通貨は混ぜない（2026-10-12 No.39）  [VARCHAR(3)] */
+  currency: Generated<string>;
   /** 前回請求残高  [money_amt] */
   prev_invoice_balance: Generated<string>;
   /** 今回入金額  [money_amt] */
@@ -1676,6 +1682,8 @@ export interface CashReceiptsTable {
   receipt_date: string;
   /** [money_amt] */
   amount: string;
+  /** 通貨。消込先の請求と同じ通貨でないと消し込めない（2026-10-12 No.39）  [VARCHAR(3)] */
+  currency: Generated<string>;
   /** [-> invoices / BIGINT] */
   invoice_id: number | null;
   /** [money_amt] */
@@ -1874,6 +1882,8 @@ export interface CashPaymentsTable {
   payment_date: string;
   /** [money_amt] */
   amount: string;
+  /** 通貨。消込先の仕入と同じ通貨でないと消し込めない（2026-10-13 再テスト N5）  [VARCHAR(3)] */
+  currency: Generated<string>;
   /** [-> purchases / BIGINT] */
   purchase_id: number | null;
   /** [money_amt] */
@@ -1994,6 +2004,8 @@ export interface RoyaltyRulesTable {
   scope_priority: Computed<number | null>;
   /** 同じ入力フォームから作られた行のまとまり。空欄＝この行が代表。一覧で1件にまとめて見せるために使う  [-> royalty_rules / BIGINT] */
   rule_group_id: number | null;
+  /** 「編集前の版」になった日時。計算に使った行を、販売先の指定を変える編集で外したときに入る。 月次計算の明細がこの行を指しているので消さずに残し、一覧には別の規定として出さない（2026-10-12 No.37）。  [TIMESTAMPTZ] */
+  superseded_at: Date | null;
   /** [BOOLEAN] */
   is_active: Generated<boolean>;
   /** [INTEGER] */

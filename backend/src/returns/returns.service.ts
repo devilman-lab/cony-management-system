@@ -277,6 +277,8 @@ export class ReturnsService {
           'r.return_date as return_date',
           'r.return_amount as return_amount',
           'p.name1 as partner_name',
+          // 返品額は取引先の通貨の金額。外貨は小数2桁で見せる（2026-10-13 再テスト）
+          'p.currency as currency',
           'w.short_name as warehouse_name',
         ])
         .orderBy('r.return_date', 'desc')

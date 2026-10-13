@@ -3,8 +3,10 @@ import { z } from 'zod';
 
 import { type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
+import { SettingsService } from '../common/settings.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AllocationService } from '../shipping/allocation.service';
+import { OVERSEAS_TAX_RATE } from './order-defaults';
 import { OrdersService } from './orders.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
@@ -72,6 +74,7 @@ export class OrdersController {
   constructor(
     private readonly orders: OrdersService,
     private readonly allocation: AllocationService,
+    private readonly settings: SettingsService,
   ) {}
 
   @Post()
@@ -87,6 +90,16 @@ export class OrdersController {
   @RequirePermission('O-03', 'view')
   list(@Query(new ZodValidationPipe(ListQuerySchema)) query: ListQuery) {
     return this.orders.list(query);
+  }
+
+  /**
+   * 海外の得意先の消費税の表記（システム設定 OVERSEAS_TAX_TREATMENT）。
+   * 受注入力で海外の得意先を選んだとき、合計の横に請求書と同じ言い方で出すために使う。
+   */
+  @Get('overseas-tax')
+  @RequirePermission('O-01', 'view')
+  async overseasTax() {
+    return { tax_rate: OVERSEAS_TAX_RATE, label: await this.settings.overseasTaxLabel() };
   }
 
   @Get(':id')

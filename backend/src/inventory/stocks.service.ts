@@ -148,8 +148,9 @@ export class StocksService {
    * 入出荷履歴（機能ID S-05）。
    * 在庫移動履歴は追記専用で、あとから書き換えも削除もできない。
    * 「いつ・どの伝票で・いくつ動いたか」を必ず追える。
+   * showQty=false（在庫表で実在庫を隠す人）には、実在庫そのものである「前」「後」を返さない（Z-02）。
    */
-  async movements(query: MovementListQuery): Promise<Paged<Record<string, unknown>>> {
+  async movements(query: MovementListQuery, showQty = true): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
       .selectFrom('stock_movements as m')
       .innerJoin('stocks as s', 's.id', 'm.stock_id')
@@ -164,7 +165,7 @@ export class StocksService {
     if (query.from) base = base.where('m.moved_at', '>=', new Date(`${query.from}T00:00:00+09:00`));
     if (query.to) base = base.where('m.moved_at', '<=', new Date(`${query.to}T23:59:59+09:00`));
 
-    const [items, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       base
         .select([
           'm.id as id',
@@ -189,6 +190,7 @@ export class StocksService {
       base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
     ]);
 
+    const items = showQty ? rows : rows.map(({ qty_before: _b, qty_after: _a, ...rest }) => rest);
     return { items, total: Number(total.n), limit: query.limit, offset: query.offset };
   }
 

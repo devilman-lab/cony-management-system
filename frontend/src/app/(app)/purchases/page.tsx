@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCodes, useFetch, useList, useSimpleMaster } from '@/lib/hooks';
-import { money, qty, today, ymd } from '@/lib/format';
+import { formatTotals, moneyCell, moneyIn, moneyWithCurrency, qty, sumByCurrency, today, ymd } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -16,6 +16,8 @@ interface PurchaseRow extends Record<string, unknown> {
   division: string;
   purchase_date: string;
   total_amount: string;
+  /** 通貨（2026-10-12 No.39）。円以外は「USD 700.00」と出す */
+  currency: string;
   status: string;
   supplier_name: string;
 }
@@ -130,7 +132,8 @@ export default function PurchasesPage() {
   };
   const addLine = () => setLines((s) => [...s, { ...newLine(), ...autoTax('', supplierOverseas) }]);
   const pickSupplier = (o: Option | null) => {
-    setF({ ...f, supplier: o });
+    // 通貨の初期値は仕入先の取引通貨（取引先マスタ。2026-10-12 No.39）。選び直しもできる
+    setF({ ...f, supplier: o, currency: (o?.raw as { currency?: string } | undefined)?.currency || f.currency });
     // 手で選び直していない行だけ、新しい仕入先に合わせて税区分を入れ直す
     setLines((s) => s.map((l) => (l.tax_auto ? { ...l, ...autoTax(l.purchase_item_id, isOverseas(o)) } : l)));
   };
@@ -209,7 +212,10 @@ export default function PurchasesPage() {
         right={can('P-01', 'create') && <Button variant="primary" icon="plus" onClick={() => { setError(null); setOpen(true); }}>仕入・経費を登録</Button>}
       />
       <Card>
-        <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
+        <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]">
+          {/* 金額の合計は通貨ごと（ドルの仕入を円の合計に足さない。2026-10-12 No.39）。取消は数えない */}
+          {list.items.length > 0 && <span className="mr-3">この画面の合計 <b className="num">{formatTotals(sumByCurrency(list.items.filter((r) => r.status !== '取消'), (r) => r.total_amount, (r) => r.currency))}</b></span>}
+          <Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
           <Select value={division} onChange={(e) => setDivision(e.target.value)} className="!w-[110px]">
             <option value="">区分：すべて</option>
             <option>仕入</option>
@@ -224,7 +230,7 @@ export default function PurchasesPage() {
             { key: 'purchase_date', label: '日付', width: 100, render: (r) => <Num>{ymd(r.purchase_date)}</Num> },
             { key: 'division', label: '区分', width: 70 },
             { key: 'supplier_name', label: '仕入先' },
-            { key: 'total_amount', label: '金額', r: true, width: 120, render: (r) => money(r.total_amount) },
+            { key: 'total_amount', label: '金額', r: true, width: 120, render: (r) => moneyCell(r.total_amount, r.currency) },
             { key: 'status', label: '状態', width: 80, render: (r) => <Badge status={r.status} /> },
             { key: '_act', label: '', width: 80, render: (r) => r.status !== '取消' && can('P-01', 'delete') && <Button size="sm" variant="danger" loading={cancelId === r.id} onClick={() => cancel(r)}>取消</Button> },
           ]}
@@ -236,7 +242,7 @@ export default function PurchasesPage() {
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
 
-      <Modal open={open} title="仕入・経費の登録" onClose={() => setOpen(false)} width={960} footer={<><span className="mr-auto text-[12px]">合計 <b className="num">{money(total)}</b> 円</span><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>登録する</Button></>}>
+      <Modal open={open} title="仕入・経費の登録" onClose={() => setOpen(false)} width={960} footer={<><span className="mr-auto text-[12px]">合計 <b className="num">{moneyWithCurrency(total, f.currency)}</b></span><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>登録する</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         <div className="master-grid-2">
           <FormRow label="区分" required>
@@ -247,7 +253,7 @@ export default function PurchasesPage() {
           <FormRow label="支払予定日"><Input type="date" value={f.payment_date1} onChange={(e) => setF({ ...f, payment_date1: e.target.value })} className="!w-[150px]" /></FormRow>
           <FormRow label="通貨" hint="海外からの仕入に使います。「分類・区分・設定」の「通貨」タブで増やせます">
             <Select value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} className="!w-[140px]">
-              {(currencies.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
+              {(currencies.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.code}（{c.name}）</option>)}
             </Select>
           </FormRow>
           <FormRow label="経費区分" hint="勘定科目にあたるもの。「分類・区分・設定」の「経費科目」タブで増やせます">
@@ -319,10 +325,10 @@ export default function PurchasesPage() {
             <table className="tbl">
               <thead><tr><th style={{ width: 36 }}>行</th><th>内容</th><th className="r" style={{ width: 70 }}>数量</th><th className="r" style={{ width: 100 }}>単価</th><th className="r" style={{ width: 110 }}>小計</th><th style={{ width: 160 }}>紐づけ先</th></tr></thead>
               <tbody>
-                {detail.data.lines.map((l) => <tr key={l.line_no}><td className="num">{l.line_no}</td><td>{l.item_name}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{money(l.unit_cost)}</td><td className="r num">{money(l.subtotal)}</td><td>{l.target_product_name ?? l.target_brand_name ?? ''}</td></tr>)}
+                {detail.data.lines.map((l) => <tr key={l.line_no}><td className="num">{l.line_no}</td><td>{l.item_name}</td><td className="r num">{qty(l.qty)}</td><td className="r num">{moneyIn(l.unit_cost, detail.data!.currency)}</td><td className="r num">{moneyIn(l.subtotal, detail.data!.currency)}</td><td>{l.target_product_name ?? l.target_brand_name ?? ''}</td></tr>)}
               </tbody>
             </table>
-            <div className="text-right mt-2 text-[12.5px]">合計 <b className="num text-[14px]">{money(detail.data.total_amount)}</b> 円</div>
+            <div className="text-right mt-2 text-[12.5px]">合計 <b className="num text-[14px]">{moneyWithCurrency(detail.data.total_amount, detail.data.currency)}</b></div>
           </>
         )}
       </Modal>

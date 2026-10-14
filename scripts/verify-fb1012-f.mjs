@@ -390,5 +390,23 @@ await call('POST', `/orders/${o2.id}/cancel`, A);
 await call('POST', `/masters/partners/${usd.id}/deactivate`, A);
 await call('POST', `/masters/partners/${jpy.id}/deactivate`, A);
 
+// ---- 3回目の全面テスト（U3 N2）: ロイヤリティが USD の売上を円として計算していた ----------------
+await check('U3 N2 ロイヤリティ計算は外貨の売上を含めず、含めなかった件数（通貨ごと）を返す。円の売上は今までどおり', async () => {
+  const media = ok(await call('POST', '/masters/simple/media', A, { code: `FFM${t}`, name: `FF媒体${t}` }), 'media');
+  ok(await call('PATCH', `/masters/partners/${usd.id}`, A, { media_id: media.id }), 'usd media');
+  ok(await call('PATCH', `/masters/partners/${jpy.id}`, A, { media_id: media.id }), 'jpy media');
+  const payee = ok(await call('POST', '/masters/partners', A, { partner_code: `FFY${t}`, name1: `FF支払先${t}`, is_supplier: true, is_royalty_payee: true }), 'payee');
+  ok(await call('POST', '/masters/royalty-rules', A, { payee_partner_id: payee.id, media_id: media.id, rate: '0.0500', valid_from: `${month}-01` }), 'rule');
+  const r = ok(await call('POST', '/billing/royalties/calculate', A, { target_month: month }), 'calc');
+  const lines = (await db.query(
+    `select l.customer_partner_id::int as c from royalty_calculation_lines l join royalty_calculations k on k.id = l.royalty_calculation_id
+      where k.payee_partner_id = $1 and k.target_month = $2::date`,
+    [payee.id, `${month}-01`],
+  )).rows;
+  const customers = new Set(lines.map((x) => x.c));
+  const usdEx = (r.foreign_excluded ?? []).find((x) => x.currency === 'USD');
+  return (customers.has(Number(jpy.id)) && !customers.has(Number(usd.id)) && usdEx && usdEx.lines >= 1) || { customers: [...customers], ex: r.foreign_excluded };
+});
+
 await db.end();
 if (ng > 0) process.exitCode = 1;

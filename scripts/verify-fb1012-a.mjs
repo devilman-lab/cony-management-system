@@ -335,6 +335,19 @@ await check('R4 仕入の一覧は、支払った額と残り（unpaid_amount）
   if (!p) return true; // 仕入が無い環境では見られない
   return (p.paid_amount !== undefined && Number(p.unpaid_amount) === Number(p.total_amount) - Number(p.paid_amount)) || p;
 });
+// 3回目の全面テスト（U1 N1・N3）
+await check('U1 N1 取引先の CSV で、区分値に無い通貨（XYZ）は下見で誤り。USD・JPY は通る', async () => {
+  const bad = ok(await imp('partners', [['取引先コード', '通貨'], [`${P}P1`, 'XYZ']], true), 'bad');
+  const good = ok(await imp('partners', [['取引先コード', '通貨'], [`${P}P1`, 'USD']], true), 'good');
+  const b = bad.rows?.[0];
+  return (b?.action === 'エラー' && /通貨：「XYZ」は登録されていません/.test(b?.message ?? '') && good.rows?.[0]?.action !== 'エラー') || { b, g: good.rows?.[0] };
+});
+await check('U1 N3 仕入品目の CSV で税区分だけ入れた新しい行は、税率が税区分から決まる（非課税→0、軽減8%→8）', async () => {
+  ok(await imp('purchase-items', [['仕入コード', '品目名', '税率', '税区分'], [`${P}PZ1`, `${P}資材Z1`, '', 'EXEMPT'], [`${P}PZ2`, `${P}資材Z2`, '', 'TAX8']], false), 'add');
+  ok(await imp('purchase-items', [['仕入コード', '品目名', '税区分'], [`${P}PZ3`, `${P}資材Z3`, 'TAX10']], false), 'add no rate col');
+  const r = await all(`select purchase_code, new_tax_rate::text as rate from purchase_items where purchase_code in ($1, $2, $3) order by purchase_code`, [`${P}PZ1`, `${P}PZ2`, `${P}PZ3`]);
+  return (r.length === 3 && Number(r[0].rate) === 0 && Number(r[1].rate) === 8 && Number(r[2].rate) === 10) || r;
+});
 await check('R1 N3 請求の一覧は、消し込んだ入金の合計と残り（unapplied_balance）を返す', async () => {
   const r = ok(await call('GET', '/billing/invoices?limit=5', A), 'invoices');
   const i = r.items[0];

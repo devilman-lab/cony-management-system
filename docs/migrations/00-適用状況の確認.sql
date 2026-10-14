@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 9本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 10本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -156,6 +156,12 @@ SELECT '⑨ 売上側の通貨（取引先・受注・請求・入金・支払�
          ELSE '一部'
        END,
        '2026-10-12_sales_currency.sql'
+UNION ALL
+SELECT '⑩ セット受注で減らした引当在庫の内訳',
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_schema = 'cony' AND table_name = 'sales_order_lines' AND column_name = 'reservation_takes') = 1
+            THEN '済' ELSE '未' END,
+       '2026-10-13_reservation_takes.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。

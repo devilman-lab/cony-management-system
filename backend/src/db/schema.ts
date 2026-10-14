@@ -1309,6 +1309,8 @@ export interface SalesOrderLinesTable {
   allocated_qty: Generated<string>;
   /** どの引当在庫の枠から減らしたか（v1.7）  [-> reservations / BIGINT] */
   reservation_id: number | null;
+  /** セット行を構成品の枠で減らしたときの内訳 [{"reservation_id": 1, "qty": "2"}, …]。 構成品ごとに別の確保から減らすことがあり、reservation_id 1つでは戻し先が決まらないため（2026-10-13 受入テスト）  [JSONB] */
+  reservation_takes: unknown | null;
   /** 在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。 セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。  [BOOLEAN] */
   is_stock_target: Computed<boolean>;
   /** [TIMESTAMPTZ] */

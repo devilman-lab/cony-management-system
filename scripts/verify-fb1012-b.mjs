@@ -219,6 +219,15 @@ await check('M-14 未登録のセット SKU には新規登録できる（コピ
   const r = await call('POST', '/masters/sets', A, { sku_id: ss2.id, components: [{ component_sku_id: s1.id, qty: '2' }] });
   return r.status === 201 || r;
 });
+// 3回目の全面テスト（U2 N1）: 構成品にセット商品（自分自身・別のセット）を入れると、そのセットは受注できなくなっていた
+await check('U2 N1 構成品にセット商品（自分自身・別のセット）は新規でも編集でも 400、構成は変わらない', async () => {
+  const ss3 = ok(await call('POST', '/masters/skus', A, { product_id: sp.id, sku_code: `FBS${t3}-0103-200` }), 'ss3');
+  const self = await call('POST', '/masters/sets', A, { sku_id: ss3.id, components: [{ component_sku_id: ss3.id, qty: '1' }] });
+  const other = await call('PUT', `/masters/sets/${set1.id}`, A, { components: [{ component_sku_id: s1.id, qty: '1' }, { component_sku_id: ss2.id, qty: '1' }] });
+  const c = await comps(set1.id);
+  const n = await one(`select count(*)::int as n from set_headers where sku_id = $1`, [ss3.id]);
+  return (self.status === 400 && msg(self).includes('構成品にセット商品は選べません') && other.status === 400 && n.n === 0 && c.length === 1 && Number(c[0].qty) === 2) || { self: self.status, other: other.status, c, n };
+});
 
 await db.end();
 process.exit(ng > 0 ? 1 : 0);

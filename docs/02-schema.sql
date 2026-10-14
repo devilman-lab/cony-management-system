@@ -885,6 +885,9 @@ CREATE TABLE sales_order_lines (
   amount             money_amt NOT NULL DEFAULT 0,
   allocated_qty      qty_num   NOT NULL DEFAULT 0,
   reservation_id     BIGINT REFERENCES reservations(id),   -- どの引当在庫の枠から減らしたか（v1.7）
+  -- セット行を構成品の枠で減らしたときの内訳 [{"reservation_id": 1, "qty": "2"}, …]。
+  -- 構成品ごとに別の確保から減らすことがあり、reservation_id 1つでは戻し先が決まらないため（2026-10-13 受入テスト）
+  reservation_takes  JSONB,
   -- 在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。
   -- セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。
   is_stock_target    BOOLEAN GENERATED ALWAYS AS

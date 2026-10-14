@@ -550,6 +550,17 @@ export class MastersCsvService {
     // 番号 → コード。行全体の決まり（rowCheck）は CSV に無い欄の今の値も見るので、参照する欄すべてで引く
     // （仕入品目で「税率」だけを直すと、税区分を引けずに食い違いの検査を飛ばしていた。再テスト R4）
     const codeLookup = def.rowCheck ? await this.buildIdLookup(cols.filter((c) => c.ref)) : idOf;
+    // 区分値「通貨」のコード（取引先の通貨の検査に使う）
+    const currencies = new Set(
+      (
+        await this.db
+          .selectFrom('codes as c')
+          .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
+          .select('c.code as code')
+          .where('cc.code', '=', 'CURRENCY')
+          .execute()
+      ).map((r) => r.code),
+    );
     const codeById = new Map<string, string>();
     for (const [k, id] of codeLookup) {
       const table = k.slice(0, k.indexOf(':'));
@@ -714,18 +725,29 @@ export class MastersCsvService {
         const v = values[col.field];
         merged[col.field] = col.multi ? ((v as number[] | null)?.[0] ?? null) : v;
       }
+      const rowCtx = {
+        isNew,
+        currencies,
+        codeOf: (field: string) => {
+          const c = cols.find((x) => x.field === field);
+          const v = merged[field];
+          if (!c?.ref || v === null || v === undefined) return null;
+          return codeById.get(`${c.ref.table}:${Number(v)}`) ?? null;
+        },
+      };
+      // 行から決まる欄を補う（CSV に列が無くても書く）
+      if (def.complete && (isNew || touched.length > 0)) {
+        const extra = def.complete(merged, { ...rowCtx, touched: new Set(touched.map((c) => c.field)) });
+        for (const [field, v] of Object.entries(extra)) {
+          const col = cols.find((x) => x.field === field);
+          if (!col) continue;
+          values[field] = v;
+          merged[field] = v;
+          if (!touched.includes(col)) touched.push(col);
+        }
+      }
       if (def.rowCheck && (isNew || touched.length > 0)) {
-        problems.push(
-          ...def.rowCheck(merged, {
-            isNew,
-            codeOf: (field) => {
-              const c = cols.find((x) => x.field === field);
-              const v = merged[field];
-              if (!c?.ref || v === null || v === undefined) return null;
-              return codeById.get(`${c.ref.table}:${Number(v)}`) ?? null;
-            },
-          }),
-        );
+        problems.push(...def.rowCheck(merged, rowCtx));
       }
       uniqueSets.forEach((set, i) => {
         if (!isNew && !touched.some((c) => set.includes(c.field))) return;

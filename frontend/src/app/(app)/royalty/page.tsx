@@ -41,14 +41,24 @@ export default function RoyaltyPage() {
     if (!(await confirm(`${month} のロイヤリティを計算しますか`, '規定の「計算の基準」に合わせて、この月の出荷・締めた請求・入金に規定を当て、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
     setBusy(true);
     try {
-      const r = await api.post<{ calculations?: unknown[]; skipped_confirmed?: string[] } | unknown[]>('/billing/royalties/calculate', { target_month: month });
+      const r = await api.post<
+        { calculations?: unknown[]; skipped_confirmed?: string[]; foreign_excluded?: { currency: string; lines: number }[] } | unknown[]
+      >('/billing/royalties/calculate', { target_month: month });
       const n = Array.isArray(r) ? r.length : (r as { calculations?: unknown[] }).calculations?.length ?? 0;
       const skipped = Array.isArray(r) ? [] : (r.skipped_confirmed ?? []);
+      // 外貨の売上は円に換算できないので計算に含めない。黙って外さず、何件あったかを知らせる（3回目の全面テスト）
+      const foreign = Array.isArray(r) ? [] : (r.foreign_excluded ?? []);
       toast(
-        skipped.length > 0
-          ? `計算しました（支払先 ${n} 件。確定済みの ${skipped.join('、')} は計算し直していません）`
-          : `計算しました（支払先 ${n} 件）`,
-        'good',
+        [
+          `計算しました（支払先 ${n} 件）`,
+          skipped.length > 0 ? `確定済みの ${skipped.join('、')} は計算し直していません` : '',
+          foreign.length > 0
+            ? `外貨の売上（${foreign.map((x) => `${x.currency} ${x.lines} 行`).join('、')}）は円に換算できないため計算に含めていません`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('。'),
+        foreign.length > 0 ? 'info' : 'good',
       );
       await list.reload();
     } catch (e) {

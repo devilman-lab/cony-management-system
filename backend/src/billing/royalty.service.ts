@@ -97,7 +97,26 @@ export class RoyaltyService {
           .execute((trx) => this.calculateOne(trx, payee.id, payee.name, monthStart, roundingMode, includeReturns, userId)),
       );
     }
-    return { target_month: targetMonth, payees: results.length, calculations: results, skipped_confirmed: skipped };
+    // 計算に含めなかった外貨の売上（この月に出荷した、円以外の受注の明細）。画面で知らせる
+    const foreign = await sql<{ currency: string; n: number }>`
+      select o.currency, count(*)::int as n
+        from sales_order_lines sl
+        join sales_orders o on o.id = sl.sales_order_id
+       where o.currency <> 'JPY'
+         and o.is_billable
+         and sl.sku_id is not null
+         and exists (select 1 from shipments sh where sh.sales_order_id = o.id and sh.status = '出荷済'
+                      and date_trunc('month', sh.ship_date) = ${monthStart}::date)
+       group by o.currency
+       order by o.currency`.execute(this.db);
+    return {
+      target_month: targetMonth,
+      payees: results.length,
+      calculations: results,
+      skipped_confirmed: skipped,
+      /** 計算に含めなかった外貨の売上（通貨ごとの明細の数） */
+      foreign_excluded: foreign.rows.map((r) => ({ currency: r.currency, lines: Number(r.n) })),
+    };
   }
 
   private async calculateOne(
@@ -144,6 +163,9 @@ export class RoyaltyService {
     // 返品（設定 ROYALTY_INCLUDE_RETURNS）は、どの基準でも出荷と同じ扱いでマイナスにする
     // （出荷＝返品日の月、売上＝返品を載せた請求の締め日の月、入金＝返品を載せた請求への入金の月）。
     //
+    // 外貨（円以外）の受注・返品は含めない。換算のレートを持っていないため、USD 100 を 100 円として
+    // 計算してしまっていた（3回目の全面テスト）。含めなかった件数は calculate() の戻り値で知らせる。
+    //
     // 金額の元は受注明細（＝請求・納品書と同じ土台）。出荷明細（shipment_lines）は
     // 倉庫から出たものの記録で、セット商品は構成品ごとにセットの単価を持つため、
     // そのまま使うと構成品の数だけ課税基礎が膨らむ。
@@ -174,6 +196,7 @@ export class RoyaltyService {
          limit 1
       ) sh on true`;
     const inMonth = (col: RawBuilder<unknown>) => sql`date_trunc('month', ${col}) = ${monthStart}::date`;
+    const JPY_RETURN = sql`(select pa.currency from partners pa where pa.id = r.partner_id) = 'JPY'`;
 
     // 入金基準: この月の入金を請求ごとに割合（入金額 ÷ 請求額）にする。
     // 請求額は当月請求額（税・送料込み）なので、全額入金されると明細の金額がそのまま基準額になる。
@@ -210,6 +233,7 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '出荷'
            and ${inMonth(sql`sh.ship_date`)}`,
@@ -224,6 +248,7 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '売上'
            and exists (
@@ -251,6 +276,7 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '入金'`,
     ];
@@ -269,6 +295,7 @@ export class RoyaltyService {
                  -rl.qty, -(rl.qty * rl.unit_price)
           ${returnFrom}
            where r.status <> '取消'
+             and ${JPY_RETURN}
              and not rule.is_excluded
              and rule.calc_base = '出荷'
              and ${inMonth(sql`r.return_date`)}`,
@@ -277,6 +304,7 @@ export class RoyaltyService {
                  -rl.qty, -(rl.qty * rl.unit_price)
           ${returnFrom}
            where r.status <> '取消'
+             and ${JPY_RETURN}
              and not rule.is_excluded
              and rule.calc_base = '売上'
              and exists (
@@ -300,6 +328,7 @@ export class RoyaltyService {
             join products p on p.id = s.product_id
             join lateral ${returnRule} rule on true
            where r.status <> '取消'
+             and ${JPY_RETURN}
              and not rule.is_excluded
              and rule.calc_base = '入金'`,
       );

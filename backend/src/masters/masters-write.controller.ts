@@ -848,6 +848,20 @@ export class MastersWriteController {
     components: SetBody['components'],
     userId: number,
   ): Promise<void> {
+    // 構成品にセット商品（自分自身・別のセット）は入れられない。セットは在庫を持たないので、
+    // そのセットを受注すると構成品の在庫が引けず、「実在庫 0」で登録できなくなっていた（3回目の全面テスト）
+    const setParts = await trx
+      .selectFrom('skus as s')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .select('s.sku_code as sku_code')
+      .where('s.id', 'in', components.map((c) => c.component_sku_id))
+      .where('p.is_set', '=', true)
+      .execute();
+    if (setParts.length > 0) {
+      throw new BadRequestException(
+        `構成品にセット商品は選べません（${setParts.map((r) => r.sku_code).join('、')}）。単品の SKU を選んでください`,
+      );
+    }
     await trx
       .insertInto('set_components')
       .values(

@@ -156,7 +156,6 @@ export default function PaymentsPage() {
 
   return (
     <div className="page-body">
-      {element}
       <PageHead
         title="入金消込"
         sub="入金を登録し、請求に消し込みます。売掛残高と次回請求の「今回入金額」に反映されます"
@@ -273,6 +272,8 @@ export default function PaymentsPage() {
           <Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
         </FormRow>
       </Modal>
+      {/* 確認は入金の画面の上に出す（先に描くと同じ重なり順で入金の画面の後ろに隠れ、押せなかった。3回目の全面テスト） */}
+      {element}
     </div>
   );
 }

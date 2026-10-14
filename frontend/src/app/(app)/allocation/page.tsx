@@ -57,6 +57,16 @@ export default function AllocationPage() {
   const [partner, setPartner] = useState<Option | null>(null);
   const [sku, setSku] = useState<Option | null>(null);
   const [offset, setOffset] = useState(0);
+  // 1440 より狭い画面（1280 など）では、表を詰めて操作のボタンを販売期間の欄に入れる（3回目の全面テスト Z-30）。
+  // 右端に貼り付けた操作の列の下に「残り」「確保数合計」「使用数合計」が隠れ、横のスクロールバーも画面の外にあった
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1439px)');
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
 
   // その月に少しでもかかる確保をすべて出す（月の15日で判定すると、月の途中から始まる確保が出ない）
   const range = monthRange(month);
@@ -131,6 +141,24 @@ export default function AllocationPage() {
   const firstRow = { ...top, borderTop: '2px solid var(--color-line-strong)' };
   // 操作の列を右端に貼り付ける。tbl-stick-last は「行の最後のセル」に効くため、
   // 見出しの列を rowSpan でまとめた2行目以降では「残り」の列が貼り付いてしまう。操作の列だけに付ける。
+  const actions = (g: ReservationGroup, inUse: boolean) => (
+    <>
+      {can('S-08', 'update') && <Button size="sm" onClick={() => openWith(g, 'edit')}>編集</Button>}
+      {can('S-08', 'create') && <Button size="sm" onClick={() => openWith(g, 'copy')}>コピー</Button>}
+      {can('S-08', 'delete') && (
+        <Button
+          size="sm"
+          variant="quiet"
+          className="!text-[var(--color-crit-500)]"
+          disabled={inUse}
+          title={inUse ? '受注で使われている確保は削除できません。確保数を直してください' : undefined}
+          onClick={() => remove(g)}
+        >
+          削除
+        </Button>
+      )}
+    </>
+  );
   const stick = { position: 'sticky' as const, right: 0, background: '#fff', boxShadow: '-7px 0 7px -7px #0003' };
 
   return (
@@ -172,31 +200,31 @@ export default function AllocationPage() {
             文字が収まる幅を取って折り返さない（2行に割れて読みにくかった）。取引先・備考などは折り返し、
             商品名は残りの幅を使う。これより狭い画面では表を横にずらして見る。 */}
         <div className="tbl-wrap-wide">
-          <table className="tbl tbl-fit" style={{ minWidth: 1180 }}>
+          <table className={`tbl tbl-fit${narrow ? ' tbl-dense' : ''}`} style={{ minWidth: narrow ? 1000 : 1180 }}>
             <thead>
               <tr>
-                <th style={{ width: 88 }}>販売期間</th>
-                <th style={{ width: grow(50, 0.06) }}>媒体</th>
-                <th style={{ width: grow(68, 0.15) }}>取引先</th>
-                <th className="nw" style={{ width: 104 }}>販売カテゴリー</th>
-                <th style={{ width: grow(46, 0.06) }}>項目</th>
-                <th style={{ width: grow(58, 0.1) }}>備考</th>
-                <th className="nw" style={{ width: 94 }}>商品分類コード</th>
-                <th style={{ width: grow(62, 0.08) }}>商品分類</th>
-                <th className="nw" style={{ width: grow(128, 0.04) }}>商品コード</th>
+                <th style={{ width: narrow ? 76 : 88 }}>販売期間</th>
+                <th style={{ width: narrow ? 44 : grow(50, 0.06) }}>媒体</th>
+                <th style={{ width: narrow ? 64 : grow(68, 0.15) }}>取引先</th>
+                <th className="nw" style={{ width: narrow ? 92 : 104 }}>販売カテゴリー</th>
+                <th style={{ width: narrow ? 40 : grow(46, 0.06) }}>項目</th>
+                <th style={{ width: narrow ? 50 : grow(58, 0.1) }}>備考</th>
+                <th className="nw" style={{ width: narrow ? 88 : 94 }}>商品分類コード</th>
+                <th style={{ width: narrow ? 54 : grow(62, 0.08) }}>商品分類</th>
+                <th className="nw" style={{ width: narrow ? 112 : grow(128, 0.04) }}>商品コード</th>
                 <th>商品名</th>
-                <th className="r" style={{ width: 50 }}>確保数</th>
-                <th className="r" style={{ width: 50 }}>使用数</th>
-                <th className="r" style={{ width: 48 }}>残り</th>
-                <th className="r nw" style={{ width: 76 }}>確保数合計</th>
-                <th className="r nw" style={{ width: 76 }}>使用数合計</th>
-                <th style={{ width: grow(62, 0.25), ...stick, zIndex: 3, background: '#f4f7f8' }}></th>
+                <th className="r" style={{ width: narrow ? 44 : 50 }}>確保数</th>
+                <th className="r" style={{ width: narrow ? 44 : 50 }}>使用数</th>
+                <th className="r" style={{ width: narrow ? 40 : 48 }}>残り</th>
+                <th className="r nw" style={{ width: narrow ? 68 : 76 }}>確保数合計</th>
+                <th className="r nw" style={{ width: narrow ? 68 : 76 }}>使用数合計</th>
+                {!narrow && <th style={{ width: grow(62, 0.25), ...stick, zIndex: 3, background: '#f4f7f8' }}></th>}
               </tr>
             </thead>
             <tbody>
-              {list.loading && groups.length === 0 && <tr><td colSpan={16} className={`text-center py-8 ${muted}`}>読み込み中…</td></tr>}
+              {list.loading && groups.length === 0 && <tr><td colSpan={narrow ? 15 : 16} className={`text-center py-8 ${muted}`}>読み込み中…</td></tr>}
               {!list.loading && groups.length === 0 && (
-                <tr><td colSpan={16} className={`text-center py-8 ${muted}`}>この条件の確保はありません。「前月の確保を複写」か「確保を登録」から始めてください</td></tr>
+                <tr><td colSpan={narrow ? 15 : 16} className={`text-center py-8 ${muted}`}>この条件の確保はありません。「前月の確保を複写」か「確保を登録」から始めてください</td></tr>
               )}
               {groups.map((g) => {
                 const lines = g.lines.length > 0 ? g.lines : [null];
@@ -208,7 +236,10 @@ export default function AllocationPage() {
                       <tr key={l ? l.id : `g${g.id}`}>
                         {i === 0 && (
                           <>
-                            <td rowSpan={span} style={firstRow} className="nw"><Num>{ymd(g.period_from)}<br />〜{ymd(g.period_to)}</Num></td>
+                            <td rowSpan={span} style={firstRow} className="nw">
+                              <Num>{ymd(g.period_from)}<br />〜{ymd(g.period_to)}</Num>
+                              {narrow && <div className="mt-1.5 flex flex-col items-start gap-1">{actions(g, inUse)}</div>}
+                            </td>
                             <td rowSpan={span} style={firstRow} title={g.media_name ?? g.partner_media_name ?? ''}>
                               {g.media_name ?? (g.partner_media_name ? <span className={muted}>{g.partner_media_name}</span> : '')}
                             </td>
@@ -233,24 +264,11 @@ export default function AllocationPage() {
                           <>
                             <td rowSpan={span} style={firstRow} className="r num font-semibold">{qty(g.reserved_total)}</td>
                             <td rowSpan={span} style={firstRow} className="r num font-semibold">{qty(g.consumed_total)}</td>
-                            <td rowSpan={span} style={{ ...firstRow, ...stick }}>
-                              <div className="tbl-acts">
-                                {can('S-08', 'update') && <Button size="sm" onClick={() => openWith(g, 'edit')}>編集</Button>}
-                                {can('S-08', 'create') && <Button size="sm" onClick={() => openWith(g, 'copy')}>コピー</Button>}
-                                {can('S-08', 'delete') && (
-                                  <Button
-                                    size="sm"
-                                    variant="quiet"
-                                    className="!text-[var(--color-crit-500)]"
-                                    disabled={inUse}
-                                    title={inUse ? '受注で使われている確保は削除できません。確保数を直してください' : undefined}
-                                    onClick={() => remove(g)}
-                                  >
-                                    削除
-                                  </Button>
-                                )}
-                              </div>
-                            </td>
+                            {!narrow && (
+                              <td rowSpan={span} style={{ ...firstRow, ...stick }}>
+                                <div className="tbl-acts">{actions(g, inUse)}</div>
+                              </td>
+                            )}
                           </>
                         )}
                       </tr>

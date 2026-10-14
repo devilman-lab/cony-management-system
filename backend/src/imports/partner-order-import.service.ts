@@ -6,6 +6,7 @@ import { ReservationsService } from '../inventory/reservations.service';
 import { AllocationService } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { skuNameExpr } from '../masters/products.service';
 import { OVERSEAS_TAX_RATE, orderTradeType } from '../orders/order-defaults';
 import { applyTransform, decode, parseCsv } from './csv';
 
@@ -393,9 +394,27 @@ export class PartnerOrderImportService {
       .returning(['id', 'order_no'])
       .executeTakeFirstOrThrow();
 
+    // CSV に品名が無いときの品名。受注入力と同じく、得意先別商品の販売名があればそれ、無ければ
+    // SKU の商品名＋カラー＋サイズ（3回目の全面テスト。コネクトの CSV は品名の列が無く「（品名なし）」が納品書に出ていた）
+    const nameOf = async (skuId: number): Promise<string> => {
+      const r = await trx
+        .selectFrom('skus as s')
+        .innerJoin('products as p', 'p.id', 's.product_id')
+        .leftJoin('colors as cl', 'cl.id', 's.color_id')
+        .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+        .leftJoin('partner_products as pp', (j) => j.onRef('pp.sku_id', '=', 's.id').on('pp.partner_id', '=', partner.id))
+        .select([skuNameExpr('s', 'p').as('name'), 'cl.name as color_name', 'sz.name as size_name', 'pp.sales_name as sales_name'])
+        .where('s.id', '=', skuId)
+        .executeTakeFirst();
+      if (!r) return '（品名なし）';
+      if (r.sales_name?.trim()) return r.sales_name.trim();
+      return [r.name, r.color_name, r.size_name].filter((x) => x).join(' ');
+    };
+
     let n = 0;
     for (const line of resolved) {
       n += 1;
+      const itemName = line.values['item_name']?.trim() || (line.sku_id !== null ? await nameOf(line.sku_id) : '（品名なし）');
       await trx
         .insertInto('sales_order_lines')
         .values({
@@ -403,7 +422,7 @@ export class PartnerOrderImportService {
           line_no: n,
           line_type: '商品',
           sku_id: line.sku_id,
-          item_name: line.values['item_name'] ?? '（品名なし）',
+          item_name: itemName,
           qty: line.values['qty'] ?? '0',
           unit_price: line.values['unit_price'] ?? '0',
           amount: sql<string>`${line.values['qty'] ?? '0'}::numeric * ${line.values['unit_price'] ?? '0'}::numeric`,

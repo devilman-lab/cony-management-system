@@ -7,7 +7,10 @@ import { useAuth } from '@/lib/auth';
 import { useDebounce, useList } from '@/lib/hooks';
 import { qty } from '@/lib/format';
 import { Badge, Button, Card, DataTable, ErrorBox, Input, Modal, Num, PageHead, Pager, Textarea, Toolbar, useConfirm } from '@/components/ui';
-import { SearchSelect, fetchSetSkus, fetchSkus, type Option } from '@/components/ui/SearchSelect';
+import { SearchSelect, fetchSetSkus, fetchSkusFor, type Option } from '@/components/ui/SearchSelect';
+
+// 構成品の候補は単品の SKU だけ（セット商品は構成品にできない。3回目の全面テスト）
+const fetchComponentSkus = fetchSkusFor(null, { isSet: false });
 import { useToast } from '@/components/ui/Toast';
 import { L, Section } from '@/components/masters/Form';
 import { MasterCsv } from '@/components/masters/MasterCsv';
@@ -229,7 +232,7 @@ export default function SetsPage() {
             {lines.map((l, i) => (
               <tr key={i}>
                 <td>
-                  <SearchSelect value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchSkus} placeholder="SKU・JAN・商品名" width="100%" />
+                  <SearchSelect value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchComponentSkus} placeholder="SKU・JAN・商品名" width="100%" />
                   <FullLabel o={l.sku} />
                 </td>
                 <td><Input right value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} /></td>

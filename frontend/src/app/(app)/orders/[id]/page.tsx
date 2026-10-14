@@ -246,7 +246,8 @@ export default function OrderDetailPage() {
                 { key: 'line_no', label: '行', c: true, width: 40 },
                 { key: 'line_type', label: '種別', width: 80 },
                 { key: 'sku_code', label: 'SKU', width: 150, render: (l) => <Num>{l.sku_code ?? ''}</Num> },
-                { key: 'item_name', label: '品名' },
+                // 長い品名も末尾の (W)・カラー・サイズまで読めるよう折り返す（3回目の全面テスト）
+                { key: 'item_name', label: '品名', render: (l) => <span className="whitespace-normal break-words" title={l.item_name}>{l.item_name}</span> },
                 { key: 'qty', label: '数量', r: true, width: 70, render: (l) => qty(l.qty) },
                 { key: 'allocated_qty', label: '引当', r: true, width: 70, render: (l) => (l.is_stock_target ? qty(l.allocated_qty) : '—') },
                 { key: 'unit_price', label: '単価', r: true, width: 90, render: (l) => moneyIn(l.unit_price, o.currency) },

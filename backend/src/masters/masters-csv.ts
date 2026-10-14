@@ -91,6 +91,8 @@ export interface CsvRowContext {
   isNew: boolean;
   /** 相手のマスタを指す欄の、今の値のコード（無ければ null） */
   codeOf: (field: string) => string | null;
+  /** 区分値「通貨」に登録されているコード（使わないにしたものも含む。画面の登録と同じ） */
+  currencies: Set<string>;
 }
 
 export interface MasterCsvDef {
@@ -118,6 +120,11 @@ export interface MasterCsvDef {
    * 守れていなければ「欄名：理由」を返す。
    */
   rowCheck?: (row: Record<string, unknown>, ctx: CsvRowContext) => string[];
+  /**
+   * 行から決まる欄を補う（仕入品目の税率を税区分から決める、など）。rowCheck の前に呼ぶ。
+   * 返した欄は CSV に列が無くても書き込む。`touched` は CSV で値を変える欄。
+   */
+  complete?: (row: Record<string, unknown>, ctx: CsvRowContext & { touched: Set<string> }) => Record<string, unknown>;
   /** 鍵のほかに、重なってはいけない欄の組（空欄は数えない） */
   unique?: string[][];
   /** 一覧で編集・書き出しを絞る欄（区分値のカテゴリーなど）。URL の scope にコードを渡す */
@@ -281,6 +288,10 @@ const PARTNERS: MasterCsvDef = {
     ...(row.currency === undefined || (row.currency === null && ctx.isNew) || /^[A-Z]{3}$/.test(String(row.currency ?? ''))
       ? []
       : ['通貨：英大文字3文字のコードで入力してください（円は JPY、米ドルは USD）']),
+    // 区分値に無い通貨は、取引先の画面と同じく断る（3回目の全面テスト。「XYZ」が入り、受注も XYZ で作られていた）
+    ...(typeof row.currency === 'string' && /^[A-Z]{3}$/.test(row.currency) && !ctx.currencies.has(row.currency)
+      ? [`通貨：「${row.currency}」は登録されていません。「分類・区分・設定」の「通貨」タブで足してから入れてください`]
+      : []),
   ],
 };
 
@@ -440,6 +451,15 @@ const PURCHASE_ITEMS: MasterCsvDef = {
     NOTE,
     ACTIVE,
   ],
+  // 税率が空のとき、または税区分だけを直したときは、税区分から税率を決める（画面・API と同じ。3回目の全面テスト）
+  complete: (row, ctx) => {
+    const division = ctx.codeOf('new_tax_class_code_id');
+    const expected = division ? rateForTaxDivision(division, '') : undefined;
+    if (expected === undefined) return {};
+    const blank = row.new_tax_rate === null || row.new_tax_rate === undefined || row.new_tax_rate === '';
+    const classOnly = ctx.touched.has('new_tax_class_code_id') && !ctx.touched.has('new_tax_rate');
+    return blank || classOnly ? { new_tax_rate: expected } : {};
+  },
   // 税区分と税率の食い違い（「非課税」なのに 10% など）は、画面・API と同じく断る（No.32 D10、再テスト R1 N2）
   rowCheck: (row, ctx) => {
     const division = ctx.codeOf('new_tax_class_code_id');

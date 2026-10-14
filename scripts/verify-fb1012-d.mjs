@@ -321,6 +321,17 @@ await check('M-02 販社CSV取込：海外の得意先の明細は税率 0', asy
   const rows = await all(`select l.tax_rate::text as r from sales_order_lines l join sales_orders o on o.id = l.sales_order_id join partners p on p.id = o.partner_id where p.partner_code = $1 and o.channel = 'CONNECT'`, [`FDF${t}`]);
   return (rows.length === 1 && Number(rows[0].r) === 0) || rows;
 });
+// 3回目の全面テスト（U1 N2）: コネクトの CSV には品名の列が無く、受注・納品書の品名が「（品名なし）」になっていた
+await check('U1 N2 販社CSV取込で品名の列が無いときは、SKU の商品名（＋カラー・サイズ）が品名になる', async () => {
+  const row = await one(
+    `select l.item_name, coalesce(nullif(btrim(s.sku_name), ''), p.product_name) as base
+       from sales_order_lines l join sales_orders o on o.id = l.sales_order_id join partners pa on pa.id = o.partner_id
+       join skus s on s.id = l.sku_id join products p on p.id = s.product_id
+      where pa.partner_code = $1 and o.channel = 'CONNECT'`,
+    [`FDC${t}`],
+  );
+  return (row && row.item_name !== '（品名なし）' && row.item_name.startsWith(row.base)) || row;
+});
 
 await db.end();
 process.exit(ng > 0 ? 1 : 0);

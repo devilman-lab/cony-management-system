@@ -71,7 +71,7 @@ let skuKeySeq = 1;
 /** 商品の詳細（API）の SKU 1件 → 画面の行。編集できる欄はすべて写す（写し忘れた欄は保存し直すと消えるため） */
 const toSku = (k: Record<string, unknown>): Sku => ({
   id: Number(k.id), _key: skuKeySeq++, sku_code: s(k.sku_code), sku_name: s(k.sku_name), jan: s(k.jan), fba_jan: s(k.fba_jan),
-  shop_product_code: s(k.shop_product_code), cost_price: s(k.cost_price), color_id: s(k.color_id), size_id: s(k.size_id),
+  shop_product_code: s(k.shop_product_code), cost_price: dec(k.cost_price), color_id: s(k.color_id), size_id: s(k.size_id),
   pack_division: s(k.pack_division), is_active: k.is_active !== false,
 });
 const emptySku = (): Sku => ({ _key: skuKeySeq++, sku_code: '', sku_name: '', jan: '', fba_jan: '', shop_product_code: '', cost_price: '', color_id: '', size_id: '', pack_division: '', is_active: true, _dirty: true });

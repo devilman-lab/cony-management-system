@@ -264,5 +264,35 @@ await check('媒体の確保が足りないときは「媒体 …」と出る（
   return (r.status === 400 && o.includes(`媒体 FE媒体${t}`) && o.includes('必要 6') && o.includes('残り 5') && o.includes('項目 なし')) || r;
 });
 
+// ---- 3回目の全面テスト（U5）: 構成品が2つのセットの取消で、減らしていない確保まで戻していた（受注日 2027-02） ----
+{
+  const OD2 = '2027-02-10';
+  const s3 = await sku(`FE${t}-0301-100`);
+  const su = ok(await call('POST', '/masters/skus', A, { product_id: setProduct.id, sku_code: `FES${t}-0000-201` }), 'set sku 2');
+  ok(await call('POST', '/masters/sets', A, { sku_id: su.id, components: [{ component_sku_id: s1.id, qty: '1', sort_order: 1 }, { component_sku_id: s3.id, qty: '1', sort_order: 2 }] }), 'set 2');
+  // 受注に要る在庫
+  const rc = ok(await receipt([{ id: s1.id, qty: 20 }, { id: s3.id, qty: 20 }]), 'receipt');
+  ok(await call('POST', `/inventory/receipts/${rc.id}/receive`, A, {}), 'receive');
+  const grp = async (lines) => ok(await call('POST', '/inventory/reservation-groups', A, { period_from: '2027-02-01', period_to: '2027-02-28', sales_category_id: cat, partner_id: p2.id, lines }), 'group');
+  const order2 = (lines) => call('POST', '/orders', A, { order_type: '卸', partner_id: p2.id, delivery_destination_id: p2.dest, sales_category_id: cat, order_date: OD2, ship_date: OD2, lines });
+  const usedBy = async (g, skuId) => N((await one('select consumed_qty from reservations where group_id = $1 and sku_id = $2', [g.id, skuId])).consumed_qty);
+
+  await check('Z-31（U5）構成品が2つのセットの取消は、減らした確保だけを戻す（あとから足した確保・ほかの受注の分は戻さない）', async () => {
+    // 1. s3 だけに確保がある状態でセット su を受注 → s3 の確保だけが減る（s1 は確保が無いので減らない）
+    const g8 = await grp([{ sku_id: s3.id, reserved_qty: '5' }]);
+    const oSet = ok(await order2([{ line_no: 1, line_type: 'セット商品', sku_id: su.id, item_name: 'FE2枚組B', qty: '1', unit_price: '2000' }]), 'set order');
+    const a = { s3: await usedBy(g8, s3.id) };
+    // 2. あとから s1 の確保を作り、s1 単品の受注で 1 使う
+    const g9 = await grp([{ sku_id: s1.id, reserved_qty: '2' }]);
+    ok(await order2([{ line_no: 1, line_type: '商品', sku_id: s1.id, item_name: 'FE単品', qty: '1', unit_price: '1000' }]), 's1 order');
+    // 3. セット受注を取り消す → s3 の確保だけが戻り、s1 の確保（単品の受注の分）はそのまま
+    ok(await call('POST', `/orders/${oSet.id}/cancel`, A), 'cancel');
+    const b = { s3: await usedBy(g8, s3.id), s1: await usedBy(g9, s1.id) };
+    // 4. s1 の確保の残りは 1 なので、s1 ×2 の受注は断られる（以前は戻しすぎて通り、確保 2 に受注 3 が結ばれた）
+    const over = await order2([{ line_no: 1, line_type: '商品', sku_id: s1.id, item_name: 'FE単品', qty: '2', unit_price: '1000' }]);
+    return (a.s3 === 1 && b.s3 === 0 && b.s1 === 1 && over.status === 400) || { a, b, over: over.status };
+  });
+}
+
 await db.end();
 process.exit(ng > 0 ? 1 : 0);

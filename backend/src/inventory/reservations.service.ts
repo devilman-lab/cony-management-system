@@ -89,6 +89,22 @@ const trimQty = (v: string | null | undefined): string => {
 /** 日付の表示用（YYYY-MM-DD → YYYY/MM/DD） */
 const slash = (d: string): string => String(d).slice(0, 10).replace(/-/g, '/');
 
+/** セット行を構成品の枠で減らしたときの内訳の1件（sales_order_lines.reservation_takes） */
+interface ReservationTake {
+  reservation_id: number;
+  qty: string;
+}
+
+/** reservation_takes を読む。pg は JSONB をオブジェクトで返すが、念のため文字列も受ける。無ければ null */
+const parseTakes = (v: unknown): ReservationTake[] | null => {
+  const arr = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  return arr.map((t: { reservation_id: number | string; qty: number | string }) => ({
+    reservation_id: Number(t.reservation_id),
+    qty: String(t.qty),
+  }));
+};
+
 @Injectable()
 export class ReservationsService {
   constructor(@Inject(KYSELY) private readonly db: ConyDatabase) {}
@@ -173,7 +189,7 @@ export class ReservationsService {
       if (hasChild.has(line.line_no)) continue;
 
       // 手入力のセット行: 構成品の枠を「構成数 × セット数」ずつ減らす
-      let marker: number | null = null;
+      const takes: ReservationTake[] = [];
       for (const { c, cf } of picked) {
         if (!cf) continue;
         if (!cf.enough) {
@@ -181,12 +197,18 @@ export class ReservationsService {
           continue;
         }
         await this.take(trx, cf.id, c.need);
-        marker ??= cf.id;
+        takes.push({ reservation_id: cf.id, qty: c.need });
       }
-      // 受注明細には枠を1つしか結べない。構成品の枠を減らした印として、最初に減らした
-      // 構成品の枠を結ぶ（セット SKU と違う SKU の枠を指していれば「構成品で減らした」と分かる）。
-      if (marker !== null) {
-        await trx.updateTable('sales_order_lines').set({ reservation_id: marker }).where('id', '=', line.id).execute();
+      // 受注明細の reservation_id には、構成品の枠で減らした印として最初の枠を結ぶ（セット SKU と違う
+      // SKU の枠を指していれば「構成品で減らした」と分かる）。どの構成品をどの枠からいくつ減らしたかは
+      // reservation_takes に残し、取消・修正ではそのとおりに戻す（2026-10-13 受入テスト Z-31。
+      // 以前は2つ目以降の構成品の戻し先をその時点の条件で探し直し、減らしていない枠まで戻していた）。
+      if (takes.length > 0) {
+        await trx
+          .updateTable('sales_order_lines')
+          .set({ reservation_id: takes[0].reservation_id, reservation_takes: JSON.stringify(takes) })
+          .where('id', '=', line.id)
+          .execute();
       }
     }
 
@@ -214,9 +236,9 @@ export class ReservationsService {
   /**
    * 受注の明細が減らした分を枠に戻す。受注の修正・取消の前に呼ぶ。
    *
-   * 構成品の枠で減らしたセット行は、受注明細に枠を1つしか結べないため、
-   * 構成と当て方を引き直して戻す（結んだ枠と同じ確保の枠を優先）。
-   * 途中でセット構成や確保の条件を変えると戻し先がずれることがある。
+   * 構成品の枠で減らしたセット行は、減らしたときの内訳（reservation_takes）のとおりに戻す。
+   * 内訳が無い行（内訳を残すようになる前の受注）は、構成と当て方を引き直して戻す
+   * （結んだ枠と同じ確保の枠を優先）。この場合、途中でセット構成や確保の条件を変えると戻し先がずれることがある。
    */
   async restore(trx: Transaction<DB>, orderId: number): Promise<number> {
     const lines = await trx
@@ -227,6 +249,7 @@ export class ReservationsService {
         'l.qty as qty',
         'l.sku_id as sku_id',
         'l.reservation_id as reservation_id',
+        'l.reservation_takes as reservation_takes',
         'r.sku_id as frame_sku_id',
         'r.group_id as frame_group_id',
       ])
@@ -235,7 +258,10 @@ export class ReservationsService {
 
     let scope: OrderScope | null = null;
     for (const line of lines) {
-      if (line.sku_id === null || line.frame_sku_id === line.sku_id) {
+      const takes = parseTakes(line.reservation_takes);
+      if (takes) {
+        for (const t of takes) await this.giveBack(trx, t.reservation_id, t.qty);
+      } else if (line.sku_id === null || line.frame_sku_id === line.sku_id) {
         await this.giveBack(trx, line.reservation_id as number, line.qty);
       } else {
         // 構成品の枠で減らしたセット行
@@ -250,7 +276,11 @@ export class ReservationsService {
           if (frameId !== null) await this.giveBack(trx, frameId, c.need);
         }
       }
-      await trx.updateTable('sales_order_lines').set({ reservation_id: null }).where('id', '=', line.id).execute();
+      await trx
+        .updateTable('sales_order_lines')
+        .set({ reservation_id: null, reservation_takes: null })
+        .where('id', '=', line.id)
+        .execute();
     }
     return lines.length;
   }

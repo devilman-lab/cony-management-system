@@ -475,7 +475,9 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                           )}
                         </td>
                         <td>
-                          <Input value={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder={needsSku ? '（商品名）' : l.line_type} />
+                          <Input value={l.item_name} title={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder={needsSku ? '（商品名）' : l.line_type} />
+                          {/* 長い品名は欄で切れて (W)・カラー・サイズが見えないので、欄の下に全文を出す（3回目の全面テスト） */}
+                          {l.item_name.length > 18 && <div className="text-[10.5px] text-[var(--color-ink-2)] mt-0.5 whitespace-normal leading-snug">{l.item_name}</div>}
                           {/* 専用コード・出荷JAN は欄の下に出す（欄の右に並べると、はみ出して「…」になり読めなかった） */}
                           {l.note && <div className="text-[10.5px] text-[var(--color-brand-600)] mt-0.5 whitespace-normal">{l.note}</div>}
                         </td>

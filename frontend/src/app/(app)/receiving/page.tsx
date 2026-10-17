@@ -273,6 +273,7 @@ export default function ReceivingPage() {
       <Modal
         open={open}
         title={editing ? `入荷の編集（${editing.receipt_no}）` : '入荷の登録'}
+        anchorTop
         onClose={() => setOpen(false)}
         // 画面の幅に合わせて広げる（1280 なら画面いっぱい、広い画面では 1400px まで）。
         // 900px 固定だと、選んだ商品のカラー・サイズが「…」で切れていた（Z-10）
@@ -293,11 +294,11 @@ export default function ReceivingPage() {
           </FormRow>
         </div>
         <div className="mt-3 tbl-wrap">
-          <table className="tbl">
+          <table className="tbl tbl-form">
             <thead>
               <tr>
                 <th>商品</th>
-                <th className="r" style={{ width: 80 }}>数量</th>
+                <th className="r" style={{ width: 90 }}>数量</th>
                 <th style={{ width: 140 }}>賞味期限</th>
                 <th style={{ width: 200 }}>備考</th>
                 <th style={{ width: 96 }} />
@@ -310,10 +311,10 @@ export default function ReceivingPage() {
                     <SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchStockSkus} placeholder="商品コード・JAN・商品名" width="100%" />
                     <PickedSkuText value={l.sku} />
                   </td>
-                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" /></td>
-                  <td><Input type="date" value={l.expiry_date} onChange={(e) => setLine(l.key, { expiry_date: e.target.value })} className="!h-[26px]" /></td>
-                  <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} className="!h-[26px]" /></td>
-                  <td className="c whitespace-nowrap">
+                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} /></td>
+                  <td><Input type="date" value={l.expiry_date} onChange={(e) => setLine(l.key, { expiry_date: e.target.value })} /></td>
+                  <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} /></td>
+                  <td className="c acts whitespace-nowrap">
                     <button type="button" className="btn btn-quiet !px-1.5 !h-6" title="この行をコピーして下に足す" onClick={() => copyLine(l.key)}>コピー</button>
                     <button type="button" className="btn btn-quiet !px-1.5 !h-6" disabled={lines.length === 1} onClick={() => setLines((s) => s.filter((x) => x.key !== l.key))}>×</button>
                   </td>

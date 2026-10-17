@@ -77,6 +77,13 @@ textarea.inp{resize:vertical;height:auto;padding:6px 8px;line-height:1.5}
 .tbl-fit .btn-sm{height:24px;padding:0 7px;font-size:11.5px}
 /* 操作のボタンは列の幅で折り返す（横一列に並べて列を広げない） */
 .tbl-fit .tbl-acts{display:flex;flex-wrap:wrap;gap:4px}
+/* 明細を入力する表（入荷・在庫調整・受注・セット・引当在庫・仕入）。欄の下に選んだ商品の全文などが出て行が高くなっても、
+   欄が上下に動かないよう上でそろえる。入力中の枠（フォーカスの縁取り）が切れないよう、はみ出しを隠さない（2026-10-17 ご指摘） */
+.tbl-form tbody td{vertical-align:top;overflow:visible}
+.tbl-form tbody td.acts{padding-top:9px}
+/* 文字だけの欄（行番号・金額など）と小さなボタンだけの欄は、30px の入力欄の高さの中ほどにそろえる */
+.tbl-form tbody td:not(:has(input,select,textarea,button)){padding-top:12px}
+.tbl-form tbody td:has(> .btn):not(:has(input,select,textarea)){padding-top:9px}
 .tbl-dense{font-size:11px}
 .tbl-dense thead th{font-size:11px;padding-left:4px;padding-right:4px}
 .tbl-dense tbody td{padding-left:4px;padding-right:4px}

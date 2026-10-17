@@ -239,6 +239,7 @@ export function ReservationGroupForm({
       title={title}
       onClose={onClose}
       width={980}
+      anchorTop
       footer={
         <>
           <Button onClick={onClose}>やめる</Button>
@@ -290,7 +291,7 @@ export function ReservationGroupForm({
 
         <Section title="明細（商品コード・商品名・カラー・サイズ・確保数）" />
         <div className="tbl-wrap">
-          <table className="tbl" style={{ minWidth: 860 }}>
+          <table className="tbl tbl-form" style={{ minWidth: 860 }}>
             <thead>
               <tr>
                 <th style={{ width: 300 }}>商品コード</th>

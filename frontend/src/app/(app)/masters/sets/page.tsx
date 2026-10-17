@@ -209,7 +209,7 @@ export default function SetsPage() {
       </Card>
 
       {/* 長い構成品の名前（41字程度）でもサイズまで読めるよう広げる（No.23・M-16。以前は 680px） */}
-      <Modal open={open} title={editingId ? 'セットの編集' : 'セットの登録'} onClose={() => setOpen(false)} width={900} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!setSku || !lines.some((l) => l.sku)} onClick={save}>{editingId ? '更新する' : '登録する'}</Button></>}>
+      <Modal open={open} title={editingId ? 'セットの編集' : 'セットの登録'} onClose={() => setOpen(false)} width={900} anchorTop footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!setSku || !lines.some((l) => l.sku)} onClick={save}>{editingId ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         {/*
           候補は商品マスタで「セット商品」にした商品の SKU のうち、まだセット登録が無いものだけ（2026-10-09 マスター編②・M-14）。
@@ -226,7 +226,7 @@ export default function SetsPage() {
           </div>
         </L>
         <div className="mt-3"><Section title="構成品" /></div>
-        <table className="tbl mt-2">
+        <table className="tbl tbl-form mt-2">
           <thead><tr><th>構成品 SKU</th><th className="r" style={{ width: 90 }}>数量</th><th style={{ width: 50 }}></th></tr></thead>
           <tbody>
             {lines.map((l, i) => (

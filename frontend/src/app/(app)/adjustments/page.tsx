@@ -403,6 +403,7 @@ export default function AdjustmentsPage() {
       <Modal
         open={open}
         title={editing ? `在庫調整の編集（${editing.adjustment_no}）` : '在庫調整の登録'}
+        anchorTop
         onClose={() => setOpen(false)}
         // 画面の幅に合わせて広げる（1280 なら画面いっぱい、広い画面では 1400px まで）。
         // 900px 固定だと商品欄が狭く、選んだ商品が商品コードの途中で切れていた（Z-17）
@@ -429,11 +430,11 @@ export default function AdjustmentsPage() {
           </FormRow>
         </div>
         <div className="mt-3 tbl-wrap">
-          <table className="tbl">
+          <table className="tbl tbl-form">
             <thead>
               <tr>
                 <th>商品</th>
-                <th className="r" style={{ width: 80 }}>増減</th>
+                <th className="r" style={{ width: 90 }}>増減</th>
                 <th style={{ width: 130 }}>品質（前）</th>
                 <th style={{ width: 130 }}>品質（後）</th>
                 {/* メモは幅を決め、残りを商品の列に回す（選んだ商品のカラー・サイズまで見えるように） */}
@@ -448,11 +449,11 @@ export default function AdjustmentsPage() {
                     <SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchStockSkus} placeholder="商品コード・JAN・商品名" width="100%" />
                     <PickedSkuText value={l.sku} />
                   </td>
-                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" placeholder="-1" /></td>
-                  <td><Select value={l.from_quality} onChange={(e) => setLine(l.key, { from_quality: e.target.value })} className="!h-[26px]">{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
-                  <td><Select value={l.to_quality} onChange={(e) => setLine(l.key, { to_quality: e.target.value })} className="!h-[26px]">{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
-                  <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} className="!h-[26px]" /></td>
-                  <td className="c whitespace-nowrap">
+                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} placeholder="-1" /></td>
+                  <td><Select value={l.from_quality} onChange={(e) => setLine(l.key, { from_quality: e.target.value })}>{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
+                  <td><Select value={l.to_quality} onChange={(e) => setLine(l.key, { to_quality: e.target.value })}>{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
+                  <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} /></td>
+                  <td className="c acts whitespace-nowrap">
                     <button type="button" className="btn btn-quiet !px-1.5 !h-6" title="この行をコピーして下に足す" onClick={() => copyLine(l.key)}>コピー</button>
                     <button type="button" className="btn btn-quiet !px-1.5 !h-6" disabled={lines.length === 1} onClick={() => setLines((s) => s.filter((x) => x.key !== l.key))}>×</button>
                   </td>

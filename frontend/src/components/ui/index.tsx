@@ -335,6 +335,7 @@ export function Modal({
   footer,
   width = 640,
   dismissible = false,
+  anchorTop = false,
 }: {
   open: boolean;
   title: ReactNode;
@@ -351,6 +352,11 @@ export function Modal({
    * 入力を伴わない確認ダイアログや明細の表示だけ true にする。
    */
   dismissible?: boolean;
+  /**
+   * 画面の上寄せで出す（明細を入力するダイアログ用）。真ん中に出すと、商品を選んで欄の下に全文が出るなど
+   * 中身が伸びるたびにダイアログ全体が上にずれ、入力欄の位置が動いていた（2026-10-17 ご指摘）。
+   */
+  anchorTop?: boolean;
 }) {
   useEffect(() => {
     if (!open || !dismissible) return;
@@ -362,7 +368,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="modal-backdrop fixed inset-0 z-[80] bg-[#12242d66] flex items-center justify-center no-print"
+      className={`modal-backdrop fixed inset-0 z-[80] bg-[#12242d66] flex justify-center no-print ${anchorTop ? 'items-start pt-[6vh]' : 'items-center'}`}
       onClick={dismissible ? onClose : undefined}
     >
       <div

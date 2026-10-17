@@ -440,7 +440,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
               right={<Button size="sm" icon="plus" onClick={() => set('lines', [...d.lines, emptyLine()])}>行を追加</Button>}
             />
             <div className="tbl-wrap-wide">
-              <table className="tbl" style={{ minWidth: 1040 }}>
+              <table className="tbl tbl-form" style={{ minWidth: 1040 }}>
                 <thead>
                   <tr>
                     <th className="c" style={{ width: 36 }}>行</th>
@@ -461,7 +461,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                       <tr key={l.key}>
                         <td className="c num">{i + 1}</td>
                         <td>
-                          <Select value={l.line_type} onChange={(e) => setLine(l.key, { line_type: e.target.value as LineType, sku: needsSku ? l.sku : null })} className="!h-[26px]">
+                          <Select value={l.line_type} onChange={(e) => setLine(l.key, { line_type: e.target.value as LineType, sku: needsSku ? l.sku : null })}>
                             {LINE_TYPES.map((t) => (
                               <option key={t}>{t}</option>
                             ))}
@@ -475,20 +475,20 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                           )}
                         </td>
                         <td>
-                          <Input value={l.item_name} title={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder={needsSku ? '（商品名）' : l.line_type} />
+                          <Input value={l.item_name} title={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} placeholder={needsSku ? '（商品名）' : l.line_type} />
                           {/* 長い品名は欄で切れて (W)・カラー・サイズが見えないので、欄の下に全文を出す（3回目の全面テスト） */}
                           {l.item_name.length > 18 && <div className="text-[10.5px] text-[var(--color-ink-2)] mt-0.5 whitespace-normal leading-snug">{l.item_name}</div>}
                           {/* 専用コード・出荷JAN は欄の下に出す（欄の右に並べると、はみ出して「…」になり読めなかった） */}
                           {l.note && <div className="text-[10.5px] text-[var(--color-brand-600)] mt-0.5 whitespace-normal">{l.note}</div>}
                         </td>
                         <td className="r">
-                          <Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[70px]" />
+                          <Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!w-[70px]" />
                         </td>
                         <td className="r">
-                          <Input right value={l.unit_price} onChange={(e) => setLine(l.key, { unit_price: e.target.value })} className="!h-[26px] !w-[90px]" />
+                          <Input right value={l.unit_price} onChange={(e) => setLine(l.key, { unit_price: e.target.value })} className="!w-[90px]" />
                         </td>
                         <td className="c">
-                          <Select value={overseas ? '0.00' : l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} disabled={overseas} title={overseas ? '海外の得意先は 0% です' : undefined} className="!h-[26px] !w-[72px]">
+                          <Select value={overseas ? '0.00' : l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} disabled={overseas} title={overseas ? '海外の得意先は 0% です' : undefined} className="!w-[72px]">
                             <option value="10.00">10%</option>
                             <option value="8.00">8%</option>
                             <option value="0.00">0%</option>

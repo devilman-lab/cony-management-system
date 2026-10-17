@@ -117,10 +117,12 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
       })}
       renderForm={(f, set) => (
         <div className="flex flex-col gap-3">
+          {/* コードと名称は1行ずつ横いっぱいに使う。2列に並べると半分の幅に 150px のコード欄が収まらず右端が切れ、
+              名称の欄も短すぎた（2026-10-17 ご指摘） */}
           <div className="master-grid-2">
-            <L label="コード" required><Input value={f.code} onChange={(e) => set({ code: e.target.value })} className="!w-[150px]" /></L>
+            <L label="コード" required wide><Input value={f.code} onChange={(e) => set({ code: e.target.value })} className="!w-[200px]" /></L>
+            <L label="名称" required wide><Input value={f.name} onChange={(e) => set({ name: e.target.value })} className="!w-full" /></L>
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
-            <L label="名称" required><Input value={f.name} onChange={(e) => set({ name: e.target.value })} /></L>
             {isRule && <L label="リードタイム（日）"><Input right value={f.lead_time_days} onChange={(e) => set({ lead_time_days: e.target.value })} className="!w-[90px]" /></L>}
             {isRule && <L label="納品可能曜日" hint="例：月火水木金"><Input value={f.allowed_weekdays} onChange={(e) => set({ allowed_weekdays: e.target.value })} className="!w-[160px]" /></L>}
           </div>
@@ -284,9 +286,9 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         <L label="カテゴリー"><span className="text-[12px]">{values.data?.category.name ?? current}</span></L>
         <L label="コード" required hint={fixed?.codeHint}><Input value={f.code} onChange={(e) => setF({ ...f, code: fixed?.category === 'CURRENCY' ? e.target.value.toUpperCase() : e.target.value })} className="!w-[150px]" disabled={!!editing} /></L>
-        <L label="名称" required><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></L>
+        <L label="名称" required><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} className="!w-full" /></L>
         <L label="表示順"><Input right value={f.sort_order} onChange={(e) => setF({ ...f, sort_order: e.target.value })} className="!w-[90px]" /></L>
-        <L label="備考"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></L>
+        <L label="備考"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className="!w-full" /></L>
       </Modal>
     </div>
   );

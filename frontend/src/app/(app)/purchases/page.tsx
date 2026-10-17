@@ -242,7 +242,7 @@ export default function PurchasesPage() {
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
       </Card>
 
-      <Modal open={open} title="仕入・経費の登録" onClose={() => setOpen(false)} width={960} footer={<><span className="mr-auto text-[12px]">合計 <b className="num">{moneyWithCurrency(total, f.currency)}</b></span><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>登録する</Button></>}>
+      <Modal open={open} title="仕入・経費の登録" onClose={() => setOpen(false)} width={960} anchorTop footer={<><span className="mr-auto text-[12px]">合計 <b className="num">{moneyWithCurrency(total, f.currency)}</b></span><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>登録する</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         <div className="master-grid-2">
           <FormRow label="区分" required>
@@ -265,7 +265,7 @@ export default function PurchasesPage() {
         </div>
         <div className="mt-2"><Textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="備考" /></div>
         <div className="mt-3 tbl-wrap">
-          <table className="tbl" style={{ minWidth: 880 }}>
+          <table className="tbl tbl-form" style={{ minWidth: 880 }}>
             <thead>
               <tr>
                 <th style={{ width: 160 }}>仕入項目</th>
@@ -282,16 +282,16 @@ export default function PurchasesPage() {
               {lines.map((l) => (
                 <tr key={l.key}>
                   <td>
-                    <Select value={l.purchase_item_id} onChange={(e) => pickItem(l.key, e.target.value)} className="!h-[26px]">
+                    <Select value={l.purchase_item_id} onChange={(e) => pickItem(l.key, e.target.value)}>
                       <option value="">（自由入力）</option>
                       {(items.data?.items ?? []).map((x) => <option key={x.id} value={x.id}>{x.purchase_code}　{x.item_name}</option>)}
                     </Select>
                   </td>
-                  <td><Input value={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} className="!h-[26px]" placeholder="品名・内容" /></td>
-                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!h-[26px] !w-[60px]" /></td>
-                  <td className="r"><Input right value={l.unit_cost} onChange={(e) => setLine(l.key, { unit_cost: e.target.value })} className="!h-[26px] !w-[90px]" /></td>
+                  <td><Input value={l.item_name} onChange={(e) => setLine(l.key, { item_name: e.target.value })} placeholder="品名・内容" /></td>
+                  <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} className="!w-[60px]" /></td>
+                  <td className="r"><Input right value={l.unit_cost} onChange={(e) => setLine(l.key, { unit_cost: e.target.value })} className="!w-[90px]" /></td>
                   <td>
-                    <Select value={l.target} onChange={(e) => setLine(l.key, { target: e.target.value as LineDraft['target'] })} className="!h-[26px]">
+                    <Select value={l.target} onChange={(e) => setLine(l.key, { target: e.target.value as LineDraft['target'] })}>
                       <option value="none">指定なし</option>
                       <option value="product">商品</option>
                       <option value="class">商品分類</option>
@@ -300,11 +300,11 @@ export default function PurchasesPage() {
                   </td>
                   <td>
                     {l.target === 'product' && <SearchSelect value={l.product} onChange={(o) => setLine(l.key, { product: o })} fetchOptions={fetchProducts} placeholder="商品コード・商品名" width="100%" />}
-                    {l.target === 'brand' && <Select value={l.brand_id} onChange={(e) => setLine(l.key, { brand_id: e.target.value })} className="!h-[26px]"><option value="">選んでください</option>{(brands.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
-                    {l.target === 'class' && <Select value={l.class_id} onChange={(e) => setLine(l.key, { class_id: e.target.value })} className="!h-[26px]"><option value="">選んでください</option>{(classes.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
+                    {l.target === 'brand' && <Select value={l.brand_id} onChange={(e) => setLine(l.key, { brand_id: e.target.value })}><option value="">選んでください</option>{(brands.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
+                    {l.target === 'class' && <Select value={l.class_id} onChange={(e) => setLine(l.key, { class_id: e.target.value })}><option value="">選んでください</option>{(classes.data?.items ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}
                   </td>
                   <td>
-                    <Select value={l.tax_division_id} onChange={(e) => setLine(l.key, { tax_division_id: e.target.value, tax_rate: e.target.value ? rateOfDivision(e.target.value) : '10.00', tax_auto: false })} className="!h-[26px]">
+                    <Select value={l.tax_division_id} onChange={(e) => setLine(l.key, { tax_division_id: e.target.value, tax_rate: e.target.value ? rateOfDivision(e.target.value) : '10.00', tax_auto: false })}>
                       <option value="">（指定なし・10%）</option>
                       {(taxDivisions.data?.values ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </Select>

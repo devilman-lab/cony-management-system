@@ -7,8 +7,9 @@ import { useAuth } from '@/lib/auth';
 import { useFetch } from '@/lib/hooks';
 import { Badge, Button, Card, CardHead, DataTable, ErrorBox, Input, Modal, Num, PageHead, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
+import { RecordStamp } from '@/components/ui/RecordStamp';
 import { MasterPage, numOrNull, strOrNull } from '@/components/masters/MasterPage';
-import { L } from '@/components/masters/Form';
+import { ActiveToggle, L } from '@/components/masters/Form';
 import { MasterCsv } from '@/components/masters/MasterCsv';
 import { MasterGrid } from '@/components/masters/MasterGrid';
 
@@ -37,6 +38,8 @@ interface SimpleRow extends Record<string, unknown> {
   allowed_weekdays?: string | null;
   rule_body?: string | null;
   instruction_body?: string | null;
+  /** 商品分類だけが持つブランド（M3-18・M3-42） */
+  brand_id?: number | null;
 }
 interface SimpleForm {
   code: string;
@@ -47,6 +50,8 @@ interface SimpleForm {
   allowed_weekdays: string;
   rule_body: string;
   instruction_body: string;
+  /** 商品分類のブランド。空ならどのブランドの商品でも選べる（M3-18・M3-42） */
+  brand_id?: string;
 }
 const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
@@ -85,6 +90,10 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 function SimpleTab({ kind, label }: { kind: string; label: string }) {
   const isRule = kind === 'delivery_rules';
   const isInstr = kind === 'work_instructions';
+  // 商品分類はブランドを持つ（2026-10-18 マスター編_3 M3-18・M3-42）。名前を出すため、使わないブランドも含めて読む
+  const isClass = kind === 'product_classes';
+  const brands = useFetch<{ items: { id: number; code: string; name: string; is_active?: boolean }[] }>(isClass ? '/masters/simple/brands' : null, { limit: 200, include_inactive: 'true' });
+  const brandName = (id: unknown) => (brands.data?.items ?? []).find((b) => b.id === Number(id))?.name ?? '';
   return (
     <MasterPage<SimpleRow, SimpleForm>
       title={label}
@@ -96,24 +105,28 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
       modalWidth={560}
       columns={[
         { key: 'code', label: 'コード', width: 110, render: (r) => <Num className="font-semibold">{r.code}</Num> },
-        { key: 'name', label: '名称' },
+        // 作業指示内容は「名称」を使わない（コードと本文だけ。2026-10-16 マスター編3 M3-40）
+        ...(isInstr ? [] : [{ key: 'name', label: '名称' }]),
+        ...(isClass ? [{ key: 'brand_id', label: 'ブランド', width: 140, render: (r: SimpleRow) => (r.brand_id ? brandName(r.brand_id) : <span className="text-[var(--color-ink-3)]">（共通）</span>) }] : []),
         ...(isRule ? [{ key: 'lead_time_days', label: 'リードタイム', r: true, width: 100, render: (r: SimpleRow) => (r.lead_time_days != null ? `${r.lead_time_days} 日` : '') }, { key: 'allowed_weekdays', label: '納品可能曜日', width: 110, render: (r: SimpleRow) => r.allowed_weekdays ?? '' }] : []),
         { key: 'sort_order', label: '表示順', r: true, width: 70, render: (r) => r.sort_order ?? '' },
-        { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[260px]">{(isInstr ? r.instruction_body : r.note) ?? ''}</span> },
+        { key: 'note', label: isInstr ? '本文' : '備考', render: (r) => <span className={isInstr ? 'whitespace-normal break-words' : 'truncate block max-w-[260px]'}>{(isInstr ? r.instruction_body : r.note) ?? ''}</span> },
         { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
       // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）
-      rowLabel={(r) => `${label} ${r.code}　${r.name}`}
+      rowLabel={(r) => (isInstr ? `${label} ${r.code}` : `${label} ${r.code}　${r.name}`)}
       empty={() => ({ code: '', name: '', sort_order: '', note: '', lead_time_days: '', allowed_weekdays: '', rule_body: '', instruction_body: '' })}
-      toForm={(r) => ({ code: r.code, name: r.name, sort_order: s(r.sort_order), note: s(r.note), lead_time_days: s(r.lead_time_days), allowed_weekdays: s(r.allowed_weekdays), rule_body: s(r.rule_body), instruction_body: s(r.instruction_body) })}
+      toForm={(r) => ({ code: r.code, name: r.name, sort_order: s(r.sort_order), note: s(r.note), lead_time_days: s(r.lead_time_days), allowed_weekdays: s(r.allowed_weekdays), rule_body: s(r.rule_body), instruction_body: s(r.instruction_body), brand_id: s(r.brand_id) })}
       toBody={(f) => ({
         code: f.code.trim(),
-        name: f.name.trim(),
+        // 作業指示内容は名称の欄を出さず、コードで埋める（M3-40。名称は必須の列のため）
+        name: isInstr ? f.code.trim() : f.name.trim(),
         sort_order: numOrNull(f.sort_order),
         note: strOrNull(f.note),
         ...(isRule ? { lead_time_days: numOrNull(f.lead_time_days), allowed_weekdays: strOrNull(f.allowed_weekdays), rule_body: strOrNull(f.rule_body) } : {}),
         ...(isInstr ? { instruction_body: f.instruction_body } : {}),
+        ...(isClass ? { brand_id: numOrNull(f.brand_id ?? '') } : {}),
       })}
       renderForm={(f, set) => (
         <div className="flex flex-col gap-3">
@@ -121,7 +134,15 @@ function SimpleTab({ kind, label }: { kind: string; label: string }) {
               名称の欄も短すぎた（2026-10-17 ご指摘） */}
           <div className="master-grid-2">
             <L label="コード" required wide><Input value={f.code} onChange={(e) => set({ code: e.target.value })} className="!w-[200px]" /></L>
-            <L label="名称" required wide><Input value={f.name} onChange={(e) => set({ name: e.target.value })} className="!w-full" /></L>
+            {!isInstr && <L label="名称" required wide><Input value={f.name} onChange={(e) => set({ name: e.target.value })} className="!w-full" /></L>}
+            {isClass && (
+              <L label="ブランド" wide hint="空ならどのブランドの商品でも選べます">
+                <Select value={f.brand_id ?? ''} onChange={(e) => set({ brand_id: e.target.value })} className="!w-[240px]">
+                  <option value="">（共通・ブランドなし）</option>
+                  {(brands.data?.items ?? []).filter((b) => b.is_active !== false || String(b.id) === f.brand_id).map((b) => <option key={b.id} value={b.id}>{b.code}　{b.name}</option>)}
+                </Select>
+              </L>
+            )}
             <L label="表示順"><Input right value={f.sort_order} onChange={(e) => set({ sort_order: e.target.value })} className="!w-[90px]" /></L>
             {isRule && <L label="リードタイム（日）"><Input right value={f.lead_time_days} onChange={(e) => set({ lead_time_days: e.target.value })} className="!w-[90px]" /></L>}
             {isRule && <L label="納品可能曜日" hint="例：月火水木金"><Input value={f.allowed_weekdays} onChange={(e) => set({ allowed_weekdays: e.target.value })} className="!w-[160px]" /></L>}
@@ -153,7 +174,7 @@ interface CodeRow extends Record<string, unknown> {
  */
 interface FixedCodeTab { tab: string; category: string; title: string; sub: string; codeHint?: string }
 const FIXED_CODE_TABS: FixedCodeTab[] = [
-  { tab: '_currency', category: 'CURRENCY', title: '通貨', sub: '取引先マスタの「通貨」（受注・請求書・入金はその取引先の通貨になります）、仕入・経費、入出金で選ぶ通貨です。コードは英大文字3文字（USD・CNY など）', codeHint: '英大文字3文字' },
+  { tab: '_currency', category: 'CURRENCY', title: '通貨', sub: '仕入・経費と入出金で選ぶ通貨です（受注・請求書は円です）。コードは英大文字3文字（USD・CNY など）', codeHint: '英大文字3文字' },
   { tab: '_expense', category: 'EXPENSE_DIVISION', title: '経費科目', sub: '仕入・経費の登録で選ぶ経費科目（勘定科目にあたるもの）です' },
 ];
 
@@ -171,28 +192,59 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
   const [gridMode, setGridMode] = useState(false);
   const canGrid = can('M-16', 'update');
   const rows = (values.data?.values ?? []).filter((r) => showInactive || r.is_active);
-  const setActive = async (r: CodeRow, active: boolean) => {
-    if (!active && !(await confirm(`「${r.name}」を使わないにしますか`, '選択肢から外れます。登録済みの伝票はそのまま読めます。'))) return;
+  /**
+   * 削除（2026-10-16 マスター編3 M3-39。区分値・通貨・経費科目のタブにも付けた）。
+   * 使われている値・システムの処理で使う値はサーバーが理由を付けて断るので、その文言を一覧の上に出す
+   * （トーストだと長い理由が読み切れずに消えるため）。
+   */
+  const [listError, setListError] = useState<unknown>(null);
+  const remove = async (r: CodeRow) => {
+    setListError(null);
+    if (
+      !(await confirm(
+        'このデータを削除しますか',
+        <>
+          <b>{r.code}　{r.name}</b> を完全に消します。元に戻せません。
+          <br />
+          伝票などで使われているものは消せません。その場合は「編集」で「非表示」にしてください。
+        </>,
+        true,
+      ))
+    ) {
+      return;
+    }
     try {
-      await api.patch(`/masters/codes/${r.id}`, { is_active: active });
-      toast(active ? '有効に戻しました' : '使わないにしました', 'good');
+      await api.delete(`/masters/codes/${r.id}`);
+      toast('削除しました', 'good');
       await values.reload();
     } catch (e) {
-      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
+      setListError(e);
     }
   };
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CodeRow | null>(null);
+  // コピーで開いた登録画面か（M3-39。見出しだけ変える。保存は新規と同じ）
+  const [copying, setCopying] = useState(false);
   const [f, setF] = useState({ code: '', name: '', sort_order: '', note: '' });
+  // 編集画面の「表示／非表示」（M3-02。一覧の「使わない」をやめて編集画面で切り替える）
+  const [active, setActiveFlag] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const openForm = (r: CodeRow | null, mode: 'new' | 'edit' | 'copy') => {
+    setEditing(mode === 'edit' ? r : null);
+    setCopying(mode === 'copy');
+    setF(r && mode !== 'new' ? { code: r.code, name: r.name, sort_order: r.sort_order == null ? '' : String(r.sort_order), note: r.note ?? '' } : { code: '', name: '', sort_order: '', note: '' });
+    setActiveFlag(mode === 'edit' && r ? r.is_active : true);
+    setError(null);
+    setOpen(true);
+  };
 
   const save = async () => {
     setError(null);
     setBusy(true);
     try {
       const body = { code: f.code.trim(), name: f.name.trim(), sort_order: numOrNull(f.sort_order), note: strOrNull(f.note) };
-      if (editing) await api.patch(`/masters/codes/${editing.id}`, { name: body.name, sort_order: body.sort_order, note: body.note });
+      if (editing) await api.patch(`/masters/codes/${editing.id}`, { name: body.name, sort_order: body.sort_order, note: body.note, is_active: active });
       else await api.post('/masters/codes', { ...body, code_category_code: current });
       toast(editing ? '更新しました' : '登録しました', 'good');
       setOpen(false);
@@ -228,7 +280,7 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
                 onImported={() => values.reload()}
               />
             )}
-            {can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => { setEditing(null); setF({ code: '', name: '', sort_order: '', note: '' }); setError(null); setOpen(true); }}>{fixed ? '新規登録' : '値を追加'}</Button>}
+            {can('M-16', 'create') && <Button variant="primary" icon="plus" onClick={() => openForm(null, 'new')}>{fixed ? '新規登録' : '値を追加'}</Button>}
           </>
         }
       />
@@ -254,6 +306,7 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
           )}
         </Toolbar>
         {values.error ? <div className="p-3"><ErrorBox error={values.error} /></div> : null}
+        {listError ? <div className="p-3"><ErrorBox error={listError} onClose={() => setListError(null)} /></div> : null}
         <DataTable<CodeRow>
           columns={[
             { key: 'code', label: 'コード', width: 140, render: (r) => <Num className="font-semibold">{r.code}</Num> },
@@ -262,16 +315,17 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
             { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[260px]">{r.note ?? ''}</span> },
             { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
             {
+              // 操作は MasterPage と同じ「編集」「コピー」「削除」（M3-02・M3-39）
               key: '_act',
               label: '',
-              width: 170,
-              render: (r) =>
-                can('M-16', 'update') && (
-                  <span className="flex gap-1 justify-end">
-                    <Button size="sm" onClick={() => { setEditing(r); setF({ code: r.code, name: r.name, sort_order: r.sort_order == null ? '' : String(r.sort_order), note: r.note ?? '' }); setError(null); setOpen(true); }}>編集</Button>
-                    {r.is_active ? <Button size="sm" variant="danger" onClick={() => setActive(r, false)}>使わない</Button> : <Button size="sm" onClick={() => setActive(r, true)}>有効に戻す</Button>}
-                  </span>
-                ),
+              width: 122,
+              render: (r) => (
+                <span className="tbl-acts justify-end">
+                  {can('M-16', 'update') && <Button size="sm" onClick={() => openForm(r, 'edit')}>編集</Button>}
+                  {can('M-16', 'create') && <Button size="sm" onClick={() => openForm(r, 'copy')}>コピー</Button>}
+                  {can('M-16', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
+                </span>
+              ),
             },
           ]}
           rows={rows}
@@ -282,13 +336,17 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
         </>
         )}
       </Card>
-      <Modal open={open} title={editing ? `${fixed?.title ?? '区分値'}の編集` : `${fixed?.title ?? '区分値'}の追加`} onClose={() => setOpen(false)} width={480} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
+      <Modal open={open} title={editing ? `${fixed?.title ?? '区分値'}の編集` : `${fixed?.title ?? '区分値'}の追加${copying ? '（コピー）' : ''}`} onClose={() => setOpen(false)} width={480} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
+        {copying && <div className="mb-2 text-[11.5px] text-[var(--color-ink-2)]">選んだ行の内容を写しました。コードを直して「登録する」を押すと、新しく登録します（元のデータはそのままです）。</div>}
         <L label="カテゴリー"><span className="text-[12px]">{values.data?.category.name ?? current}</span></L>
         <L label="コード" required hint={fixed?.codeHint}><Input value={f.code} onChange={(e) => setF({ ...f, code: fixed?.category === 'CURRENCY' ? e.target.value.toUpperCase() : e.target.value })} className="!w-[150px]" disabled={!!editing} /></L>
         <L label="名称" required><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} className="!w-full" /></L>
         <L label="表示順"><Input right value={f.sort_order} onChange={(e) => setF({ ...f, sort_order: e.target.value })} className="!w-[90px]" /></L>
         <L label="備考"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className="!w-full" /></L>
+        {/* 表示／非表示（M3-02）と登録日・更新日（M3-01）は、編集のときだけ */}
+        {editing && <ActiveToggle value={active} onChange={setActiveFlag} />}
+        {editing && <RecordStamp table="codes" id={editing.id} />}
       </Modal>
     </div>
   );

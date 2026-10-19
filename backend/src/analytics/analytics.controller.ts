@@ -4,11 +4,15 @@ import { z } from 'zod';
 import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { AnalyticsService, DIMENSIONS, MEASURES, SENSITIVE_MEASURES } from './analytics.service';
+import { AnalyticsService, DIMENSIONS, LEGACY_DIMENSIONS, MEASURES, SENSITIVE_MEASURES } from './analytics.service';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 
-const dimension = z.enum(Object.keys(DIMENSIONS) as [string, ...string[]]);
+// 前の軸の名前（「商品コード」＝品番、「SKU」）は今の名前に読み替えて受ける（2026-10-18 受入 W2）
+const dimension = z.preprocess(
+  (v) => (typeof v === 'string' && LEGACY_DIMENSIONS[v] ? LEGACY_DIMENSIONS[v] : v),
+  z.enum(Object.keys(DIMENSIONS) as [string, ...string[]]),
+);
 const measure = z.enum(Object.keys(MEASURES) as [string, ...string[]]);
 
 const SalesSchema = z.object({

@@ -137,23 +137,28 @@ await check('M-02 取引先の「海外」を編集で外せ、戻せる', async
   const b = await one('select is_overseas from partners where id = $1', [domesticCust.id]);
   return (a.is_overseas === true && b.is_overseas === false) || { a, b };
 });
-await check('M-02 取引先 CSV の書き出しに「海外」列があり、海外の取引先は「有効」', async () => {
+// 2026-10-16 マスター編_3（M3-07）: 「海外」は取引先ごとの「消費税免税区分」（なし／免税（税抜扱い）／課税対象外）に変わった
+await check('M-02 取引先 CSV の書き出しに「消費税免税区分」列があり、海外の取引先は「免税（税抜扱い）」', async () => {
   const csv = (await raw('/masters/csv/partners/export', A)).toString('utf8').replace(/^﻿/, '');
   // セルはすべて "…" で囲まれて出る。今回の行にはカンマを含む値が無いので単純に割る
   // コードは頭の 0 を守るため ="..." の形で出る（2026-10-12 受入 No.3 D-7）ので外して比べる
   const cells = (line) => line.split(',').map((c) => c.replace(/^"|"$/g, '').replace(/^=""(.*)""$/, '$1'));
   const lines = csv.split(/\r?\n/);
   const head = cells(lines[0]);
-  const idx = head.indexOf('海外');
+  const idx = head.indexOf('消費税免税区分');
   const row = lines.map(cells).find((x) => x[0] === overseasCust.partner_code);
-  return (idx >= 0 && row?.[idx] === '有効') || { idx, cell: row?.[idx] };
+  return (idx >= 0 && row?.[idx] === '免税（税抜扱い）') || { idx, cell: row?.[idx] };
 });
-await check('M-02 取引先 CSV の取込で「海外」を書き換えられる', async () => {
-  const content = `取引先コード,海外\r\n${domesticCust.partner_code},有効\r\n`;
+await check('M-02 取引先 CSV の取込で「消費税免税区分」を入れると海外の取引先になる', async () => {
+  const content = `取引先コード,消費税免税区分\r\n${domesticCust.partner_code},課税対象外\r\n`;
   ok(await call('POST', '/masters/csv/partners/import', A, { content_base64: Buffer.from(content, 'utf8').toString('base64'), dry_run: false }), 'import');
-  const a = await one('select is_overseas from partners where id = $1', [domesticCust.id]);
-  await db.query('update partners set is_overseas = false where id = $1', [domesticCust.id]);
-  return a.is_overseas === true || a;
+  const a = await one('select is_overseas, overseas_tax_treatment from partners where id = $1', [domesticCust.id]);
+  await db.query('update partners set is_overseas = false, overseas_tax_treatment = null where id = $1', [domesticCust.id]);
+  return (a.is_overseas === true && a.overseas_tax_treatment === 'non_taxable') || a;
+});
+await check('M3-07 海外にしただけ（区分を送らない）の取引先には、システム設定の扱いが区分として入る', async () => {
+  const a = await one('select overseas_tax_treatment from partners where id = $1', [overseasCust.id]);
+  return a.overseas_tax_treatment === originalTreatment || a;
 });
 
 // ---- M-02 効き目：締め処理の消費税 ---------------------------------------------------
@@ -184,14 +189,18 @@ await check('M-02 請求書 PDF の文字を取り出せる（検査の前提）
   const txt = pdfText(await raw(`/reports/invoices?invoice_ids=${jpInv.id}`, A));
   return txt.includes('請') && txt.includes('10%') || txt.slice(0, 200);
 });
-await check('M-02 海外の請求書 PDF に「免税（税抜扱い）」（設定 exempt）', async () => {
-  await setSetting('exempt');
+// 表記は取引先の消費税免税区分に従う（2026-10-16 M3-07。以前はシステム設定だけで決めていた）
+const setPartnerTreatment = async (p, v) => ok(await call('PATCH', `/masters/partners/${p.id}`, A, { overseas_tax_treatment: v }), 'treatment');
+await check('M-02 海外の請求書 PDF に「免税（税抜扱い）」（取引先の区分 免税）', async () => {
+  await setPartnerTreatment(overseasCust, 'exempt');
   const txt = pdfText(await raw(`/reports/invoices?invoice_ids=${ovInv.id}`, A));
   return (txt.includes('免税（税抜扱い）') && !txt.includes('課税対象外')) || txt.slice(0, 300);
 });
-await check('M-02 海外の請求書 PDF に「課税対象外」（設定 non_taxable）', async () => {
-  await setSetting('non_taxable');
+await check('M-02 海外の請求書 PDF に「課税対象外」（取引先の区分 課税対象外。システム設定は免税のまま）', async () => {
+  await setSetting('exempt');
+  await setPartnerTreatment(overseasCust, 'non_taxable');
   const txt = pdfText(await raw(`/reports/invoices?invoice_ids=${ovInv.id}`, A));
+  await setPartnerTreatment(overseasCust, 'exempt');
   return (txt.includes('課税対象外') && !txt.includes('免税')) || txt.slice(0, 300);
 });
 await check('M-02 国内の請求書 PDF には免税・課税対象外の表記が出ない', async () => {
@@ -208,13 +217,13 @@ const purchaseLine = async (sup, line) => {
   const p = ok(await call('POST', '/purchases', A, { division: '仕入', supplier_partner_id: sup.id, purchase_date: today, lines: [{ line_no: 1, item_name: 'M1仕入', unit_cost: '100', ...line }] }), 'purchase');
   return one('select l.tax_rate, c.code from purchase_lines l left join codes c on c.id = l.tax_division_code_id where l.purchase_id = $1', [p.id]);
 };
-await check('M-02 海外の仕入先・税区分なし → 免税の設定では「非課税」(EXEMPT)・0%', async () => {
-  await setSetting('exempt');
+await check('M-02 海外の仕入先・税区分なし → 区分が免税なら「非課税」(EXEMPT)・0%', async () => {
+  await setPartnerTreatment(ovSup, 'exempt');
   const l = await purchaseLine(ovSup, {});
   return (l.code === 'EXEMPT' && Number(l.tax_rate) === 0) || l;
 });
-await check('M-02 海外の仕入先・税区分なし → 課税対象外の設定では「不課税」(NON_TAX)・0%', async () => {
-  await setSetting('non_taxable');
+await check('M-02 海外の仕入先・税区分なし → 区分が課税対象外なら「不課税」(NON_TAX)・0%', async () => {
+  await setPartnerTreatment(ovSup, 'non_taxable');
   const l = await purchaseLine(ovSup, { tax_rate: '0.00' });
   return (l.code === 'NON_TAX' && Number(l.tax_rate) === 0) || l;
 });

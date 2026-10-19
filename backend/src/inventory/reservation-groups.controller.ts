@@ -26,7 +26,8 @@ const HeaderShape = {
   media_id: id.nullish(),
   /** 入っていれば、この取引先の受注だけで減らす */
   partner_id: id.nullish(),
-  sales_category_id: id,
+  /** 空ならどの販売カテゴリーの受注でも減る。選んだときだけその販売カテゴリーに限る（在庫編_2 Z3-15） */
+  sales_category_id: id.nullish(),
   /** 項目（楽楽販売の「集計」にあたる見出し）。当て方には使わない */
   item_label: z.string().trim().max(60, '項目は60文字までです').nullish(),
   product_class_id: id.nullish(),
@@ -44,7 +45,6 @@ const UpdateGroupSchema = z.object({
   ...HeaderShape,
   period_from: ymd.optional(),
   period_to: ymd.optional(),
-  sales_category_id: id.optional(),
   lines: z.array(LineSchema).min(1, '明細（商品と確保数）を1行以上入力してください').optional(),
 });
 type UpdateGroupBody = z.infer<typeof UpdateGroupSchema>;
@@ -53,10 +53,12 @@ const FilterShape = {
   /** 月の一覧は from〜to（その月に少しでもかかる確保） */
   from: ymd.optional(),
   to: ymd.optional(),
-  sales_category_id: z.coerce.number().int().positive().optional(),
+  /** none は販売カテゴリーが空（指定なし）の確保だけ */
+  sales_category_id: z.union([z.literal('none'), z.coerce.number().int().positive()]).optional(),
   media_id: z.coerce.number().int().positive().optional(),
   partner_id: z.coerce.number().int().positive().optional(),
   sku_id: z.coerce.number().int().positive().optional(),
+  /** キーワード。項目・備考・商品コード・商品名（Z3-13） */
   q: z.string().trim().min(1).max(60).optional(),
 };
 const ListSchema = z.object({
@@ -116,7 +118,10 @@ export class ReservationGroupsController {
     return this.reservations.skuOptions(query);
   }
 
-  /** 前月の確保を翌月分として複写する（見出しごと。明細も写し、使用数は 0 から）。 */
+  /**
+   * 前月の確保を翌月分として複写する（見出しごと。明細も写し、使用数は 0 から）。
+   * 2026-10-16（在庫編_2 Z3-14）に画面のボタンは外した（確保ごとの「コピー」で写す）。経路は残す。
+   */
   @Post('copy-month')
   @HttpCode(200)
   @RequirePermission('S-08', 'create')

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { z } from 'zod';
 
 import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
@@ -6,17 +7,24 @@ import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { StocksService, type StockVisibility } from './stocks.service';
 
-const ListQuerySchema = z.object({
+const FilterShape = {
   q: z.string().trim().min(1).max(60).optional(),
   warehouse_id: z.coerce.number().int().positive().optional(),
   available_only: z
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+  /** 並び。sku＝商品コードの昇順（既定）、class＝分類コード順（在庫編_2 Z3-01） */
+  sort: z.enum(['sku', 'class']).default('sku'),
+};
+const ListQuerySchema = z.object({
+  ...FilterShape,
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
 type ListQuery = z.infer<typeof ListQuerySchema>;
+const ExportQuerySchema = z.object(FilterShape);
+type ExportQuery = z.infer<typeof ExportQuerySchema>;
 
 const UpdateNoteSchema = z.object({ note: z.string().max(2000).nullable() });
 type UpdateNoteBody = z.infer<typeof UpdateNoteSchema>;
@@ -60,6 +68,29 @@ export class StocksController {
   @RequirePermission('S-01', 'view')
   async list(@Query(new ZodValidationPipe(ListQuerySchema)) query: ListQuery, @CurrentUser() user: AuthenticatedUser) {
     return this.stocks.list(query, await this.visibility(user.id));
+  }
+
+  /**
+   * 在庫表の CSV（在庫編_2 Z3-03）。画面の絞り込み・検索・並びのまま、ページに関係なく全件。
+   * 画面を見られる人なら出せる（実在庫・引当済・原価は画面と同じく権限のある人だけの列）。
+   * 決まった名前の経路なので :id より先に置く（:id は PATCH だけだが、念のため）。
+   */
+  @Get('export')
+  @RequirePermission('S-01', 'view')
+  async export(
+    @Query(new ZodValidationPipe(ExportQuerySchema)) query: ExportQuery,
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    const csv = await this.stocks.exportCsv(query, await this.visibility(user.id));
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const name = `在庫表_${stamp}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="stocks-${stamp}.csv"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    );
+    res.end(csv);
   }
 
   /** 1つの SKU を倉庫別に。受注入力の横で「今いくつ引き当てられるか」を見る。 */

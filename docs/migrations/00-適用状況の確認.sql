@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 10本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 11本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -162,6 +162,23 @@ SELECT '⑩ セット受注で減らした引当在庫の内訳',
                    WHERE table_schema = 'cony' AND table_name = 'sales_order_lines' AND column_name = 'reservation_takes') = 1
             THEN '済' ELSE '未' END,
        '2026-10-13_reservation_takes.sql'
+UNION ALL
+SELECT '⑪ マスター編_3・在庫編_2（取引先の追加項目・SKU旧原価・得意先別商品の複数行・確保の販売カテゴリー任意）',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND ((table_name = 'partners' AND column_name IN ('invoice_email', 'overseas_tax_treatment', 'payment_day2'))
+                   OR (table_name = 'skus' AND column_name = 'old_cost_price')
+                   OR (table_name = 'product_classes' AND column_name = 'brand_id'))) = 5
+          AND (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND table_name = 'reservations' AND column_name = 'sales_category_id' AND is_nullable = 'YES') = 1
+          AND (SELECT count(*) FROM code_categories WHERE code IN ('RECEIPT_METHOD', 'INVOICE_SEND_METHOD', 'ROYALTY_CLASS')) = 3
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND table_name = 'partners' AND column_name = 'invoice_email') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-18_master3_stock2.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。

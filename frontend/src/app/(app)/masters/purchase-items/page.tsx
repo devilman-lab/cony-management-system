@@ -19,6 +19,11 @@ interface ItemRow extends Record<string, unknown> {
   sort_order: number | null;
   note: string | null;
   is_active: boolean;
+  /** 一覧に出す名前（API が添える。M3-30） */
+  brand_name?: string | null;
+  category_name?: string | null;
+  product_class_code?: string | null;
+  product_class_name?: string | null;
 }
 
 interface Form {
@@ -74,15 +79,23 @@ export default function PurchaseItemsPage() {
       csvSlug="purchase-items"
       listPath="/masters/purchase-items"
       writePath="/masters/purchase-items"
+      // 1280 では操作のボタンを「品目名」の欄の下に入れる（操作の列まで入れると枠に収まらず、ボタンが枠の外に出ていた。2026-10-18 受入 W2）
+      narrowActions="item_name"
       columns={[
-        { key: 'purchase_code', label: 'コード', width: 120, render: (r) => <Num className="font-semibold">{r.purchase_code}</Num> },
-        { key: 'item_name', label: '品目名' },
-        { key: 'unit_cost', label: '単価', r: true, width: 110, render: (r) => money(r.unit_cost) },
+        { key: 'purchase_code', label: 'コード', width: 110, render: (r) => <Num className="font-semibold">{r.purchase_code}</Num> },
+        // 品目名の列は詰め、ブランド・商品分類・カテゴリーを並べる（2026-10-18 マスター編_3 M3-30）。
+        // 名前は API が添える（画面の選択肢は 200 件までなので、そこから引くと欠けることがある）。
+        // 列幅の合計は操作の列を入れて 1016px（1440 の枠に収まる。1280 は操作の列を外して 894px）
+        { key: 'item_name', label: '品目名', width: 180 },
+        { key: 'brand_name', label: 'ブランド', width: 100, render: (r) => r.brand_name ?? '' },
+        { key: 'product_class_name', label: '商品分類', render: (r) => <span title={r.product_class_code ?? ''}>{r.product_class_name ?? ''}</span> },
+        { key: 'category_name', label: 'カテゴリー', width: 96, render: (r) => r.category_name ?? '' },
+        { key: 'unit_cost', label: '単価', r: true, width: 90, render: (r) => money(r.unit_cost) },
         {
           key: 'new_tax_rate',
           label: '税率',
           r: true,
-          width: 90,
+          width: 64,
           render: (r) => {
             const expected = rateOf(r.new_tax_class_code_id);
             const mismatch = expected !== undefined && r.new_tax_rate !== null && Number(r.new_tax_rate) !== Number(expected);
@@ -94,8 +107,8 @@ export default function PurchaseItemsPage() {
             );
           },
         },
-        { key: 'new_tax_class_code_id', label: '税区分', width: 110, render: (r) => (taxClasses.data?.values ?? []).find((c) => c.id === r.new_tax_class_code_id)?.name ?? '' },
-        { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
+        { key: 'new_tax_class_code_id', label: '税区分', width: 90, render: (r) => (taxClasses.data?.values ?? []).find((c) => c.id === r.new_tax_class_code_id)?.name ?? '' },
+        { key: 'is_active', label: '', width: 44, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
       ]}
       rowKey={(r) => r.id}
       // 削除の確認に対象のコードと名前を出す（2026-10-12 受入 No.1 注記「このデータを完全に消します」だけで何を消すか分からない）

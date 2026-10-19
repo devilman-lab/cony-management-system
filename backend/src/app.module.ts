@@ -13,6 +13,7 @@ import { AnalyticsController } from './analytics/analytics.controller';
 import { AttachmentsController } from './attachments/attachments.controller';
 import { AttachmentsService } from './attachments/attachments.service';
 import { PostalCodesController } from './reference/postal-codes.controller';
+import { RecordStampsController } from './common/record-stamps.controller';
 import { PostalCodesService } from './reference/postal-codes.service';
 import { SalesSchedulesController } from './planning/sales-schedules.controller';
 import { SalesSchedulesService } from './planning/sales-schedules.service';
@@ -78,6 +79,7 @@ import { ShipmentsService } from './shipping/shipments.service';
     UsersController,
     ReportsController,
     PostalCodesController,
+    RecordStampsController,
     SalesSchedulesController,
     AttachmentsController,
   ],

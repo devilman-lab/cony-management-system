@@ -10,6 +10,7 @@ import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, P
 import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
 import { SearchSelect, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
+import { RecordStamp } from '@/components/ui/RecordStamp';
 
 interface ReceiptLine {
   line_no: number;
@@ -236,18 +237,20 @@ export default function ReceivingPage() {
           stickyLast
           fit
           columns={[
-            // 1440・1280 のどちらでも全列が横スクロールなしに見える幅（顧客「見切れているので全部出るように」）
-            { key: 'receipt_no', label: '入荷番号', width: 112, nowrap: true, render: (r) => head(r, <Num className="font-semibold text-[var(--color-brand-700)]">{r.receipt.receipt_no}</Num>) },
+            // 1440・1280 のどちらでも全列が横スクロールなしに見える幅（顧客「見切れているので全部出るように」）。
+            // 商品名も幅を決めて詰める（2026-10-16 在庫編_2 Z3-07。残りの幅を商品名がすべて取り、間延びしていた）。
+            // 全列の幅を決めてあるので、広い画面では各列が同じ割合で広がる
+            { key: 'receipt_no', label: '入荷番号', width: 104, nowrap: true, render: (r) => head(r, <Num className="font-semibold text-[var(--color-brand-700)]">{r.receipt.receipt_no}</Num>) },
             // 入荷予定日の列は外した（Z-14）。確定前は登録した日、確定後は確定した日を入荷日として出す
             { key: 'received_date', label: '入荷日', width: 84, nowrap: true, render: (r) => head(r, <Num>{ymd(r.receipt.received_date ?? r.receipt.planned_date)}</Num>) },
-            { key: 'warehouse_name', label: '倉庫', width: 72, render: (r) => head(r, r.receipt.warehouse_name) },
-            { key: 'status', label: '状態', width: 70, render: (r) => head(r, <Badge status={r.receipt.status}>{r.receipt.status === '指示' ? '入荷予定' : r.receipt.status}</Badge>) },
-            { key: 'sku_code', label: '商品コード', width: 126, render: (r) => <Num>{r.line?.sku_code ?? ''}</Num> },
-            { key: 'product_name', label: '商品名', render: (r) => r.line?.product_name ?? '' },
-            { key: 'color_name', label: 'カラー', width: 80, render: (r) => r.line?.color_name ?? '' },
+            { key: 'warehouse_name', label: '倉庫', width: 68, render: (r) => head(r, r.receipt.warehouse_name) },
+            { key: 'status', label: '状態', width: 64, render: (r) => head(r, <Badge status={r.receipt.status}>{r.receipt.status === '指示' ? '入荷予定' : r.receipt.status}</Badge>) },
+            { key: 'sku_code', label: '商品コード', width: 120, render: (r) => <Num>{r.line?.sku_code ?? ''}</Num> },
+            { key: 'product_name', label: '商品名', width: 160, render: (r) => r.line?.product_name ?? '' },
+            { key: 'color_name', label: 'カラー', width: 72, render: (r) => r.line?.color_name ?? '' },
             { key: 'size_name', label: 'サイズ', width: 56, render: (r) => r.line?.size_name ?? '' },
             { key: 'qty', label: '数量', r: true, width: 58, render: (r) => fmtQty(r.line?.qty) },
-            { key: 'note', label: '備考', width: 120, render: (r) => r.line?.note ?? '' },
+            { key: 'note', label: '備考', width: 110, render: (r) => r.line?.note ?? '' },
             {
               key: '_act',
               label: '',
@@ -324,6 +327,8 @@ export default function ReceivingPage() {
           </table>
         </div>
         <div className="mt-2"><Button size="sm" icon="plus" onClick={() => setLines((s) => [...s, newLine()])}>行を追加</Button></div>
+        {/* 登録日・更新日（2026-10-16 マスター編3 M3-01）。編集のときだけ */}
+        {editing ? <RecordStamp table="receipts" id={editing.id} /> : null}
       </Modal>
 
       <Modal

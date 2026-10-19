@@ -14,11 +14,14 @@ import type { DB } from '../db/schema';
  * 当て方を明細だけで引けるようにするため（見出しを直したら明細にも写す）。
  *
  * 受注で減らすときの当て方（Z-25）:
- *  - 販売カテゴリーが一致し、受注日が期間に入っていること
+ *  - 受注日が期間に入っていること
+ *  - 販売カテゴリーが空の確保はどの販売カテゴリーの受注でも、選んだ確保はその販売カテゴリーの受注だけ
+ *    （2026-10-16 在庫編_2 Z3-15。以前は販売カテゴリーが必須だった）
  *  - 見出しに取引先があれば、その取引先の受注だけ
  *  - 取引先が空で媒体があれば、受注の取引先の媒体（取引先マスタの媒体）が一致する受注
  *  - 取引先も媒体も空（2026-10-09 より前に作った枠）は、その販売カテゴリーの受注すべて
- *  - 複数当たれば 取引先指定 → 媒体指定 → どちらも無し の順に使う
+ *  - 複数当たれば 取引先指定 → 媒体指定 → どちらも無し の順に使う。同じ段の中では、
+ *    販売カテゴリーを選んだ確保を空の確保より先に使う（その販売カテゴリーのために取っておいた分のため）
  *  - 「項目」は当て方に使わない（何と突き合わせるか顧客に確認中。表示と確保の区別のため）
  *
  * 枠は期間で持つので、月末を過ぎれば自動的に効かなくなり、翌月1日からは翌月の
@@ -39,7 +42,8 @@ export interface GroupHeaderInput {
   period_to: string;
   media_id?: number | null;
   partner_id?: number | null;
-  sales_category_id: number;
+  /** 空ならどの販売カテゴリーの受注でも減る（Z3-15） */
+  sales_category_id?: number | null;
   item_label?: string | null;
   product_class_id?: number | null;
   note?: string | null;
@@ -56,11 +60,12 @@ export interface GroupListFilter {
   /** from〜to に少しでも重なる確保。月の一覧はこちら（月の途中から始まる確保を取りこぼさないため） */
   from?: string;
   to?: string;
-  sales_category_id?: number;
+  /** 'none' は販売カテゴリーが空の確保だけ */
+  sales_category_id?: number | 'none';
   media_id?: number;
   partner_id?: number;
   sku_id?: number;
-  /** 商品コード・品番・商品名のどれかを含む明細がある確保 */
+  /** キーワード。項目・備考か、商品コード・品番・商品名のどれかを含む明細がある確保（Z3-13） */
   q?: string;
   limit: number;
   offset: number;
@@ -297,7 +302,7 @@ export class ReservationsService {
 
   /** 受注が当たる枠の条件（Z-25）。r は reservations。 */
   private scopeSql(s: OrderScope) {
-    return sql<boolean>`(r.sales_category_id = ${s.sales_category_id}
+    return sql<boolean>`((r.sales_category_id is null or r.sales_category_id = ${s.sales_category_id})
       and r.period_from <= ${s.order_date}::date and r.period_to >= ${s.order_date}::date
       and (r.partner_id = ${s.partner_id}
            or (r.partner_id is null and r.media_id = ${s.media_id}::bigint)
@@ -307,9 +312,13 @@ export class ReservationsService {
   /** 当てる順。取引先指定 → 媒体指定 → どちらも無し。 */
   private readonly tierSql = sql<number>`(case when r.partner_id is not null then 1 when r.media_id is not null then 2 else 3 end)`;
 
+  /** 同じ段の中の順。販売カテゴリーを選んだ確保を先に、空の確保を後に使う（Z3-15）。 */
+  private readonly categoryLastSql = sql`(r.sales_category_id is null)`;
+
   /**
    * 減らす枠を決めて行を押さえる。当たる枠が無ければ null。
-   * いちばん優先の段（取引先指定など）の中で、残りが足りる枠を古い順に使う。
+   * いちばん優先の段（取引先指定など）の中で、残りが足りる枠を
+   * 販売カテゴリーを選んだ枠 → 空の枠、それぞれ古い順に使う。
    * 段を下げて別の枠から減らすことはしない（取引先に取っておいた枠を使い切ったのに、
    * 媒体全体の枠を食ってしまうと、ほかの取引先の分が減るため）。
    */
@@ -330,6 +339,7 @@ export class ReservationsService {
       .where('r.sku_id', '=', skuId)
       .where(this.scopeSql(scope))
       .orderBy(this.tierSql)
+      .orderBy(this.categoryLastSql)
       .orderBy('r.period_from', 'asc')
       .orderBy('r.id', 'asc')
       .forUpdate()
@@ -350,11 +360,12 @@ export class ReservationsService {
       .leftJoin('reservation_groups as g', 'g.id', 'r.group_id')
       .leftJoin('partners as p', 'p.id', 'r.partner_id')
       .leftJoin('media as m', 'm.id', 'r.media_id')
-      .innerJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
+      .leftJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
       .select([
         'r.period_from as period_from',
         'r.period_to as period_to',
-        'p.name1 as partner_name',
+        // 一覧と同じく略称で（Z3-12）。略称が無ければ名称
+        sql<string | null>`coalesce(nullif(btrim(p.short_name), ''), p.name1)`.as('partner_name'),
         'm.name as media_name',
         'sc.name as sales_category_name',
         'g.item_label as item_label',
@@ -369,7 +380,7 @@ export class ReservationsService {
     return [
       `販売期間 ${slash(f.period_from)}〜${slash(f.period_to)}`,
       who,
-      `販売カテゴリー ${f.sales_category_name}`,
+      `販売カテゴリー ${f.sales_category_name ?? '（指定なし）'}`,
       `項目 ${f.item_label ?? 'なし'}`,
     ].join('・');
   }
@@ -393,6 +404,7 @@ export class ReservationsService {
       )
       .orderBy(sql`(r.group_id is not distinct from ${groupId}::bigint) desc`)
       .orderBy(this.tierSql)
+      .orderBy(this.categoryLastSql)
       .orderBy('r.period_from', 'asc')
       .orderBy('r.id', 'asc')
       .forUpdate()
@@ -453,7 +465,7 @@ export class ReservationsService {
   }
 
   /** 明細に写す見出しの値（受注の当て方を明細だけで引けるようにするため）。 */
-  private scopeOf(g: { partner_id: number | null; media_id: number | null; sales_category_id: number; period_from: string; period_to: string }) {
+  private scopeOf(g: { partner_id: number | null; media_id: number | null; sales_category_id: number | null; period_from: string; period_to: string }) {
     return {
       partner_id: g.partner_id,
       media_id: g.media_id,
@@ -475,7 +487,7 @@ export class ReservationsService {
           period_to: input.period_to,
           media_id: input.media_id ?? null,
           partner_id: input.partner_id ?? null,
-          sales_category_id: input.sales_category_id,
+          sales_category_id: input.sales_category_id ?? null,
           item_label: input.item_label?.trim() || null,
           product_class_id: input.product_class_id ?? null,
           note: input.note?.trim() || null,
@@ -521,7 +533,8 @@ export class ReservationsService {
         period_to: input.period_to ?? cur.period_to,
         media_id: input.media_id !== undefined ? input.media_id : cur.media_id,
         partner_id: input.partner_id !== undefined ? input.partner_id : cur.partner_id,
-        sales_category_id: input.sales_category_id ?? cur.sales_category_id,
+        // 空（null）にもできる。送られてこなければ今のまま
+        sales_category_id: input.sales_category_id !== undefined ? input.sales_category_id : cur.sales_category_id,
         item_label: input.item_label !== undefined ? input.item_label?.trim() || null : cur.item_label,
         product_class_id: input.product_class_id !== undefined ? input.product_class_id : cur.product_class_id,
         note: input.note !== undefined ? input.note?.trim() || null : cur.note,
@@ -730,7 +743,7 @@ export class ReservationsService {
     const toStart = `${input.to_month}-01`;
     const toEnd = `${input.to_month}-${String(new Date(Date.UTC(ty, tm, 0)).getUTCDate()).padStart(2, '0')}`;
 
-    const keyOf = (g: { media_id: number | null; partner_id: number | null; sales_category_id: number; item_label: string | null; product_class_id: number | null; note: string | null }) =>
+    const keyOf = (g: { media_id: number | null; partner_id: number | null; sales_category_id: number | null; item_label: string | null; product_class_id: number | null; note: string | null }) =>
       JSON.stringify([g.media_id, g.partner_id, g.sales_category_id, g.item_label ?? '', g.product_class_id, g.note ?? '']);
 
     return this.db.transaction().execute(async (trx) => {
@@ -818,11 +831,13 @@ export class ReservationsService {
       .leftJoin('media as m', 'm.id', 'g.media_id')
       // 見出しの媒体が空でも、取引先の媒体（取引先マスタ）を一覧に出すため
       .leftJoin('media as pm', 'pm.id', 'p.media_id')
-      .innerJoin('sales_categories as sc', 'sc.id', 'g.sales_category_id')
+      // 販売カテゴリーは空でもよい（Z3-15）
+      .leftJoin('sales_categories as sc', 'sc.id', 'g.sales_category_id')
       .leftJoin('product_classes as pc', 'pc.id', 'g.product_class_id');
     if (f.from) q = q.where('g.period_to', '>=', f.from);
     if (f.to) q = q.where('g.period_from', '<=', f.to);
-    if (f.sales_category_id !== undefined) q = q.where('g.sales_category_id', '=', f.sales_category_id);
+    if (f.sales_category_id === 'none') q = q.where('g.sales_category_id', 'is', null);
+    else if (f.sales_category_id !== undefined) q = q.where('g.sales_category_id', '=', f.sales_category_id);
     if (f.partner_id !== undefined) q = q.where('g.partner_id', '=', f.partner_id);
     // 媒体は、見出しの媒体か、見出しの取引先の媒体（取引先マスタ）で絞る
     if (f.media_id !== undefined) {
@@ -833,13 +848,14 @@ export class ReservationsService {
       q = q.where(sql<boolean>`exists (select 1 from reservations r2 where r2.group_id = g.id and r2.sku_id = ${f.sku_id})`);
     }
     if (f.q) {
+      // 項目・備考も探す（Z3-13）。画面では商品の欄（sku_id）とは別のキーワードの欄から来る
       const like = `%${f.q}%`;
-      q = q.where(sql<boolean>`exists (
+      q = q.where(sql<boolean>`(g.item_label ilike ${like} or g.note ilike ${like} or exists (
         select 1 from reservations r2
           join skus s2 on s2.id = r2.sku_id
           join products p2 on p2.id = s2.product_id
          where r2.group_id = g.id
-           and (s2.sku_code ilike ${like} or s2.sku_name ilike ${like} or p2.product_code ilike ${like} or p2.product_name ilike ${like}))`);
+           and (s2.sku_code ilike ${like} or s2.sku_name ilike ${like} or p2.product_code ilike ${like} or p2.product_name ilike ${like})))`);
     }
     return q;
   }
@@ -854,7 +870,9 @@ export class ReservationsService {
       'pm.name as partner_media_name',
       'g.partner_id as partner_id',
       'p.partner_code as partner_code',
-      'p.name1 as partner_name',
+      // 一覧・CSV は略称で（Z3-12）。略称が無い取引先は名称。正式な名称は partner_full_name
+      sql<string | null>`coalesce(nullif(btrim(p.short_name), ''), p.name1)`.as('partner_name'),
+      'p.name1 as partner_full_name',
       'g.sales_category_id as sales_category_id',
       'sc.name as sales_category_name',
       'g.item_label as item_label',
@@ -960,7 +978,7 @@ export class ReservationsService {
         esc(`${slash(g.period_from)}〜${slash(g.period_to)}`),
         esc(g.media_name ?? g.partner_media_name),
         esc(g.partner_name),
-        esc(g.sales_category_name),
+        esc(g.sales_category_name ?? '（指定なし）'),
         esc(g.item_label),
         esc(g.note),
         esc(g.product_class_code),

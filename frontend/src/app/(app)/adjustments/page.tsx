@@ -11,6 +11,7 @@ import { InlineText } from '@/components/inventory/InlineEdit';
 import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
 import { SearchSelect, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
+import { RecordStamp } from '@/components/ui/RecordStamp';
 
 interface AdjLine {
   line_no: number;
@@ -54,12 +55,18 @@ interface LineDraft {
   key: number;
   sku: Option | null;
   qty: string;
+  /**
+   * 品質の振替。画面からは外した（2026-10-16 在庫編_2 Z3-09「品質(前)・品質(後) 不要」）。
+   * 以前に登録した振替の調整を編集したときだけ値が入り、そのまま送り返す（振替が消えないように）。
+   */
   from_quality: string;
   to_quality: string;
+  /** 振替の見た目（例「良品→不良」）。振替の無い行は空 */
+  quality_label: string;
   note: string;
 }
 let seq = 1;
-const newLine = (): LineDraft => ({ key: seq++, sku: null, qty: '', from_quality: '', to_quality: '', note: '' });
+const newLine = (): LineDraft => ({ key: seq++, sku: null, qty: '', from_quality: '', to_quality: '', quality_label: '', note: '' });
 const toDraft = (l: AdjLine): LineDraft => ({
   key: seq++,
   sku: {
@@ -70,15 +77,12 @@ const toDraft = (l: AdjLine): LineDraft => ({
   qty: String(Number(l.qty)),
   from_quality: l.from_quality ?? '',
   to_quality: l.to_quality ?? '',
+  quality_label: l.from_quality || l.to_quality ? `${l.from_quality_name ?? '（変更なし）'}→${l.to_quality_name ?? '（変更なし）'}` : '',
   note: l.note ?? '',
 });
 
-const QUALITY = [
-  { v: '', l: '（変更なし）' },
-  { v: 'GOOD', l: '良品' },
-  { v: 'DEFECTIVE', l: '不良' },
-  { v: 'PENDING', l: '返品検品待ち' },
-];
+/** 理由の既定は「その他」（2026-10-16 在庫編_2 Z3-08。選択肢は その他・再生・棚卸差異） */
+const DEFAULT_REASON = 'OTHER';
 
 interface ImportResult {
   dry_run: boolean;
@@ -96,7 +100,8 @@ interface ImportResult {
 }
 
 /**
- * 在庫数の調整（ご要望⑫）。棚卸差異・破損・紛失・品質振替をここで直す。
+ * 在庫数の調整（ご要望⑫）。棚卸差異・再生などで在庫数を直す。
+ * 理由の選択肢は区分値「在庫調整理由」の使うものだけ（その他・再生・棚卸差異。Z3-08）。
  *
  * 2026-10-09 在庫編 Z-20・Z-21: 登録しただけでは在庫は動かない（状態「登録」）。
  * 一覧の「調整」を押したときに在庫へ反映する（状態「確定」）。確定後の「取消」は在庫を元に戻す。
@@ -111,13 +116,22 @@ export default function AdjustmentsPage() {
   // 一覧の先頭を初期値にしていたため (EC) に入りやすく、棚卸差異を入れる倉庫を取り違えやすかった（2026-10-12 受入テスト）
   const defaultWarehouse = (warehouses.data ?? []).find((w) => w.short_name === 'コニー倉庫') ?? warehouses.data?.[0];
   const reasons = useCodes('ADJUSTMENT_REASON');
+  /**
+   * 理由の選択肢。使う理由だけ（API が使わないにした値を返さない）。以前の理由（破損など）で
+   * 登録した調整は、その理由も選択肢に足して、開いただけで理由が変わらないようにする。
+   */
+  const reasonOptions = (current?: { code: string | null; name: string | null }) => {
+    const values = reasons.data?.values ?? [];
+    const extra = current?.code && !values.some((c) => c.code === current.code) ? [{ id: -1, code: current.code, name: current.name ?? current.code }] : [];
+    return [...values, ...extra].map((c) => <option key={c.id} value={c.code}>{c.name}</option>);
+  };
   const list = useList<AdjRow>('/inventory/adjustments', {});
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AdjRow | null>(null);
   const [warehouseId, setWarehouseId] = useState('');
   const [date, setDate] = useState(today());
-  const [reason, setReason] = useState('STOCKTAKE');
+  const [reason, setReason] = useState(DEFAULT_REASON);
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
   const [error, setError] = useState<unknown>(null);
@@ -135,7 +149,7 @@ export default function AdjustmentsPage() {
     setEditing(null);
     setWarehouseId('');
     setDate(today());
-    setReason('STOCKTAKE');
+    setReason(DEFAULT_REASON);
     setNote('');
     setLines([newLine()]);
     setError(null);
@@ -148,7 +162,7 @@ export default function AdjustmentsPage() {
       setEditing(d);
       setWarehouseId(String(d.warehouse_id));
       setDate(String(d.adjustment_date).slice(0, 10));
-      setReason(d.reason_code ?? 'STOCKTAKE');
+      setReason(d.reason_code ?? DEFAULT_REASON);
       setNote(d.note ?? '');
       setLines(d.lines.length > 0 ? d.lines.map(toDraft) : [newLine()]);
       setError(null);
@@ -299,7 +313,7 @@ export default function AdjustmentsPage() {
       {element}
       <PageHead
         title="在庫調整"
-        sub="棚卸差異・破損・紛失などで在庫数を直します。登録しただけでは在庫は動きません。一覧の「調整」で在庫に反映します"
+        sub="棚卸差異・再生などで在庫数を直します。登録しただけでは在庫は動きません。一覧の「調整」で在庫に反映します"
         right={
           canUpdate && (
             <span className="flex gap-2">
@@ -316,8 +330,10 @@ export default function AdjustmentsPage() {
           stickyLast
           fit
           columns={[
-            // 1440・1280 のどちらでも全列が横スクロールなしに見える幅（顧客「見切れているので全部出るように」）
-            { key: 'adjustment_no', label: '調整番号', width: 112, nowrap: true, render: (r) => head(r, <Num className="font-semibold text-[var(--color-brand-700)]">{r.adj.adjustment_no}</Num>) },
+            // 1440・1280 のどちらでも全列が横スクロールなしに見える幅（顧客「見切れているので全部出るように」）。
+            // 商品名も幅を決めて詰め（Z3-07）、数量の隣にメモを足した（Z3-10）。全列の幅を決めてあるので、
+            // 広い画面では各列が同じ割合で広がる（以前は残りの幅を商品名がすべて取っていた）
+            { key: 'adjustment_no', label: '調整番号', width: 104, nowrap: true, render: (r) => head(r, <Num className="font-semibold text-[var(--color-brand-700)]">{r.adj.adjustment_no}</Num>) },
             {
               key: 'adjustment_date',
               label: '調整日',
@@ -328,11 +344,11 @@ export default function AdjustmentsPage() {
                   ? <InlineText type="date" value={String(r.adj.adjustment_date).slice(0, 10)} onSave={(v) => patchHeader(r.adj, { adjustment_date: v })} />
                   : <Num>{ymd(r.adj.adjustment_date)}</Num>),
             },
-            { key: 'warehouse_name', label: '倉庫', width: 72, render: (r) => head(r, r.adj.warehouse_name) },
+            { key: 'warehouse_name', label: '倉庫', width: 62, render: (r) => head(r, r.adj.warehouse_name) },
             {
               key: 'reason_name',
               label: '理由',
-              width: 100,
+              width: 84,
               render: (r) =>
                 head(r, editable(r.adj)
                   ? (
@@ -341,7 +357,7 @@ export default function AdjustmentsPage() {
                       className="!h-[26px]"
                       onChange={(e) => void patchHeader(r.adj, { reason_code: e.target.value }).catch(() => undefined)}
                     >
-                      {(reasons.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
+                      {reasonOptions({ code: r.adj.reason_code, name: r.adj.reason_name })}
                     </Select>
                   )
                   : (r.adj.reason_name ?? '')),
@@ -349,17 +365,18 @@ export default function AdjustmentsPage() {
             {
               key: 'note',
               label: '備考',
-              width: 120,
+              width: 84,
               render: (r) =>
                 head(r, editable(r.adj)
                   ? <InlineText value={r.adj.note} placeholder="備考" onSave={(v) => patchHeader(r.adj, { note: v || null })} />
                   : (r.adj.note ?? '')),
             },
-            { key: 'status', label: '状態', width: 52, render: (r) => head(r, <Badge status={r.adj.status}>{r.adj.status}</Badge>) },
-            { key: 'sku_code', label: '商品コード', width: 126, render: (r) => <Num>{r.line?.sku_code ?? ''}</Num> },
+            { key: 'status', label: '状態', width: 50, render: (r) => head(r, <Badge status={r.adj.status}>{r.adj.status}</Badge>) },
+            { key: 'sku_code', label: '商品コード', width: 118, render: (r) => <Num>{r.line?.sku_code ?? ''}</Num> },
             {
               key: 'product_name',
               label: '商品名',
+              width: 150,
               render: (r) =>
                 r.line ? `${r.line.product_name}${r.line.color_name ? ' ' + r.line.color_name : ''}${r.line.size_name ? ' ' + r.line.size_name : ''}` : '',
             },
@@ -367,7 +384,7 @@ export default function AdjustmentsPage() {
               key: 'qty',
               label: '数量',
               r: true,
-              width: 70,
+              width: 56,
               render: (r) =>
                 r.line ? (
                   <span>
@@ -378,10 +395,12 @@ export default function AdjustmentsPage() {
                   </span>
                 ) : '',
             },
+            // 数量の隣に明細のメモ（Z3-10）
+            { key: 'line_note', label: 'メモ', width: 90, render: (r) => r.line?.note ?? '' },
             {
               key: '_act',
               label: '',
-              width: 100,
+              width: 96,
               render: (r) =>
                 r.first && canUpdate && r.adj.status !== '取消' && (
                   <span className="tbl-acts">
@@ -422,7 +441,7 @@ export default function AdjustmentsPage() {
           </FormRow>
           <FormRow label="理由" required>
             <Select value={reason} onChange={(e) => setReason(e.target.value)} className="!w-[180px]">
-              {(reasons.data?.values ?? []).map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
+              {reasonOptions(editing ? { code: editing.reason_code, name: editing.reason_name } : undefined)}
             </Select>
           </FormRow>
           <FormRow label="備考">
@@ -435,10 +454,8 @@ export default function AdjustmentsPage() {
               <tr>
                 <th>商品</th>
                 <th className="r" style={{ width: 90 }}>増減</th>
-                <th style={{ width: 130 }}>品質（前）</th>
-                <th style={{ width: 130 }}>品質（後）</th>
-                {/* メモは幅を決め、残りを商品の列に回す（選んだ商品のカラー・サイズまで見えるように） */}
-                <th style={{ width: 180 }}>メモ</th>
+                {/* 品質（前）・品質（後）は外した（Z3-09）。メモは幅を決め、残りを商品の列に回す */}
+                <th style={{ width: 240 }}>メモ</th>
                 <th style={{ width: 96 }} />
               </tr>
             </thead>
@@ -448,10 +465,10 @@ export default function AdjustmentsPage() {
                   <td>
                     <SearchSelect value={l.sku} onChange={(o) => setLine(l.key, { sku: o })} fetchOptions={fetchStockSkus} placeholder="商品コード・JAN・商品名" width="100%" />
                     <PickedSkuText value={l.sku} />
+                    {/* 以前に登録した品質の振替は、見えるように残してそのまま保存する（Z3-09） */}
+                    {l.quality_label && <div className="mt-0.5 text-[11px] text-[var(--color-ink-3)]">品質の振替：{l.quality_label}</div>}
                   </td>
                   <td className="r"><Input right value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} placeholder="-1" /></td>
-                  <td><Select value={l.from_quality} onChange={(e) => setLine(l.key, { from_quality: e.target.value })}>{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
-                  <td><Select value={l.to_quality} onChange={(e) => setLine(l.key, { to_quality: e.target.value })}>{QUALITY.map((q) => <option key={q.v} value={q.v}>{q.l}</option>)}</Select></td>
                   <td><Input value={l.note} onChange={(e) => setLine(l.key, { note: e.target.value })} /></td>
                   <td className="c acts whitespace-nowrap">
                     <button type="button" className="btn btn-quiet !px-1.5 !h-6" title="この行をコピーして下に足す" onClick={() => copyLine(l.key)}>コピー</button>
@@ -464,8 +481,9 @@ export default function AdjustmentsPage() {
         </div>
         <div className="mt-2 flex items-center gap-3">
           <Button size="sm" icon="plus" onClick={() => setLines((s) => [...s, newLine()])}>行を追加</Button>
-          <span className="text-[11px] text-[var(--color-ink-3)]">品質の振替（良品→不良など）は「前」「後」を選び、増減には振り替える数を入れます</span>
         </div>
+        {/* 登録日・更新日（2026-10-16 マスター編3 M3-01）。編集のときだけ */}
+        {editing ? <RecordStamp table="stock_adjustments" id={editing.id} /> : null}
       </Modal>
 
       <Modal
@@ -484,8 +502,8 @@ export default function AdjustmentsPage() {
       >
         <div className="flex flex-col gap-3">
           <div className="text-[12px] text-[var(--color-ink-2)]">
-            1行目の見出しは <b>調整日,倉庫,理由,商品コード,増減,品質(前),品質(後),メモ,備考</b> にしてください。
-            倉庫・理由・品質は名前でもコードでも構いません。同じ調整日・倉庫・理由・備考の行は1件の在庫調整にまとめます。
+            1行目の見出しは <b>調整日,倉庫,理由,商品コード,増減,メモ,備考</b> にしてください（品質(前)・品質(後) の列は無くても構いません）。
+            倉庫・理由は名前でもコードでも構いません。同じ調整日・倉庫・理由・備考の行は1件の在庫調整にまとめます。
             ここでは<b>登録だけ</b>を行い、在庫は動きません（一覧の「調整」で反映します）。
           </div>
           <input

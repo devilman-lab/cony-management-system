@@ -57,44 +57,21 @@ const partner = ok(await call('POST', '/masters/partners', A, {
 const linksOf = async (pid) => (await all(`select c.code from partner_category_links l join partner_categories c on c.id = l.partner_category_id where l.partner_id = $1 order by c.code`, [pid])).map((r) => r.code);
 
 // ---- 1. 複数カテゴリー（No.8・No.2） ------------------------------------------
-await check('No.8 一覧で編集の取引先カテゴリーコードに全カテゴリーが「、」区切りで出る', async () => {
+// 2026-10-16 マスター編_3（M3-08）「媒体で区別してるので、取引先カテゴリー不要」: 取引先の画面・一覧で編集・CSV から
+// 取引先カテゴリーの列を外した（API の category_ids と取引先別のひも付けは残している）
+await check('M3-08 取引先の一覧で編集・CSV に取引先カテゴリー・通貨の列が無い', async () => {
   const r = ok(await call('GET', `/masters/csv/partners/rows?q=${P}P1`, A), 'rows');
-  const it = r.items.find((x) => x.partner_code === `${P}P1`);
-  const col = r.columns.find((c) => c.field === 'partner_category_id');
-  return (it?.partner_category_id === `${P}C1、${P}C2` && col?.multi === true) || { it, col };
+  const fields = r.columns.map((c) => c.field);
+  const head = (await text('/masters/csv/partners/export', A)).text.replace(/^﻿/, '').split('\r\n')[0];
+  return (!fields.includes('partner_category_id') && !fields.includes('currency') && !head.includes('取引先カテゴリーコード') && !head.includes('通貨')) || { fields, head };
 });
-await check('No.8・D-7 CSV 書き出しでカテゴリーは全コードを1欄に、コードは ="..." で囲む', async () => {
+await check('No.8・D-7 CSV 書き出しでコードは ="..." で囲む', async () => {
   const r = await text('/masters/csv/partners/export', A);
   const line = r.text.split('\r\n').find((l) => l.includes(`${P}P1`)) ?? '';
-  return (line.startsWith(`"=""${P}P1"""`) && line.includes(`"=""${P}C1、${P}C2"""`)) || line;
+  return line.startsWith(`"=""${P}P1"""`) || line;
 });
-await check('No.8 CSV 取込（| 区切り）でカテゴリーを入れ替え、代表もそろう', async () => {
-  ok(await imp('partners', [['取引先コード', '取引先カテゴリーコード'], [`${P}P1`, `${P}C2|${P}C1`]], false), 'import');
-  const p = await one(`select partner_category_id from partners where id = $1`, [partner.id]);
-  const links = await linksOf(partner.id);
-  return (Number(p.partner_category_id) === Number(cat2.id) && links.join() === `${P}C1,${P}C2`) || { p, links };
-});
-await check('No.8 一覧で編集（取込の経路）で1つに減らすと links も1つになる', async () => {
-  ok(await imp('partners', [['取引先コード', '取引先カテゴリーコード'], [`${P}P1`, `${P}C1`]], false), 'import');
-  const p = await one(`select partner_category_id from partners where id = $1`, [partner.id]);
-  const links = await linksOf(partner.id);
-  return (Number(p.partner_category_id) === Number(cat1.id) && links.join() === `${P}C1`) || { p, links };
-});
-await check('No.8 CSV で新しく作った取引先も links に入る', async () => {
-  ok(await imp('partners', [['取引先コード', '取引先名', '得意先', '取引先カテゴリーコード'], [`${P}P2`, `${P}取引先2`, '有効', `${P}C1、${P}C2`]], false), 'import');
-  const p = await one(`select id, partner_category_id from partners where partner_code = $1`, [`${P}P2`]);
-  const links = p ? await linksOf(p.id) : [];
-  return (p && Number(p.partner_category_id) === Number(cat1.id) && links.join() === `${P}C1,${P}C2`) || { p, links };
-});
-await check('No.8 存在しないカテゴリーコードは下見で行・欄つきの誤り', async () => {
-  const r = ok(await imp('partners', [['取引先コード', '取引先カテゴリーコード'], [`${P}P1`, `${P}C1、${P}XX`]], true), 'dry');
-  const row = rowOf({ body: r }, 2);
-  return (row?.action === 'エラー' && row.message.includes('取引先カテゴリーコード：') && row.message.includes(`${P}XX`)) || row;
-});
-await check('No.8 そのまま取り込むと「変更なし」（カテゴリー2つでも）', async () => {
-  const r = ok(await imp('partners', [['取引先コード', '取引先カテゴリーコード'], [`${P}P2`, `${P}C1、${P}C2`]], true), 'dry');
-  return (r.unchanged === 1 && r.updated === 0) || r.rows;
-});
+// 権限（D-2）の確認で使う2社目。以前はカテゴリーの CSV の確認の中で CSV から作っていた
+ok(await call('POST', '/masters/partners', A, { partner_code: `${P}P2`, name1: `${P}取引先2`, is_customer: true }), 'partner2');
 await check('No.8 API でカテゴリーだけ直すと代表も先頭にそろう', async () => {
   ok(await call('PATCH', `/masters/partners/${partner.id}`, A, { category_ids: [Number(cat2.id)] }), 'patch');
   const p = await one(`select partner_category_id from partners where id = $1`, [partner.id]);
@@ -152,12 +129,18 @@ await check('D-2 作成の権限が無いと、CSV の新しい行は下見で�
   const row = rowOf({ body: d }, 2);
   return (row?.action === 'エラー' && row.message.includes('作成') && rowOf({ body: d }, 3)?.action === '変更' && c.status === 400 && made.n === 0) || { row, c: c.status, made };
 });
-await check('D-2 削除の権限が無いと、有効→無効は下見で誤り（DB は有効のまま）', async () => {
+// 2026-10-18: 有効→無効（非表示）は、画面の編集画面の「表示／非表示」と同じ「更新」の権限にそろえた
+// （以前は一覧の「使わない」と同じ「削除」の権限だった。一覧の「使わない」は無くなった）
+await check('D-2 有効→無効は画面と同じく更新の権限でできる（削除の権限が無くても。DB も無効になる）', async () => {
   const d = ok(await imp('partners', [['取引先コード', '有効'], [`${P}P2`, '無効']], true, U), 'dry');
   const c = await imp('partners', [['取引先コード', '有効'], [`${P}P2`, '無効']], false, U);
   const p = await one(`select is_active from partners where partner_code = $1`, [`${P}P2`]);
-  const row = rowOf({ body: d }, 2);
-  return (row?.action === 'エラー' && row.message.includes('使わない') && c.status === 400 && p.is_active === true) || { row, c: c.status, p };
+  await db.query(`update partners set is_active = true where partner_code = $1`, [`${P}P2`]);
+  return (d.errors === 0 && d.updated === 1 && c.status < 300 && p.is_active === false) || { d: d.rows, c: c.status, p };
+});
+await check('D-2 更新の権限が無い利用者は CSV を取り込めない（403）', async () => {
+  const r = await imp('partners', [['取引先コード', '有効'], [`${P}P2`, '無効']], true, V);
+  return r.status === 403 || r.status;
 });
 await check('D-2 分類（作業指示）でも作成の権限が無いと追加できない', async () => {
   const d = ok(await imp('work-instructions', [['コード', '名称', '指示内容'], [`${P}W9`, `${P}作れない`, '']], true, U), 'dry');
@@ -177,8 +160,8 @@ await check('D-3 取引先名 130 文字は下見で「取引先名：120文字�
   return (row?.action === 'エラー' && row.message.includes('取引先名：120文字まで') && c.status === 400) || { row, c };
 });
 await check('D-3 新しい行で得意先・仕入先が空欄なら下見で止まる（○×の欄の空は「無効」）', async () => {
-  const d = ok(await imp('partners', [['取引先コード', '取引先名', '得意先', '仕入先', '海外'], [`${P}P3`, `${P}取引先3`, '', '', '']], true), 'dry');
-  const d2 = ok(await imp('partners', [['取引先コード', '取引先名', '得意先', '仕入先', '海外'], [`${P}P3`, `${P}取引先3`, '', '○', '']], true), 'dry');
+  const d = ok(await imp('partners', [['取引先コード', '取引先名', '得意先', '仕入先', '消費税免税区分'], [`${P}P3`, `${P}取引先3`, '', '', '']], true), 'dry');
+  const d2 = ok(await imp('partners', [['取引先コード', '取引先名', '得意先', '仕入先', '消費税免税区分'], [`${P}P3`, `${P}取引先3`, '', '○', '']], true), 'dry');
   const row = rowOf({ body: d }, 2);
   return (row?.action === 'エラー' && row.message.includes('得意先・仕入先') && d2.added === 1 && d2.errors === 0) || { row, d2: d2.rows };
 });
@@ -229,13 +212,13 @@ await check('D-4 本文が空の作業指示を書き出してそのまま取り
   return (r.unchanged === 1 && r.updated === 0 && r.errors === 0) || r.rows;
 });
 await check('D-4 本文が空の行の備考だけ直して確定できる／本文が空の新しい行も作れる', async () => {
-  const c = ok(await imp('work-instructions', [['コード', '名称', '指示内容', '備考'], [`${P}W1`, `${P}空本文`, '', '備考あり'], [`${P}W2`, `${P}新規`, '', '']], false), 'import');
+  const c = ok(await imp('work-instructions', [['コード', '指示内容', '備考'], [`${P}W1`, '', '備考あり'], [`${P}W2`, '', '']], false), 'import');
   const a = await one(`select note, instruction_body from work_instructions where id = $1`, [wi.id]);
   const b = await one(`select instruction_body from work_instructions where code = $1`, [`${P}W2`]);
   return (c.updated === 1 && c.added === 1 && a.note === '備考あり' && a.instruction_body === '' && b?.instruction_body === '') || { c, a, b };
 });
 await check('D-4 指示内容の列が無い CSV でも作業指示を追加できる', async () => {
-  const c = ok(await imp('work-instructions', [['コード', '名称'], [`${P}W3`, `${P}列なし`]], false), 'import');
+  const c = ok(await imp('work-instructions', [['コード', '備考'], [`${P}W3`, `${P}列なし`]], false), 'import');
   return c.added === 1 || c;
 });
 
@@ -336,11 +319,12 @@ await check('R4 仕入の一覧は、支払った額と残り（unpaid_amount）
   return (p.paid_amount !== undefined && Number(p.unpaid_amount) === Number(p.total_amount) - Number(p.paid_amount)) || p;
 });
 // 3回目の全面テスト（U1 N1・N3）
-await check('U1 N1 取引先の CSV で、区分値に無い通貨（XYZ）は下見で誤り。USD・JPY は通る', async () => {
-  const bad = ok(await imp('partners', [['取引先コード', '通貨'], [`${P}P1`, 'XYZ']], true), 'bad');
-  const good = ok(await imp('partners', [['取引先コード', '通貨'], [`${P}P1`, 'USD']], true), 'good');
-  const b = bad.rows?.[0];
-  return (b?.action === 'エラー' && /通貨：「XYZ」は登録されていません/.test(b?.message ?? '') && good.rows?.[0]?.action !== 'エラー') || { b, g: good.rows?.[0] };
+// 2026-10-16（M3-09）で取引先 CSV から通貨の列を外したので、通貨の列を入れても取引先の通貨は変わらない
+// （区分値に無い通貨が入る心配そのものが無くなった。U1 N1 の代わり）
+await check('U1 N1 取引先の CSV に「通貨」の列を入れても、取引先の通貨は変わらない', async () => {
+  const r = await imp('partners', [['取引先コード', '略称', '通貨'], [`${P}P1`, `${P}略称1`, 'XYZ']], false);
+  const p = await one(`select currency from partners where partner_code = $1`, [`${P}P1`]);
+  return (p.currency === 'JPY') || { status: r.status, body: r.body, p };
 });
 await check('U1 N3 仕入品目の CSV で税区分だけ入れた新しい行は、税率が税区分から決まる（非課税→0、軽減8%→8）', async () => {
   ok(await imp('purchase-items', [['仕入コード', '品目名', '税率', '税区分'], [`${P}PZ1`, `${P}資材Z1`, '', 'EXEMPT'], [`${P}PZ2`, `${P}資材Z2`, '', 'TAX8']], false), 'add');

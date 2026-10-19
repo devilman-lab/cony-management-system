@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { SettingsService } from '../common/settings.service';
+import { OVERSEAS_TAX_TREATMENTS, SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { MastersCrudService, SIMPLE_MASTERS, type SimpleMaster } from './masters-crud.service';
 import { DAY_OPTIONS, DAY_OPTIONS_LABEL, PAYMENT_MONTH_OPTIONS, PAYMENT_MONTH_OPTIONS_LABEL } from './masters-csv';
@@ -35,6 +35,13 @@ import {
 } from './products.service';
 import { assertPurchaseItemTax } from './purchase-item-tax';
 import { IS_ROYALTY_HISTORY, assertCustomersInMedia } from './royalty-rule-history';
+import {
+  CUSTOMER_MODES,
+  checkRuleGroup,
+  planRuleGroupRows,
+  readRuleGroup,
+  type RuleGroupSpec,
+} from './royalty-rule-group';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, '数値で入力してください');
@@ -58,8 +65,11 @@ type ListQuery = z.infer<typeof ListSchema>;
 const PartnerProductListSchema = ListSchema.extend({
   partner_id: z.coerce.number().int().positive().optional(),
   sku_id: z.coerce.number().int().positive().optional(),
-  /** 販売先カテゴリーで絞る（1001 ご要望）。取引先は複数のカテゴリーを持てる。 */
-  partner_category_id: z.coerce.number().int().positive().optional(),
+  /**
+   * 取引先マスタの媒体で絞る。以前は販売先カテゴリーで絞っていたが、取引先カテゴリーは使わなくなった
+   * （2026-10-16 マスター編_3 M3-08「媒体で区別してるので、取引先カテゴリー不要」）。
+   */
+  media_id: z.coerce.number().int().positive().optional(),
 });
 type PartnerProductListQuery = z.infer<typeof PartnerProductListSchema>;
 
@@ -86,6 +96,8 @@ const SimpleSchema = z.object({
   rule_body: z.string().nullish(),
   // 作業指示内容だけ本文を持つ
   instruction_body: z.string().nullish(),
+  // 商品分類だけブランドを持つ（空ならどのブランドの商品でも選べる。2026-10-18 マスター編_3 M3-18・M3-42）
+  brand_id: z.number().int().positive().nullish(),
 });
 type SimpleBody = z.infer<typeof SimpleSchema>;
 const SimplePatchSchema = SimpleSchema.partial().extend(Active);
@@ -101,10 +113,23 @@ const PartnerSchema = z.object({
   is_supplier: z.boolean().default(false),
   /**
    * 海外の取引先（2026-10-09 マスター編②）。得意先なら締め処理で消費税を 0 にし、
-   * 仕入先なら仕入明細の税区分の初期値を免税／課税対象外にする。どちらで扱うかは
-   * システム設定 OVERSEAS_TAX_TREATMENT。省略時は国内（false）。
+   * 仕入先なら仕入明細の税区分の初期値を免税／課税対象外にする。省略時は国内（false）。
+   * 画面は「消費税免税区分」（下の overseas_tax_treatment）で選び、「なし」が false。
    */
   is_overseas: z.boolean().optional(),
+  /**
+   * 消費税免税区分（2026-10-16 マスター編_3 M3-07）。exempt＝免税（税抜扱い）／non_taxable＝課税対象外／null＝なし。
+   * 受注・納品書・請求書・仕入の税の扱いはこれに従う。is_overseas を送らなければ、これから決める
+   * （null なら国内）。is_overseas だけ true で送られたとき（空のまま）はシステム設定 OVERSEAS_TAX_TREATMENT に従う。
+   */
+  overseas_tax_treatment: z.enum(OVERSEAS_TAX_TREATMENTS).nullish(),
+  /** 粗利調整販社（区分値 GROSS_MARGIN_ADJUST：対象／対象外。M3-10） */
+  gross_margin_adjust_code_id: z.number().int().positive().nullish(),
+  /** 入金方法①②（区分値 RECEIPT_METHOD）・請求書送付方法（区分値 INVOICE_SEND_METHOD）。登録・表示だけ（M3-11） */
+  receipt_method1_code_id: z.number().int().positive().nullish(),
+  receipt_method2_code_id: z.number().int().positive().nullish(),
+  invoice_send_method_code_id: z.number().int().positive().nullish(),
+  invoice_email: z.string().trim().max(200).email('請求書送付先メールアドレスの形が正しくありません').nullish(),
   /**
    * 取引通貨（区分値 CURRENCY のコード）。受注・請求・入金はこの通貨で作る（2026-10-12 No.39）。
    * 省略時は円（JPY）。区分値に無いコードは assertCurrency で断る。
@@ -148,6 +173,17 @@ const PartnerSchema = z.object({
     .int()
     .refine((v) => (DAY_OPTIONS as readonly number[]).includes(v), `支払日は ${DAY_OPTIONS_LABEL} のどれかです`)
     .nullish(),
+  // 支払②（M3-11）。選択肢は支払①と同じ。登録・表示だけで、支払予定日は支払①で決める
+  payment_month_offset2: z
+    .number()
+    .int()
+    .refine((v) => (PAYMENT_MONTH_OPTIONS as readonly number[]).includes(v), `支払②の月は ${PAYMENT_MONTH_OPTIONS_LABEL} のどれかです`)
+    .nullish(),
+  payment_day2: z
+    .number()
+    .int()
+    .refine((v) => (DAY_OPTIONS as readonly number[]).includes(v), `支払②の日は ${DAY_OPTIONS_LABEL} のどれかです`)
+    .nullish(),
   postal_code: z.string().trim().max(8).nullish(),
   address1: z.string().trim().max(200).nullish(),
   address2: z.string().trim().max(200).nullish(),
@@ -157,6 +193,26 @@ const PartnerSchema = z.object({
   note: z.string().nullish(),
 });
 type PartnerBody = z.infer<typeof PartnerSchema>;
+
+/** 取引先の区分値の欄と、選べる区分値のカテゴリー（別のカテゴリーの値を入れさせない） */
+const PARTNER_CODE_FIELDS = {
+  gross_margin_adjust_code_id: { category: 'GROSS_MARGIN_ADJUST', label: '粗利調整販社' },
+  receipt_method1_code_id: { category: 'RECEIPT_METHOD', label: '入金方法①' },
+  receipt_method2_code_id: { category: 'RECEIPT_METHOD', label: '入金方法②' },
+  invoice_send_method_code_id: { category: 'INVOICE_SEND_METHOD', label: '請求書送付方法' },
+} as const;
+
+/**
+ * 「消費税免税区分」と「海外」をそろえる（M3-07）。なし（null）なら国内、選べば海外。
+ * 国内にするときは区分も消す（国内なのに免税の区分が残らないように）。
+ */
+function syncOverseas<T extends { is_overseas?: boolean; overseas_tax_treatment?: string | null }>(v: T): T {
+  if (v.is_overseas === undefined && v.overseas_tax_treatment !== undefined) {
+    return { ...v, is_overseas: v.overseas_tax_treatment !== null };
+  }
+  if (v.is_overseas === false) return { ...v, overseas_tax_treatment: null };
+  return v;
+}
 
 // ---- 納品先 -----------------------------------------------------------------
 const DestinationSchema = z.object({
@@ -201,6 +257,10 @@ const ProductSchema = z.object({
   is_cost_undecided: z.boolean().default(false),
   tax_rate: tax.default('10.00'),
   is_set: z.boolean().default(false),
+  /** ロイヤリティ区分（区分値 ROYALTY_CLASS：機械／機械以外。2026-10-18 マスター編_3 M3-23）。今は登録・表示のみ */
+  royalty_class_code_id: z.number().int().positive().nullish(),
+  /** 下代調整対象（対象／対象外。M3-23）。今は登録・表示のみ */
+  is_wholesale_adjust_target: z.boolean().default(false),
   sort_order: z.number().int().nullish(),
   note: z.string().nullish(),
 });
@@ -230,10 +290,24 @@ const SkuSchema = z.object({
   shop_product_code: z.string().trim().max(60).nullish(),
   /** このSKUだけの原価。空欄なら商品の原価を使う（サイズ別原価。1001 ご要望）。 */
   cost_price: decimal.nullish(),
+  /** 旧原価。原価を変えたときに前の値を残す。原価と同じく SKU ごと（2026-10-18 マスター編_3 M3-19） */
+  old_cost_price: decimal.nullish(),
   sort_order: z.number().int().nullish(),
   note: z.string().nullish(),
 });
 type SkuBody = z.infer<typeof SkuSchema>;
+
+/**
+ * 商品の登録で、SKU もまとめて1回で登録するとき（2026-10-18 受入 W1 N5）。row_no は画面の SKU 表の行番号（理由に出す）。
+ * 以前は商品を登録してから SKU を1行ずつ登録していたため、SKU が重なって断られると、SKU の無い商品だけが残っていた。
+ */
+const ProductCreateSchema = ProductSchema.extend({
+  skus: z
+    .array(SkuSchema.omit({ product_id: true }).extend({ row_no: z.number().int().positive().optional() }))
+    .max(500)
+    .optional(),
+});
+type ProductCreateBody = z.infer<typeof ProductCreateSchema>;
 
 // ---- セット登録 -------------------------------------------------------------
 const SetSchema = z.object({
@@ -251,14 +325,21 @@ const SetSchema = z.object({
 });
 type SetBody = z.infer<typeof SetSchema>;
 /** セットの編集（構成の入れ替え）。セット SKU は変えられないので受け取らない（M-14） */
-const SetUpdateSchema = SetSchema.omit({ sku_id: true });
+// 表示／非表示（is_active）も編集画面で切り替える（2026-10-16 マスター編3 M3-02）
+const SetUpdateSchema = SetSchema.omit({ sku_id: true }).extend(Active);
 type SetUpdateBody = z.infer<typeof SetUpdateSchema>;
 
 // ---- 得意先別商品 -----------------------------------------------------------
 const PartnerProductSchema = z.object({
   partner_id: z.number().int().positive(),
   sku_id: z.number().int().positive(),
-  partner_product_code: z.string().trim().max(60).nullish(),
+  // 空は「無し」として持つ。同じ取引先・SKU で先方の商品コードが無い行は1つまで（M3-26）なので、空文字と無しを分けない
+  partner_product_code: z
+    .string()
+    .trim()
+    .max(60)
+    .nullish()
+    .transform((v) => (v === '' ? null : v)),
   partner_jan: z.string().trim().max(20).nullish(),
   jan_code: z.string().trim().max(20).nullish(),
   /** 出荷用のJAN。受注入力で先方JANから引く（1001 ご要望）。 */
@@ -271,6 +352,8 @@ const PartnerProductSchema = z.object({
   price_changed_date: ymd.nullish(),
   /** 上代。納品書「上代あり」に印字する（9/15 ご回答で得意先別商品マスタに置くと確定）。 */
   retail_price: decimal.nullish(),
+  // 原価・メモは画面から外した（2026-10-16 マスター編_3 M3-28「得意先別原価はない」「メモ不要」）。
+  // 列は残すので、送られてきたら受けるが、どこの計算にも使わない（粗利の原価は SKU → 商品の順）
   cost_price: decimal.nullish(),
   partner_color: z.string().trim().max(40).nullish(),
   partner_size: z.string().trim().max(40).nullish(),
@@ -325,24 +408,40 @@ const CodeSchema = z.object({
 });
 type CodeBody = z.infer<typeof CodeSchema>;
 
-// ---- ロイヤリティ規定 -------------------------------------------------------
 /**
- * 販売先の指定のしかた（1001 ご要望）。
- *   媒体全体 … 販売先を選ばない。媒体の全販売先が対象
- *   対象     … 選んだ販売先だけが対象
- *   対象外   … 選んだ販売先だけが対象から外れ、残りが対象
- * 「どちらかを入力して反映させる」形にする。対象と対象外を同時には入れない。
+ * プログラムがコードで引いている区分値（M3-39 の削除で守るもの）。'*' はそのカテゴリーの値すべて。
+ * 消すと入荷・在庫調整・引当・税の計算などが「登録されていません」で止まるため、使われていなくても消さない。
  */
-const CUSTOMER_MODES = ['媒体全体', '対象', '対象外'] as const;
-type CustomerMode = (typeof CUSTOMER_MODES)[number];
+const PROTECTED_CODES: Record<string, readonly string[] | '*'> = {
+  QUALITY_DIVISION: '*',
+  TAX_DIVISION: '*',
+  ADJUSTMENT_REASON: ['OTHER', 'STOCKTAKE', 'REFURB'],
+  CURRENCY: ['JPY'],
+};
+
+// ---- ロイヤリティ規定 -------------------------------------------------------
+// 販売先の指定のしかた（媒体全体／対象／対象外）と、行のまとまりの作り方は royalty-rule-group.ts。
 /** 1件の規定で選べる販売先の上限。ご要望の「20社まで」。 */
 const MAX_RULE_CUSTOMERS = 20;
+/** 1件の規定で選べる「対象の商品」「対象外の商品」の上限（それぞれ）。M3-33 */
+const MAX_RULE_PRODUCTS = 50;
 
 /** 絞り込みを重ねると .innerType() で素の形に戻せないため、素の形は名前を付けて持つ。 */
 const RoyaltyRuleBase = z.object({
   payee_partner_id: z.number().int().positive(),
   brand_id: z.number().int().positive().nullish(),
+  /** 昔の1件だけの商品の欄。product_ids が無いときだけ見る */
   product_id: z.number().int().positive().nullish(),
+  /** 対象の商品（M3-33。空ならブランド配下のすべて） */
+  product_ids: z
+    .array(z.number().int().positive())
+    .max(MAX_RULE_PRODUCTS, `対象の商品は${MAX_RULE_PRODUCTS}件までです`)
+    .optional(),
+  /** 対象外の商品（M3-33）。料率の行より優先して、この商品だけロイヤリティを付けない */
+  excluded_product_ids: z
+    .array(z.number().int().positive())
+    .max(MAX_RULE_PRODUCTS, `対象外の商品は${MAX_RULE_PRODUCTS}件までです`)
+    .optional(),
   customer_partner_id: z.number().int().positive().nullish(),
   /** 媒体。空欄ならすべての媒体（1001 ご要望）。 */
   media_id: z.number().int().positive().nullish(),
@@ -353,7 +452,9 @@ const RoyaltyRuleBase = z.object({
     .max(MAX_RULE_CUSTOMERS, `販売先は${MAX_RULE_CUSTOMERS}社までです`)
     .default([]),
   is_excluded: z.boolean().default(false),
-  calc_base: z.enum(['売上', '出荷', '入金']).default('出荷'),
+  // 計算の基準は請求月（＝売上。締めた請求の月に計上）に統一した（2026-10-16 M3-32）。画面では選ばせない。
+  // 出荷・入金は計算の経路を残してあるので API では受け付ける
+  calc_base: z.enum(['売上', '出荷', '入金']).default('売上'),
   rate: z.string().regex(/^\d(\.\d{1,4})?$/, '料率は 0.0500（5%）のような形で入力してください').nullish(),
   fixed_amount: decimal.nullish(),
   valid_from: ymd,
@@ -371,9 +472,14 @@ const RoyaltyRuleSchema = RoyaltyRuleBase
    * 対象外のときに料率も入れると「媒体全体にこの料率、ただしこの数社は対象外」の1枚になる。
    * 料率を入れなければ「この数社は対象外」だけを足す形になり、料率は別の規定が受け持つ。
    */
-  .refine((v) => v.customer_mode === '対象外' || v.is_excluded || Boolean(v.rate || v.fixed_amount), {
-    message: '料率か定額のどちらかを入力してください',
-  })
+  .refine(
+    (v) =>
+      v.customer_mode === '対象外' ||
+      v.is_excluded ||
+      (v.excluded_product_ids?.length ?? 0) > 0 ||
+      Boolean(v.rate || v.fixed_amount),
+    { message: '料率か定額のどちらかを入力してください' },
+  )
   .refine((v) => v.customer_mode === '媒体全体' || v.customer_partner_ids.length > 0, {
     message: '販売先を1社以上選んでください。媒体の全販売先を対象にするときは「媒体全体」を選びます',
   })
@@ -497,6 +603,8 @@ export class MastersWriteController {
       // 本文が空や備考の値で上書きされ、検索にも出なくなっていた（1001 のご指摘への対応の後で判明）
       if (body.instruction_body !== undefined) base.instruction_body = body.instruction_body ?? '';
     }
+    // 商品分類のブランド（M3-18・M3-42）。送られてきたときだけ直す（「有効に戻す」などで消さない）
+    if (table === 'product_classes') base.brand_id = body.brand_id;
     return base;
   }
 
@@ -507,8 +615,15 @@ export class MastersWriteController {
     @Body(new ZodValidationPipe(PartnerSchema)) body: PartnerBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const { category_ids, ...values } = body;
+    const { category_ids, ...rest } = body;
+    const values = syncOverseas(rest);
+    // 海外にしたのに区分が空なら、いまのシステム設定の扱いを取引先の区分として入れる（空のままだと
+    // 画面・CSV で「なし」と見え、別の欄を直して取り込んだときに国内に戻ってしまうため）
+    if (values.is_overseas === true && !values.overseas_tax_treatment) {
+      values.overseas_tax_treatment = await this.settings.overseasTaxTreatment(null);
+    }
     await this.assertCurrency(values.currency);
+    await this.assertPartnerCodes(values);
     // 代表のカテゴリーは、持っているカテゴリーの先頭にそろえる（一覧で編集・CSV と同じ。受入 No.8）
     if (category_ids !== undefined && values.partner_category_id === undefined) values.partner_category_id = category_ids[0] ?? null;
     const row = await this.crud.create('partners', values, user.id);
@@ -534,6 +649,22 @@ export class MastersWriteController {
     }
   }
 
+  /** 粗利調整販社・入金方法・請求書送付方法が、それぞれの区分値のカテゴリーの値か（M3-10・M3-11） */
+  private async assertPartnerCodes(values: Partial<Record<keyof typeof PARTNER_CODE_FIELDS, number | null>>): Promise<void> {
+    for (const [field, { category, label }] of Object.entries(PARTNER_CODE_FIELDS)) {
+      const id = values[field as keyof typeof PARTNER_CODE_FIELDS];
+      if (id === undefined || id === null) continue;
+      const found = await this.db
+        .selectFrom('codes as c')
+        .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
+        .select('c.id')
+        .where('cc.code', '=', category)
+        .where('c.id', '=', id)
+        .executeTakeFirst();
+      if (!found) throw new BadRequestException(`${label}の選択肢が見つかりません（ID: ${id}）。画面を開き直して選び直してください`);
+    }
+  }
+
   @Patch('partners/:id')
   @RequirePermission('M-01', 'update')
   async updatePartner(
@@ -541,7 +672,14 @@ export class MastersWriteController {
     @Body(new ZodValidationPipe(PartnerSchema.partial().extend(Active))) body: Partial<PartnerBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const { category_ids, ...values } = body;
+    const { category_ids, ...rest } = body;
+    const values = syncOverseas(rest);
+    // 海外にしたのに区分が空なら、今の区分（無ければシステム設定）を入れる（作るときと同じ理由）
+    if (values.is_overseas === true && !values.overseas_tax_treatment) {
+      const cur = await this.db.selectFrom('partners').select('overseas_tax_treatment').where('id', '=', id).executeTakeFirst();
+      values.overseas_tax_treatment = await this.settings.overseasTaxTreatment(cur?.overseas_tax_treatment ?? null);
+    }
+    await this.assertPartnerCodes(values);
     // 代表のカテゴリーは、持っているカテゴリーの先頭にそろえる（一覧で編集・CSV と同じ。受入 No.8）
     if (category_ids !== undefined && values.partner_category_id === undefined) values.partner_category_id = category_ids[0] ?? null;
 
@@ -615,6 +753,8 @@ export class MastersWriteController {
           eb('d.name', 'ilike', like),
           eb('d.consignee', 'ilike', like),
           eb('p.name1', 'ilike', like),
+          eb('p.short_name', 'ilike', like),
+          eb('p.partner_code', 'ilike', like),
         ]),
       );
     }
@@ -624,6 +764,8 @@ export class MastersWriteController {
         .select([
           'p.partner_code as partner_code',
           'p.name1 as partner_name',
+          // 一覧の取引先は「取引先コード」と「略称」の2列で出す（2026-10-16 マスター編_3 M3-13）
+          'p.short_name as partner_short_name',
           'wi.name as work_instruction_name',
           'wi.code as work_instruction_code',
           // 編集画面で「作業指示内容」（選んだ作業指示の本文）を読めるようにする（2026-10-09 マスター編② M-04）
@@ -677,13 +819,69 @@ export class MastersWriteController {
   }
 
   // ---- 商品 -----------------------------------------------------------------
+  /**
+   * 商品の登録。skus を付けると、商品と SKU を1つのトランザクションで登録する（W1 N5）。
+   * SKU のどれかが登録できなければ（商品コードの重なり・JAN の左6桁ルールなど）、行ごとの理由を返して何も登録しない。
+   */
   @Post('products')
   @RequirePermission('M-08', 'create')
-  createProduct(
-    @Body(new ZodValidationPipe(ProductSchema)) body: ProductBody,
+  async createProduct(
+    @Body(new ZodValidationPipe(ProductCreateSchema)) body: ProductCreateBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.crud.create('products', body, user.id);
+    const { skus, ...product } = body;
+    if (!skus || skus.length === 0) return this.crud.create('products', product, user.id);
+    // SKU の登録は SKU の「作成」の権限（POST skus と同じ）
+    if (!(await this.auth.can(user.id, 'M-09', 'create'))) {
+      throw new ForbiddenException('SKU を登録する権限がありません（SKU の「作成」の権限が要ります）');
+    }
+    return this.db.transaction().execute(async (trx) => {
+      const dup = await trx.selectFrom('products').select('id').where('product_code', '=', product.product_code).executeTakeFirst();
+      if (dup) throw new ConflictException('この品番はすでに登録されています');
+      const row = await trx
+        .insertInto('products')
+        .values({ ...product, created_by: user.id, updated_by: user.id })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      // 先に全部の行を確かめ、理由を行ごとにまとめて返す（1行目で止めず、直すところが一度に分かるように）
+      const problems: string[] = [];
+      const label = (k: (typeof skus)[number], i: number) => `SKU ${k.row_no ?? i + 1}行目（商品コード ${k.sku_code}）`;
+      const codes = skus.map((k) => k.sku_code);
+      const taken = new Map(
+        (
+          await trx
+            .selectFrom('skus as s')
+            .innerJoin('products as p', 'p.id', 's.product_id')
+            .select(['s.sku_code as sku_code', 'p.product_code as product_code'])
+            .where('s.sku_code', 'in', codes)
+            .execute()
+        ).map((r) => [r.sku_code, r.product_code]),
+      );
+      for (let i = 0; i < skus.length; i += 1) {
+        const k = skus[i];
+        if (codes.indexOf(k.sku_code) !== i) {
+          problems.push(`${label(k, i)}：同じ商品コードの行がほかにもあります`);
+        } else if (taken.has(k.sku_code)) {
+          problems.push(`${label(k, i)}：この商品コードはすでに品番 ${taken.get(k.sku_code)} で登録されています`);
+        }
+        if (k.jan) {
+          const clashes = await janClashesForSku(trx, { sku_code: k.sku_code, product_id: Number(row.id), jan: k.jan });
+          if (clashes.length > 0) problems.push(`${label(k, i)}：${describeJanClashes(clashes)}。${JAN_RULE_NOTE}`);
+        }
+      }
+      if (problems.length > 0) {
+        throw new ConflictException(`SKU を登録できないため、商品も登録していません。直してからもう一度「登録する」を押してください。${problems.join('／')}`);
+      }
+      for (const { row_no: _rowNo, ...k } of skus) {
+        void _rowNo;
+        await trx
+          .insertInto('skus')
+          .values({ ...k, product_id: Number(row.id), created_by: user.id, updated_by: user.id })
+          .execute();
+      }
+      return { ...row, sku_count: skus.length };
+    });
   }
 
   @Patch('products/:id')
@@ -831,7 +1029,7 @@ export class MastersWriteController {
     return this.db.transaction().execute(async (trx) => {
       const header = await trx
         .updateTable('set_headers')
-        .set({ note: body.note ?? null, updated_by: user.id, updated_at: new Date() })
+        .set({ note: body.note ?? null, ...(body.is_active !== undefined ? { is_active: body.is_active } : {}), updated_by: user.id, updated_at: new Date() })
         .where('id', '=', id)
         .returning(['id', 'sku_id'])
         .executeTakeFirst();
@@ -887,6 +1085,8 @@ export class MastersWriteController {
       .leftJoin('colors as cl', 'cl.id', 's.color_id')
       .leftJoin('sizes as sz', 'sz.id', 's.size_id')
       .leftJoin('product_classes as pc', 'pc.id', 'p.product_class_id');
+    // 「使わないものも表示」を外しているときは、非表示にしたセットを出さない（M3-02。ほかのマスタと同じ）
+    if (!query.include_inactive) base = base.where('h.is_active', '=', true);
     // 一覧の検索欄（キーワードで一覧を絞る。1001 のご指摘。以前は検索語を受け取っても使っていなかった）
     if (query.q) {
       const like = `%${query.q}%`;
@@ -992,23 +1192,13 @@ export class MastersWriteController {
       // 一覧にカラー・サイズ・商品分類を出すため（1001 のご指摘）。
       .leftJoin('colors as cl', 'cl.id', 's.color_id')
       .leftJoin('sizes as sz', 'sz.id', 's.size_id')
-      .leftJoin('product_classes as pc', 'pc.id', 'pr.product_class_id');
+      .leftJoin('product_classes as pc', 'pc.id', 'pr.product_class_id')
+      // 取引先マスタの媒体（販売先カテゴリーに代えて一覧に出し、絞り込みにも使う。2026-10-16 マスター編_3 M3-08）
+      .leftJoin('media as md', 'md.id', 'p.media_id');
     if (!query.include_inactive) base = base.where('pp.is_active', '=', true);
     if (query.partner_id !== undefined) base = base.where('pp.partner_id', '=', query.partner_id);
     if (query.sku_id !== undefined) base = base.where('pp.sku_id', '=', query.sku_id);
-    // 販売先カテゴリーで絞る。取引先は複数のカテゴリーを持てるのでひも付けの表で見る（1001 ご要望）
-    if (query.partner_category_id !== undefined) {
-      const categoryId = query.partner_category_id;
-      base = base.where((eb) =>
-        eb.exists(
-          eb
-            .selectFrom('partner_category_links as pcl')
-            .select(sql`1`.as('x'))
-            .whereRef('pcl.partner_id', '=', 'pp.partner_id')
-            .where('pcl.partner_category_id', '=', categoryId),
-        ),
-      );
-    }
+    if (query.media_id !== undefined) base = base.where('p.media_id', '=', query.media_id);
     if (query.q) {
       const like = `%${query.q}%`;
       base = base.where((eb) =>
@@ -1017,7 +1207,9 @@ export class MastersWriteController {
           eb('pp.sales_name', 'ilike', like),
           eb('pp.partner_jan', 'ilike', like),
           eb('s.sku_code', 'ilike', like),
+          eb('p.partner_code', 'ilike', like),
           eb('p.name1', 'ilike', like),
+          eb('p.short_name', 'ilike', like),
         ]),
       );
     }
@@ -1027,6 +1219,9 @@ export class MastersWriteController {
         .select([
           'p.partner_code as partner_code',
           'p.name1 as partner_name',
+          // 一覧は取引先をコードと略称の2列で出す（2026-10-16 マスター編_3 M3-25「略称がいい」）
+          'p.short_name as partner_short_name',
+          'md.name as media_name',
           // 取引先の通貨。単価・上代はこの通貨の金額なので、外貨は小数2桁で見せる（2026-10-13 再テスト）
           'p.currency as partner_currency',
           's.sku_code as sku_code',
@@ -1039,16 +1234,12 @@ export class MastersWriteController {
           'pp.color_name as print_color_name',
           'pp.size_name as print_size_name',
           'pc.name as product_class_name',
-          // 販売先カテゴリー（複数持てるので、まとめて1つの文字列にする。1001 ご要望）
-          sql<string | null>`(
-            select string_agg(c2.name, '、' order by c2.name)
-              from partner_category_links l2
-              join partner_categories c2 on c2.id = l2.partner_category_id
-             where l2.partner_id = pp.partner_id
-          )`.as('partner_category_names'),
         ])
         .orderBy('p.partner_code')
         .orderBy('s.sku_code')
+        // 同じ取引先・SKU の行が複数あるとき（M3-26）は表示順 → 登録順
+        .orderBy(sql`pp.sort_order nulls last`)
+        .orderBy('pp.id')
         .limit(query.limit)
         .offset(query.offset)
         .execute(),
@@ -1059,40 +1250,82 @@ export class MastersWriteController {
   }
 
   /**
-   * 受注入力で使う。取引先×SKU の得意先別商品（専用コード・卸単価・上代）を1件返す。
-   * 無ければ null。受注入力の権限だけで呼べるようにしてある。
+   * 受注入力で使う。取引先×SKU の得意先別商品（専用コード・卸単価・上代）を、使っている行すべて返す（無ければ空）。
+   * 同じ SKU に先方コード・単価の違う行が複数あるときは、受注入力でどれかを選ぶ（2026-10-16 マスター編_3 M3-26）。
+   * 並びは表示順 → 登録順。受注入力の権限だけで呼べるようにしてある。
    */
   @Get('partner-products/lookup')
   @RequirePermission('O-01', 'view')
-  async lookupPartnerProduct(@Query(new ZodValidationPipe(PartnerProductLookupSchema)) query: PartnerProductLookupQuery) {
-    const row = await this.db
+  lookupPartnerProduct(@Query(new ZodValidationPipe(PartnerProductLookupSchema)) query: PartnerProductLookupQuery) {
+    return (
+      this.db
+        .selectFrom('partner_products')
+        // 先方JAN・出荷JANも返す。受注入力で「先方のJANを入れたら出荷用のJANを出す」ため（1001 ご要望）。
+        // 販売名・備考は、複数の行から選ぶときの見分けに使う
+        .select(['id', 'partner_product_code', 'partner_jan', 'shipping_jan', 'sales_name', 'unit_price', 'retail_price', 'note'])
+        .where('partner_id', '=', query.partner_id)
+        .where('sku_id', '=', query.sku_id)
+        .where('is_active', '=', true)
+        .orderBy(sql`sort_order nulls last`)
+        .orderBy('id')
+        .execute()
+    );
+  }
+
+  /**
+   * 同じ取引先・同じ SKU で、先方の商品コードが無い行は1つまで（2026-10-16 マスター編_3 M3-26）。
+   * CSV・一覧で編集は「取引先＋SKU＋先方の商品コード」で行を見分けるため、コードの無い行が2つあると見分けられない。
+   * 2行目からは先方の商品コードを入れてもらう。
+   */
+  private async assertOneUncodedPartnerProduct(partnerId: number, skuId: number, code: string | null | undefined, exceptId?: number) {
+    if (code) return;
+    let q = this.db
       .selectFrom('partner_products')
-      // 先方JAN・出荷JANも返す。受注入力で「先方のJANを入れたら出荷用のJANを出す」ため（1001 ご要望）。
-      .select(['id', 'partner_product_code', 'partner_jan', 'shipping_jan', 'sales_name', 'unit_price', 'retail_price'])
-      .where('partner_id', '=', query.partner_id)
-      .where('sku_id', '=', query.sku_id)
-      .where('is_active', '=', true)
-      .orderBy('id')
-      .executeTakeFirst();
-    return row ?? null;
+      .select('id')
+      .where('partner_id', '=', partnerId)
+      .where('sku_id', '=', skuId)
+      .where(sql<boolean>`nullif(btrim(partner_product_code), '') is null`);
+    if (exceptId !== undefined) q = q.where('id', '<>', exceptId);
+    if (await q.executeTakeFirst()) {
+      throw new ConflictException(
+        '同じ取引先・同じ SKU で、先方の商品コードが空の行がすでにあります。2行目からは先方の商品コードを入れてください（行を見分けるため）',
+      );
+    }
   }
 
   @Post('partner-products')
   @RequirePermission('M-11', 'create')
-  createPartnerProduct(
+  async createPartnerProduct(
     @Body(new ZodValidationPipe(PartnerProductSchema)) body: PartnerProductBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    await this.assertOneUncodedPartnerProduct(body.partner_id, body.sku_id, body.partner_product_code);
     return this.crud.create('partner_products', body, user.id);
   }
 
   @Patch('partner-products/:id')
   @RequirePermission('M-11', 'update')
-  updatePartnerProduct(
+  async updatePartnerProduct(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ZodValidationPipe(PartnerProductSchema.partial().extend(Active))) body: Partial<PartnerProductBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    // 取引先・SKU・先方の商品コードのどれかを変えるときだけ見る（無い行は下の update が 404 にする）
+    if (body.partner_id !== undefined || body.sku_id !== undefined || body.partner_product_code !== undefined) {
+      const cur = await this.db
+        .selectFrom('partner_products')
+        .select(['partner_id', 'sku_id', 'partner_product_code'])
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (cur) {
+        await this.assertOneUncodedPartnerProduct(
+          body.partner_id ?? Number(cur.partner_id),
+          body.sku_id ?? Number(cur.sku_id),
+          body.partner_product_code !== undefined ? body.partner_product_code : cur.partner_product_code,
+          id,
+        );
+      }
+    }
     return this.crud.update('partner_products', id, body, '得意先別商品', user.id);
   }
 
@@ -1154,12 +1387,37 @@ export class MastersWriteController {
   // ---- 仕入マスタ -----------------------------------------------------------
   @Get('purchase-items')
   @RequirePermission('M-15', 'view')
-  listPurchaseItems(@Query(new ZodValidationPipe(ListSchema)) query: ListQuery) {
-    return this.crud.list('purchase_items', {
+  async listPurchaseItems(@Query(new ZodValidationPipe(ListSchema)) query: ListQuery) {
+    const page = await this.crud.list('purchase_items', {
       ...query,
       searchColumns: ['purchase_code', 'item_name'],
       orderBy: ['sort_order', 'purchase_code'],
     });
+    // 一覧にブランド・商品分類・カテゴリーの名前も出す（2026-10-18 マスター編_3 M3-30）。
+    // 画面の選択肢（200件まで）から引くと、件数の多い商品分類で名前が欠けるため、ここで引いて添える
+    const ids = (field: string) =>
+      [...new Set(page.items.map((r) => r[field]).filter((v) => v !== null && v !== undefined).map(Number))];
+    const names = async (table: 'brands' | 'categories' | 'product_classes', field: string) => {
+      const list = ids(field);
+      if (list.length === 0) return new Map<number, { code: string; name: string }>();
+      const rows = await this.db.selectFrom(table).select(['id', 'code', 'name']).where('id', 'in', list).execute();
+      return new Map(rows.map((r) => [Number(r.id), { code: r.code, name: r.name }]));
+    };
+    const [brands, categories, classes] = await Promise.all([
+      names('brands', 'brand_id'),
+      names('categories', 'category_id'),
+      names('product_classes', 'product_class_id'),
+    ]);
+    return {
+      ...page,
+      items: page.items.map((r) => ({
+        ...r,
+        brand_name: brands.get(Number(r.brand_id))?.name ?? null,
+        category_name: categories.get(Number(r.category_id))?.name ?? null,
+        product_class_code: classes.get(Number(r.product_class_id))?.code ?? null,
+        product_class_name: classes.get(Number(r.product_class_id))?.name ?? null,
+      })),
+    };
   }
 
   @Post('purchase-items')
@@ -1254,6 +1512,73 @@ export class MastersWriteController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.crud.update('codes', id, body, '区分値', user.id);
+  }
+
+  /**
+   * 区分値の削除（2026-10-16 マスター編3 M3-39。区分値・通貨・経費科目のタブにも削除を付けた）。
+   * 使われているものは理由（どこで何件）を出して断り、編集画面の「非表示」に誘導する。
+   *  - プログラムがコードで引いている値（PROTECTED_CODES）は、使われていなくても消さない。
+   *  - 通貨は伝票・取引先にコードの文字のまま持つ（外部キーが無い）ので、currency の列を数えて断る。
+   */
+  @Delete('codes/:id')
+  @RequirePermission('M-16', 'delete')
+  async removeCode(@Param('id', ParseIntPipe) id: number) {
+    const row = await this.db
+      .selectFrom('codes as c')
+      .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
+      .select(['c.code as code', 'c.name as name', 'cc.code as category', 'cc.name as category_name'])
+      .where('c.id', '=', id)
+      .executeTakeFirst();
+    if (!row) throw new NotFoundException(`区分値が見つかりません（ID: ${id}）`);
+
+    const keep = PROTECTED_CODES[row.category];
+    if (keep === '*' || keep?.includes(row.code)) {
+      throw new ConflictException(
+        `「${row.name}」（${row.code}）はシステムの処理で使う${row.category_name}のため削除できません。` +
+          `選択肢から外したいときは、編集画面で「非表示」にしてください`,
+      );
+    }
+    if (row.category === 'CURRENCY') {
+      const where = await this.currencyUsages(row.code);
+      if (where) {
+        throw new ConflictException(
+          `この通貨（${row.code}）は次で使われているため削除できません：${where}。` +
+            `選択肢から外したいときは、編集画面で「非表示」にしてください`,
+        );
+      }
+    }
+    return this.crud.remove('codes', id, '区分値');
+  }
+
+  /** 通貨のコードを文字のまま持つ列（currency）を、表ごとに数える（「取引先 2件、仕入 1件」の形） */
+  private async currencyUsages(code: string): Promise<string> {
+    const cols = await sql<{ table_name: string }>`
+      select c.table_name
+        from information_schema.columns c
+        join information_schema.tables t on t.table_schema = c.table_schema and t.table_name = c.table_name
+       where c.table_schema = current_schema()
+         and c.column_name = 'currency'
+         and t.table_type = 'BASE TABLE'
+       order by c.table_name`.execute(this.db);
+    const labels: Record<string, string> = {
+      partners: '取引先',
+      sales_orders: '受注',
+      purchases: '仕入',
+      invoices: '請求書',
+      cash_receipts: '入金',
+      cash_payments: '支払',
+      cash_transactions: '入出金',
+      ap_ledgers: '買掛',
+      ar_ledgers: '売掛',
+    };
+    const out: string[] = [];
+    for (const { table_name } of cols.rows) {
+      // 表の名前はデータベースの定義から取ったもの。通貨のコードは値としてのみ渡る
+      const r = await sql<{ n: number }>`select count(*)::int as n from ${sql.table(table_name)} where currency = ${code}`.execute(this.db);
+      const n = Number(r.rows[0]?.n ?? 0);
+      if (n > 0) out.push(`${labels[table_name] ?? table_name} ${n}件`);
+    }
+    return out.join('、');
   }
 
   /**
@@ -1380,6 +1705,7 @@ export class MastersWriteController {
         'b.name as brand_name',
         'r.product_id as product_id',
         'p.product_name as product_name',
+        'p.product_code as product_code',
         'r.customer_partner_id as customer_partner_id',
         'cust.name1 as customer_name',
         'r.media_id as media_id',
@@ -1421,23 +1747,21 @@ export class MastersWriteController {
         // 代表行＝まとまりを指していない行
         const head = bucket.find((r) => r.rule_group_id === null) ?? bucket[0];
         if (!head) return null;
-        const customers = bucket
-          .filter((r) => r.customer_partner_id !== null)
-          .map((r) => ({
-            id: r.customer_partner_id as number,
-            name: r.customer_name ?? '',
-            is_excluded: r.is_excluded,
-          }));
-        const excluded = customers.filter((c) => c.is_excluded);
-        const customer_mode: CustomerMode = excluded.length > 0 ? '対象外' : customers.length > 0 ? '対象' : '媒体全体';
-        // 画面に出す販売先。対象外のときは「外した社」、対象のときは「対象の社」
-        const shown = customer_mode === '対象外' ? excluded : customers;
-        const { gid: _gid, is_history: _history, ...rest } = head;
+        // 販売先の指定・対象の商品・対象外の商品は、行のまとまりから読む（royalty-rule-group.ts）
+        const spec = readRuleGroup(bucket);
+        const customerName = new Map(bucket.map((r) => [Number(r.customer_partner_id), r.customer_name ?? '']));
+        const product = new Map(bucket.map((r) => [Number(r.product_id), { name: r.product_name ?? '', code: r.product_code ?? '' }]));
+        const productsOf = (ids: number[]) => ids.map((id) => ({ id, ...(product.get(id) ?? { name: '', code: '' }) }));
+        const { gid: _gid, is_history: _history, product_code: _code, ...rest } = head;
         return {
           ...rest,
-          customer_mode,
-          customers: shown.map((c) => ({ id: c.id, name: c.name })),
-          customer_count: shown.length,
+          customer_mode: spec.mode,
+          // 画面に出す販売先。対象外のときは「外した社」、対象のときは「対象の社」
+          customers: spec.customerIds.map((id) => ({ id, name: customerName.get(id) ?? '' })),
+          customer_count: spec.customerIds.length,
+          /** 対象の商品（空ならブランド配下のすべて）と対象外の商品（M3-33） */
+          products: productsOf(spec.productIds),
+          excluded_products: productsOf(spec.excludedProductIds),
           /** このまとまりが中では何行か */
           row_count: bucket.length,
           /** 編集前の版として残している行の数（計算済みの月の根拠） */
@@ -1450,12 +1774,15 @@ export class MastersWriteController {
   }
 
   /**
-   * 登録。販売先を複数選んだときは、1枚のフォームから複数行を作って1つのまとまりにする。
+   * 登録。販売先・商品を複数選んだときは、1枚のフォームから複数行を作って1つのまとまりにする。
+   * 行の作り方は royalty-rule-group.ts（planRuleGroupRows）。
    *
    *   対象   … 選んだ販売先ぶんの行を作る（それぞれ料率を持つ）
    *   対象外 … 「販売先=すべて・料率あり」の代表行＋「選んだ販売先・対象外」の行。
    *            計算のときは指定の細かい行が勝つので、選んだ社だけが外れる。
    *            料率を入れなければ対象外の行だけを作る（料率は別の規定が受け持つ）。
+   *   対象の商品   … 選んだ商品ごとに料率の行を作る（M3-33。1件ずつ登録しなくてよい）
+   *   対象外の商品 … 選んだ商品の対象外の行を、料率の行より優先される形で作る（M3-33）
    */
   @Post('royalty-rules')
   @RequirePermission('Y-02', 'create')
@@ -1463,23 +1790,29 @@ export class MastersWriteController {
     @Body(new ZodValidationPipe(RoyaltyRuleSchema)) body: RoyaltyRuleBody,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const { customer_mode, customer_partner_ids, ...values } = body;
+    const { customer_mode, customer_partner_ids, product_ids, excluded_product_ids, ...values } = body;
     // 規定の媒体の販売先だけを選べる（他の媒体の販売先だと、計算では黙って 0 円になるため）
     await assertCustomersInMedia(
       this.db,
       values.media_id ?? null,
       customer_partner_ids.length > 0 ? customer_partner_ids : values.customer_partner_id ? [values.customer_partner_id] : [],
     );
-    // 販売先を選んでいないときは、今までどおり1行だけ作る。
-    if (customer_partner_ids.length === 0) return this.crud.create('royalty_rules', values, user.id);
-    return this.db
-      .transaction()
-      .execute((trx) => this.writeRoyaltyGroup(trx, null, customer_mode, customer_partner_ids, values, user.id));
+    const productIds = product_ids ?? (values.product_id ? [values.product_id] : []);
+    const excludedProductIds = excluded_product_ids ?? [];
+    // 販売先も商品も複数選んでいないときは、今までどおり1行だけ作る（昔の API の使い方もこのまま）。
+    if (customer_partner_ids.length === 0 && productIds.length <= 1 && excludedProductIds.length === 0) {
+      await this.assertRuleProductsInBrand(values.brand_id ?? null, productIds);
+      return this.crud.create('royalty_rules', { ...values, product_id: productIds[0] ?? null }, user.id);
+    }
+    const spec: RuleGroupSpec = { mode: customer_mode, customerIds: customer_partner_ids, productIds, excludedProductIds };
+    await this.assertRuleGroup(spec, values);
+    return this.db.transaction().execute((trx) => this.writeRoyaltyGroup(trx, null, spec, values, user.id));
   }
 
   /**
    * 更新。:id はまとまりの代表行。
-   * 販売先の指定が送られてきたときは、このまとまりの販売先の行を作り直す。
+   * 販売先の指定・対象の商品・対象外の商品が送られてきたときは、このまとまりの行を作り直す。
+   * 送られてこなかったものは今のまま。
    */
   @Patch('royalty-rules/:id')
   @RequirePermission('Y-02', 'update')
@@ -1489,7 +1822,7 @@ export class MastersWriteController {
     body: Partial<RoyaltyRuleBody> & { is_active?: boolean },
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const { customer_mode, customer_partner_ids, ...values } = body;
+    const { customer_mode, customer_partner_ids, product_ids, excluded_product_ids, ...values } = body;
 
     const row = await this.db.selectFrom('royalty_rules').selectAll().where('id', '=', id).executeTakeFirst();
     if (!row) throw new NotFoundException(`ロイヤリティ規定が見つかりません（ID: ${id}）`);
@@ -1499,45 +1832,86 @@ export class MastersWriteController {
 
     // 「使わない」「有効に戻す」だけのときは、まとまり全体の行をそろえて切り替える。
     // 代表の1行だけを切り替えると、2社目以降の行が計算に効き続けていた。
-    const onlyActive = Object.keys(values).every((k) => k === 'is_active') && customer_mode === undefined && customer_partner_ids === undefined;
+    const onlyActive =
+      Object.keys(values).every((k) => k === 'is_active') &&
+      customer_mode === undefined &&
+      customer_partner_ids === undefined &&
+      product_ids === undefined &&
+      excluded_product_ids === undefined;
     if (onlyActive && values.is_active !== undefined) {
       return this.setRoyaltyGroupActive(id, values.is_active, user.id);
     }
 
-    // 販売先の指定が来ていなければ、今の指定のまま中身だけを直す（まとまりの全行にそろえて反映する）
+    // 送られてこなかった指定は、今の指定のまま中身だけを直す（まとまりの全行にそろえて反映する）
     const current = await this.royaltyGroupSpec(this.db, id);
-    const mode: CustomerMode = customer_mode ?? current.mode;
-    const ids = customer_partner_ids ?? (customer_mode === undefined ? current.ids : []);
-    if (mode !== '媒体全体' && ids.length === 0) throw new BadRequestException('販売先を1社以上選んでください');
-    if (mode === '媒体全体' && ids.length > 0) throw new BadRequestException('「媒体全体」を選んだときは販売先を選びません');
-    if (ids.length > MAX_RULE_CUSTOMERS) throw new BadRequestException(`販売先は${MAX_RULE_CUSTOMERS}社までです`);
-    if (new Set(ids).size !== ids.length) throw new BadRequestException('同じ販売先が重なっています');
+    const spec: RuleGroupSpec = {
+      mode: customer_mode ?? current.mode,
+      customerIds: customer_partner_ids ?? (customer_mode === undefined ? current.customerIds : []),
+      productIds:
+        product_ids ?? (values.product_id !== undefined ? (values.product_id ? [values.product_id] : []) : current.productIds),
+      excludedProductIds: excluded_product_ids ?? current.excludedProductIds,
+    };
 
     const merged = { ...row, ...values };
-    if (merged.media_id == null) throw new BadRequestException('媒体を選んでください');
-    await assertCustomersInMedia(this.db, Number(merged.media_id), ids);
+    await this.assertRuleGroup(spec, merged);
 
     return this.db.transaction().execute(async (trx) => {
-      const result = await this.writeRoyaltyGroup(trx, id, mode, ids, merged, user.id);
+      const result = await this.writeRoyaltyGroup(trx, id, spec, merged, user.id);
       if (values.is_active !== undefined) await this.setRoyaltyGroupActive(result.id, values.is_active, user.id, trx);
       return result;
     });
   }
 
-  /** まとまりの今の販売先の指定（一覧と同じ読み方） */
-  private async royaltyGroupSpec(db: ConyDatabase, headId: number): Promise<{ mode: CustomerMode; ids: number[] }> {
+  /** まとまりの中身の検査（登録・更新で共通） */
+  private async assertRuleGroup(spec: RuleGroupSpec, values: Record<string, unknown>) {
+    if (values.media_id == null) throw new BadRequestException('媒体を選んでください');
+    const message = checkRuleGroup(spec, Boolean(values.rate || values.fixed_amount), {
+      customers: MAX_RULE_CUSTOMERS,
+      products: MAX_RULE_PRODUCTS,
+    });
+    if (message) throw new BadRequestException(message);
+    await assertCustomersInMedia(this.db, Number(values.media_id), spec.customerIds);
+    await this.assertRuleProductsInBrand((values.brand_id ?? null) as number | null, [
+      ...spec.productIds,
+      ...spec.excludedProductIds,
+    ]);
+  }
+
+  /**
+   * ブランドを選んだ規定の商品は、そのブランドの商品に限る。
+   * 違うブランドの商品は計算でどの明細にも当たらず、対象外にしたつもりでも効かないため（M3-33）。
+   */
+  private async assertRuleProductsInBrand(brandId: number | null, productIds: number[]) {
+    if (productIds.length === 0) return;
+    const rows = await this.db
+      .selectFrom('products as p')
+      .leftJoin('brands as b', 'b.id', 'p.brand_id')
+      .select(['p.id as id', 'p.product_name as product_name', 'p.brand_id as brand_id'])
+      .where('p.id', 'in', productIds)
+      .execute();
+    const byId = new Map(rows.map((r) => [Number(r.id), r]));
+    for (const id of productIds) {
+      const p = byId.get(id);
+      if (!p) throw new BadRequestException(`商品が見つかりません（ID: ${id}）`);
+      if (brandId !== null && Number(p.brand_id) !== Number(brandId)) {
+        const brand = await this.db.selectFrom('brands').select('name').where('id', '=', brandId).executeTakeFirst();
+        throw new BadRequestException(
+          `${p.product_name} はブランド『${brand?.name ?? brandId}』の商品ではありません。ブランドを空欄にするか、そのブランドの商品を選んでください`,
+        );
+      }
+    }
+  }
+
+  /** まとまりの今の販売先の指定・対象の商品・対象外の商品（一覧と同じ読み方） */
+  private async royaltyGroupSpec(db: ConyDatabase, headId: number): Promise<RuleGroupSpec> {
     const rows = await db
       .selectFrom('royalty_rules as r')
-      .select(['r.customer_partner_id as customer_partner_id', 'r.is_excluded as is_excluded'])
+      .select(['r.customer_partner_id as customer_partner_id', 'r.product_id as product_id', 'r.is_excluded as is_excluded'])
       .where((eb) => eb.or([eb('r.id', '=', headId), eb('r.rule_group_id', '=', headId)]))
       .where(sql<boolean>`not ${IS_ROYALTY_HISTORY}`)
       .orderBy('r.id', 'asc')
       .execute();
-    const customers = rows.filter((r) => r.customer_partner_id !== null);
-    const excluded = customers.filter((r) => r.is_excluded);
-    if (excluded.length > 0) return { mode: '対象外', ids: excluded.map((r) => Number(r.customer_partner_id)) };
-    if (customers.length > 0) return { mode: '対象', ids: customers.map((r) => Number(r.customer_partner_id)) };
-    return { mode: '媒体全体', ids: [] };
+    return readRuleGroup(rows);
   }
 
   /** まとまり（代表行と配下の行）をそろえて有効／無効にする。編集前の版は「使わない」のまま触らない */
@@ -1556,12 +1930,12 @@ export class MastersWriteController {
 
   /**
    * まとまりを書き込む。headId が null なら新しく作り、あれば今の行を直す。
-   * 料率は代表行だけが持つ。対象外の行は料率を持てない（DB の制約 ck_royalty_excl）。
+   * 料率は料率の行だけが持つ。対象外の行は料率を持てない（DB の制約 ck_royalty_excl）。
    *
-   * 直すときは行を消して作り直さず、販売先ごとに今の行をそのまま直す。
+   * 直すときは行を消して作り直さず、（販売先, 商品）ごとに今の行をそのまま直す。
    * 月次計算の明細（royalty_calculation_lines）は「どの規定を当てたか」を行の ID で持つため、
    * 消して作り直すと、一度計算に使った規定は直せなくなっていた（外部キーで消せない）。
-   * 外した販売先の行は、計算に使っていなければ消し、使っていれば「編集前の版」として
+   * 外した販売先・商品の行は、計算に使っていなければ消し、使っていれば「編集前の版」として
    * まとまりにぶら下げたまま「使わない」にする（過去の計算の根拠は残る。royalty-rule-history.ts）。
    * 以前はまとまりから切り離していたため、利用者の作っていない「無効」の規定が一覧に増え、
    * 「有効に戻す」で元の料率が復活していた（2026-10-12 T3 No.37 D3）。
@@ -1569,8 +1943,7 @@ export class MastersWriteController {
   private async writeRoyaltyGroup(
     trx: ConyDatabase,
     headId: number | null,
-    mode: CustomerMode,
-    customerIds: number[],
+    spec: RuleGroupSpec,
     values: Record<string, unknown>,
     userId: number,
   ) {
@@ -1579,57 +1952,48 @@ export class MastersWriteController {
     const shared = {
       payee_partner_id: values.payee_partner_id as number,
       brand_id: (values.brand_id ?? null) as number | null,
-      product_id: (values.product_id ?? null) as number | null,
       media_id: (values.media_id ?? null) as number | null,
-      calc_base: (values.calc_base ?? '出荷') as string,
+      calc_base: (values.calc_base ?? '売上') as string,
       valid_from: values.valid_from as string,
       valid_to: (values.valid_to ?? null) as string | null,
       sort_order: (values.sort_order ?? null) as number | null,
       note: (values.note ?? null) as string | null,
     };
+    // 直すときは、今の「使う／使わない」を引き継ぐ（使わないにした規定を直しても、勝手に使うに戻さない）
+    const isActive = values.is_active === undefined ? true : Boolean(values.is_active);
 
-    // 作りたい行の並び。先頭がまとまりの代表になる。
-    //   媒体全体 … 販売先=すべて・料率あり の1行
-    //   対象     … 選んだ販売先ごとに料率ありの行
-    //   対象外   … 料率ありなら「販売先=すべて・料率あり」＋「選んだ社・対象外」、料率なしなら「選んだ社・対象外」だけ
-    const hasAmount = Boolean(rate || fixed);
-    type Want = { customer: number | null; excluded: boolean };
-    const wants: Want[] =
-      mode === '媒体全体'
-        ? [{ customer: null, excluded: false }]
-        : mode === '対象'
-          ? customerIds.map((c) => ({ customer: c, excluded: false }))
-          : [
-              ...(hasAmount ? [{ customer: null, excluded: false }] : []),
-              ...customerIds.map((c) => ({ customer: c, excluded: true })),
-            ];
+    // 作りたい行の並び。先頭がまとまりの代表になる（royalty-rule-group.ts）
+    const wants = planRuleGroupRows(spec, Boolean(rate || fixed));
+    const keyOf = (customer: unknown, product: unknown) =>
+      `${customer === null ? 0 : Number(customer)}:${product === null ? 0 : Number(product)}`;
 
     const existing = headId
       ? await trx
           .selectFrom('royalty_rules as r')
-          .select(['r.id as id', 'r.customer_partner_id as customer_partner_id'])
+          .select(['r.id as id', 'r.customer_partner_id as customer_partner_id', 'r.product_id as product_id'])
           .where((eb) => eb.or([eb('r.id', '=', headId), eb('r.rule_group_id', '=', headId)]))
           .where(sql<boolean>`not ${IS_ROYALTY_HISTORY}`)
           .orderBy('r.id', 'asc')
           .execute()
       : [];
-    const byCustomer = new Map(existing.map((r) => [r.customer_partner_id === null ? 0 : Number(r.customer_partner_id), Number(r.id)]));
+    const byKey = new Map(existing.map((r) => [keyOf(r.customer_partner_id, r.product_id), Number(r.id)]));
 
     const keptIds: number[] = [];
     for (const w of wants) {
       const body = {
         ...shared,
         customer_partner_id: w.customer,
+        product_id: w.product,
         is_excluded: w.excluded,
-        // 対象外の行は料率を持たない。代表行の料率が効いたうえで、この社だけ外れる。
+        // 対象外の行は料率を持たない。料率の行より優先されて、この販売先・商品だけ外れる。
         rate: w.excluded ? null : rate,
         fixed_amount: w.excluded ? null : fixed,
-        is_active: true,
+        is_active: isActive,
         rule_group_id: null as number | null,
         // 使い直す行が編集前の版だったときは、印を外して今の規定に戻す
         superseded_at: null as Date | null,
       };
-      let rowId = byCustomer.get(w.customer ?? 0);
+      let rowId = byKey.get(keyOf(w.customer, w.product));
       if (rowId === undefined) {
         // 前に外して「使わない」で残した行（計算に使っていた行）があれば、それを使い直す。
         // 同じ範囲の規定は1行しか持てない（ux_royalty_rules_scope）ため。
@@ -1638,7 +2002,7 @@ export class MastersWriteController {
           .select('id')
           .where('payee_partner_id', '=', shared.payee_partner_id)
           .where(sql<boolean>`coalesce(brand_id, 0) = ${shared.brand_id ?? 0}`)
-          .where(sql<boolean>`coalesce(product_id, 0) = ${shared.product_id ?? 0}`)
+          .where(sql<boolean>`coalesce(product_id, 0) = ${w.product ?? 0}`)
           .where(sql<boolean>`coalesce(customer_partner_id, 0) = ${w.customer ?? 0}`)
           .where(sql<boolean>`coalesce(media_id, 0) = ${shared.media_id ?? 0}`)
           .where('valid_from', '=', shared.valid_from)
@@ -1680,7 +2044,7 @@ export class MastersWriteController {
         .execute();
     }
 
-    // 外した販売先の行
+    // 外した販売先・商品の行
     const dropped = existing.map((r) => Number(r.id)).filter((x) => !keptIds.includes(x));
     if (dropped.length > 0) {
       const used = await trx
@@ -1704,8 +2068,10 @@ export class MastersWriteController {
 
     return {
       id: newHead,
-      customer_mode: mode,
-      customer_count: customerIds.length,
+      customer_mode: spec.mode,
+      customer_count: spec.customerIds.length,
+      product_count: spec.productIds.length,
+      excluded_product_count: spec.excludedProductIds.length,
       row_count: keptIds.length,
     };
   }

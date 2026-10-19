@@ -93,7 +93,8 @@ async function shipped(customer, shipDate, lines) {
   );
   return o;
 }
-const rule = (body) => call('POST', '/masters/royalty-rules', A, { brand_id: brand.id, valid_from: '2028-01-01', ...body });
+// 計算の基準の既定は 2026-10-16（M3-32）から請求月（売上）。この確認は出荷基準の計算を見るので、出荷を明示する
+const rule = (body) => call('POST', '/masters/royalty-rules', A, { brand_id: brand.id, valid_from: '2028-01-01', calc_base: '出荷', ...body });
 const calc = async (month) => ok(await call('POST', '/billing/royalties/calculate', A, { target_month: month }), `calc ${month}`);
 const calcOf = async (month, payee) => {
   const list = ok(await call('GET', `/billing/royalties?target_month=${month}&payee_partner_id=${payee.id}`, A), 'royalties');
@@ -247,8 +248,8 @@ await calc('2028-05');
 await check('No.33 売上基準: 3月に締めた請求の分だけ（T1 5,000×4%−返品 1,000×4% ＝ 160円）。20日締めの T3（3/25 出荷）は入らない', async () => {
   const c = await calcOf('2028-03', PAY3);
   const t1 = c?.lines.filter((l) => l.customer_name === `${P}T1社`) ?? [];
-  return (invT1 && n(c?.total_amount) === 160 && t1.length === 2 && c.lines.every((l) => l.calc_base === '売上') &&
-    !c.lines.some((l) => l.customer_name === `${P}T3社`) && c.calc_base === '売上') || c;
+  return (invT1 && n(c?.total_amount) === 160 && t1.length === 2 && c.lines.every((l) => l.calc_base === '請求月') &&
+    !c.lines.some((l) => l.customer_name === `${P}T3社`) && c.calc_base === '請求月') || c;
 });
 await check('No.33 入金基準: 入金の無い月・入金の無い販売先には付かない（3月に K1・K2 は 0 円）', async () => {
   const c = await calcOf('2028-03', PAY3);
@@ -258,8 +259,8 @@ await check('No.33 4月: 売上（T3 4/20 締め 400円）＋入金（K1 半額�
   const c = await calcOf('2028-04', PAY3);
   const t3 = c?.lines.find((l) => l.customer_name === `${P}T3社`);
   const k1 = c?.lines.find((l) => l.customer_name === `${P}K1社`);
-  return (n(c?.total_amount) === 550 && n(t3?.royalty_amount) === 400 && t3.calc_base === '売上' &&
-    n(k1?.royalty_amount) === 150 && n(k1?.base_amount) === 5000 && k1.calc_base === '入金' && c.calc_base === '売上・入金') || c;
+  return (n(c?.total_amount) === 550 && n(t3?.royalty_amount) === 400 && t3.calc_base === '請求月' &&
+    n(k1?.royalty_amount) === 150 && n(k1?.base_amount) === 5000 && k1.calc_base === '入金' && c.calc_base === '請求月・入金') || c;
 });
 await check('No.33 5月: 残りの半額の入金で 150円。請求額を超えた入金（過入金）は数えない', async () => {
   const c = await calcOf('2028-05', PAY3);

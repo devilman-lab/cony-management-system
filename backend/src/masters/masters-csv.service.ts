@@ -14,6 +14,7 @@ import {
 } from './masters-csv';
 import { skuJanChecker } from './products.service';
 import { IS_ROYALTY_HISTORY } from './royalty-rule-history';
+import { readRuleGroup } from './royalty-rule-group';
 
 /** 取り込みの下見・実行の結果。1行ごとに何が起きる（起きた）かを返す。 */
 export interface ImportRowResult {
@@ -45,7 +46,7 @@ export interface ImportResult {
 export interface ImportPermissions {
   /** 新しい行を作れるか（作成の権限） */
   canCreate: boolean;
-  /** 有効→無効（使わない）にできるか（画面の「使わない」と同じ権限） */
+  /** 有効→無効（非表示）にできるか（MasterCsvDef.deactivateAction の権限） */
   canDeactivate: boolean;
 }
 
@@ -181,11 +182,12 @@ export class MastersCsvService {
         return excel(id === null ? '' : (codeOf.get(`${c.ref.table}:${id}`) ?? ''));
       }
       if (raw === null || raw === undefined) return '""';
-      if (c.kind === 'bool') return esc(raw ? '有効' : '無効');
+      if (c.kind === 'bool') return esc(raw ? (c.boolLabels?.[0] ?? '有効') : (c.boolLabels?.[1] ?? '無効'));
       if (c.kind === 'date') return esc(dateText(raw));
       // JAN のような数字だけの文字列は、Excel が数値に直して頭の 0 を落としてしまう
       if (c.kind === 'digits' || c.excelText) return excel(String(raw));
-      return esc(String(raw));
+      // 値を画面の言葉で書く欄（消費税免税区分の exempt →「免税（税抜扱い）」など）
+      return esc(c.valueLabels?.[String(raw)] ?? String(raw));
     };
 
     // 並びは鍵の順。毎回同じ順で出れば、前回との差分が取りやすい
@@ -309,19 +311,21 @@ export class MastersCsvService {
 
     if (slug === 'royalty-rules') {
       header = [
-        '支払先コード', '支払先名', '媒体コード', '媒体名', 'ブランドコード', '商品コード', '販売先の指定',
+        '支払先コード', '支払先名', '媒体コード', '媒体名', 'ブランドコード', '商品コード', '対象外の商品コード', '販売先の指定',
         '販売先コード', '計算の基準', '料率', '定額', '適用開始日', '適用終了日', '並び順', '備考', '有効',
       ];
       const { rows } = await sql<{
         gid: number; rule_group_id: number | null; payee_code: string; payee_name: string;
         media_code: string | null; media_name: string | null; brand_code: string | null; product_code: string | null;
+        customer_partner_id: number | null; product_id: number | null;
         customer_code: string | null; is_excluded: boolean; calc_base: string; rate: string | null;
         fixed_amount: string | null; valid_from: unknown; valid_to: unknown; sort_order: number | null;
         note: string | null; is_active: boolean;
       }>`
         select coalesce(r.rule_group_id, r.id) as gid, r.rule_group_id, payee.partner_code as payee_code,
                payee.name1 as payee_name, md.code as media_code, md.name as media_name, b.code as brand_code,
-               p.product_code, cust.partner_code as customer_code, r.is_excluded, r.calc_base, r.rate,
+               p.product_code, r.customer_partner_id, r.product_id,
+               cust.partner_code as customer_code, r.is_excluded, r.calc_base, r.rate,
                r.fixed_amount, r.valid_from, r.valid_to, r.sort_order, r.note, r.is_active
           from royalty_rules r
           join partners payee on payee.id = r.payee_partner_id
@@ -343,14 +347,18 @@ export class MastersCsvService {
       for (const bucket of groups.values()) {
         const head = bucket.find((r) => r.rule_group_id === null) ?? bucket[0];
         if (!includeInactive && !head.is_active) continue;
-        const customers = bucket.filter((r) => r.customer_code !== null);
-        const excluded = customers.filter((r) => r.is_excluded);
-        const mode = excluded.length > 0 ? '対象外' : customers.length > 0 ? '対象' : '媒体全体';
-        const shown = mode === '対象外' ? excluded : customers;
+        // 販売先の指定・対象の商品・対象外の商品は一覧と同じ読み方（royalty-rule-group.ts。M3-33）
+        const spec = readRuleGroup(bucket);
+        const customerCode = new Map(bucket.map((r) => [Number(r.customer_partner_id), r.customer_code ?? '']));
+        const productCode = new Map(bucket.map((r) => [Number(r.product_id), r.product_code ?? '']));
+        const codes = (ids: number[], m: Map<number, string>) => ids.map((id) => m.get(id) ?? '').join(MULTI_SEPARATOR);
         body.push([
           xlCell(head.payee_code), head.payee_name, xlCell(head.media_code), head.media_name ?? '',
-          xlCell(head.brand_code), xlCell(head.product_code), mode,
-          xlCell(shown.map((c) => c.customer_code).join(MULTI_SEPARATOR)), head.calc_base, head.rate ?? '',
+          xlCell(head.brand_code), xlCell(codes(spec.productIds, productCode)),
+          xlCell(codes(spec.excludedProductIds, productCode)), spec.mode,
+          xlCell(codes(spec.customerIds, customerCode)),
+          // 計算の基準は請求月に統一（中の値は売上。M3-32）
+          head.calc_base === '売上' ? '請求月' : head.calc_base, head.rate ?? '',
           head.fixed_amount ?? '', dateText(head.valid_from), dateText(head.valid_to),
           head.sort_order === null ? '' : String(head.sort_order), head.note ?? '', head.is_active ? '有効' : '無効',
         ]);
@@ -452,7 +460,7 @@ export class MastersCsvService {
         } else if (c.kind === 'date') {
           out[c.field] = dateText(raw);
         } else {
-          out[c.field] = String(raw);
+          out[c.field] = c.valueLabels?.[String(raw)] ?? String(raw);
         }
       }
       return out;
@@ -468,7 +476,8 @@ export class MastersCsvService {
         ref: c.ref?.label ?? null,
         read_only: c.readOnly ?? false,
         multi: Boolean(c.multi),
-        options: c.options ?? null,
+        // 値を言葉で書く欄は、選べる値も言葉で見せる（入れるのは言葉）
+        options: c.options?.map((o) => c.valueLabels?.[String(o)] ?? o) ?? null,
         options_label: c.optionsLabel ?? null,
       })),
       items,
@@ -523,7 +532,15 @@ export class MastersCsvService {
     }
 
     // 見出しを欄に対応づける
-    const byLabel = new Map(cols.map((c) => [c.label, c]));
+    // 別名の見出し（呼び名を変えた欄の新しい名前。M3-16）でも同じ欄として読む
+    const byLabel = new Map(cols.flatMap((c) => [c.label, ...(c.aliases ?? [])].map((l) => [l, c] as const)));
+    // 前の書式の見出し（SKU の CSV の「SKUコード」「商品コード」）。見出し行に目印があれば前の意味で読む（2026-10-18 受入 W2）
+    if (def.legacyHeaders && header.includes(def.legacyHeaders.marker)) {
+      for (const [label, field] of Object.entries(def.legacyHeaders.labels)) {
+        const c = cols.find((x) => x.field === field);
+        if (c) byLabel.set(label, c);
+      }
+    }
     const mapped: { index: number; col: CsvColumn }[] = [];
     const ignored: string[] = [];
     for (let i = 0; i < header.length; i++) {
@@ -532,15 +549,16 @@ export class MastersCsvService {
       else if (header[i] !== '') ignored.push(header[i]);
     }
 
-    // 鍵の欄がそろっているか
-    const missingKeys = def.keyFields.filter((f) => !mapped.some((m) => m.col.field === f));
+    // 鍵の欄がそろっているか。見出しに無くてもよい鍵（得意先別商品の先方の商品コード。M3-26）は数えない
+    const optionalKeys = new Set(def.optionalKeyFields ?? []);
+    const missingKeys = def.keyFields.filter((f) => !optionalKeys.has(f) && !mapped.some((m) => m.col.field === f));
     if (missingKeys.length > 0) {
       const labels = missingKeys.map((f) => cols.find((c) => c.field === f)?.label ?? f);
       throw new BadRequestException(
         `見出しに「${labels.join('」「')}」がありません。書き出した CSV の見出し行はそのまま残してください`,
       );
     }
-    if (mapped.length === def.keyFields.length) {
+    if (mapped.every((m) => def.keyFields.includes(m.col.field))) {
       throw new BadRequestException('書き換える欄がありません。鍵の列だけでは取り込めません');
     }
     const mappedCols = mapped.map((m) => m.col);
@@ -577,7 +595,8 @@ export class MastersCsvService {
         r[multiKey(c)] = orderedMulti(lists.get(Number(r.id)) ?? [], primary);
       }
     }
-    const keyCols = def.keyFields.map((f) => cols.find((c) => c.field === f)!);
+    // 突き合わせに使う鍵は、見出しにあるものだけ（見出しに無くてもよい鍵が無いときは、残りの鍵で突き合わせる）
+    const keyCols = def.keyFields.filter((f) => mapped.some((m) => m.col.field === f)).map((f) => cols.find((c) => c.field === f)!);
     const keyOfRow = (row: Record<string, unknown>): string =>
       keyCols
         .map((c) => {
@@ -587,7 +606,12 @@ export class MastersCsvService {
           return id === null ? '' : String(id);
         })
         .join('\u0001');
-    const byKey = new Map(existing.map((r) => [keyOfRow(r), r]));
+    // 鍵が同じ行が2つ以上ありうる（見出しに無い鍵があるとき）。その鍵の行は1つに決められないのでエラーにする
+    const byKey = new Map<string, Record<string, unknown>[]>();
+    for (const r of existing) {
+      const k = keyOfRow(r);
+      byKey.set(k, [...(byKey.get(k) ?? []), r]);
+    }
     // SKU の JAN の左6桁ルール（No.16）。引き金でも止まるが、下見の段階で行ごとに相手の品番・SKU を出す
     const janProblem = def.table === 'skus' ? await skuJanChecker(this.db, existing) : null;
 
@@ -611,7 +635,7 @@ export class MastersCsvService {
     const results: ImportRowResult[] = [];
     const writes: PendingWrite[] = [];
     const seenKeys = new Map<string, number>();
-    const deactivateLabel = def.deactivateAction === 'update' ? '更新' : '削除';
+    const deactivateLabel = def.deactivateAction === 'delete' ? '削除' : '更新';
 
     for (const { cells: raw, line } of body) {
       const values: Record<string, unknown> = {};
@@ -632,10 +656,9 @@ export class MastersCsvService {
         }
       }
 
-      const keyText = def.keyFields
-        .map((f) => {
-          const c = cols.find((x) => x.field === f)!;
-          const i = mapped.find((m) => m.col.field === f)!.index;
+      const keyText = keyCols
+        .map((c) => {
+          const i = mapped.find((m) => m.col.field === c.field)!.index;
           return `${c.label}=${unwrapExcel((raw[i] ?? '').trim())}`;
         })
         .join(' / ');
@@ -646,7 +669,9 @@ export class MastersCsvService {
         fail(problems);
         continue;
       }
-      const emptyKeys = keyCols.filter((c) => values[c.field] === null || values[c.field] === undefined || values[c.field] === '');
+      const emptyKeys = keyCols.filter(
+        (c) => !optionalKeys.has(c.field) && (values[c.field] === null || values[c.field] === undefined || values[c.field] === ''),
+      );
       if (emptyKeys.length > 0) {
         fail(emptyKeys.map((c) => `${c.label}：鍵の欄なので空にはできません`));
         continue;
@@ -660,7 +685,18 @@ export class MastersCsvService {
       }
       seenKeys.set(key, line);
 
-      const found = byKey.get(key);
+      const hits = byKey.get(key) ?? [];
+      if (hits.length > 1) {
+        const missing = def.keyFields
+          .filter((f) => !keyCols.some((c) => c.field === f))
+          .map((f) => cols.find((c) => c.field === f)?.label ?? f);
+        fail([
+          `${keyCols.map((c) => c.label).join('・')}が同じ行が${hits.length}件あり、どの行を直すか決められません。` +
+            (missing.length > 0 ? `見出しに「${missing.join('」「')}」の列を入れてください` : '画面の編集で直してください'),
+        ]);
+        continue;
+      }
+      const found = hits[0] as Record<string, unknown> | undefined;
       const isNew = !found;
       // 「有効」を空にした行: 追加の行は「使わない」で作ると一覧に出ず気付けないので「有効」で作る（再テスト R1 N1）
       if (activeBlank) values.is_active = isNew ? true : found!.is_active;
@@ -697,6 +733,7 @@ export class MastersCsvService {
           const col = mappedCols.find((c) => c.field === name);
           if (col) continue; // 空なら上の checkValue で「必須」になる
           if (def.columns.some((c) => c.field === name && c.blankAsEmpty)) continue; // 空の文字で入れる
+          if (def.filled?.includes(name)) continue; // 下の complete で埋める（作業指示内容の名称。M3-40）
           const label = cols.find((c) => c.field === name)?.label;
           problems.push(
             label
@@ -706,13 +743,13 @@ export class MastersCsvService {
         }
       }
 
-      // 権限（2026-10-12 受入 No.3 D-2）。画面に「新規登録」「使わない」が出ない人は CSV でもできない
+      // 権限（2026-10-12 受入 No.3 D-2）。画面で「新規登録」・編集画面の「表示／非表示」ができない人は CSV でもできない
       if (isNew && !perms.canCreate) {
         problems.push(`新しい行の追加：${def.label}マスタの「作成」の権限がありません（画面の「新規登録」と同じ権限が要ります）`);
       }
       if (!isNew && touched.some((c) => c.field === 'is_active') && found!.is_active === true && values.is_active === false) {
         if (!perms.canDeactivate) {
-          problems.push(`有効：「使わない」（無効）にするには${def.label}マスタの「${deactivateLabel}」の権限が要ります`);
+          problems.push(`有効：「無効」（非表示）にするには${def.label}マスタの「${deactivateLabel}」の権限が要ります`);
         }
       }
 
@@ -739,7 +776,11 @@ export class MastersCsvService {
       if (def.complete && (isNew || touched.length > 0)) {
         const extra = def.complete(merged, { ...rowCtx, touched: new Set(touched.map((c) => c.field)) });
         for (const [field, v] of Object.entries(extra)) {
-          const col = cols.find((x) => x.field === field);
+          // CSV の欄に無い列も書ける（取引先の「海外」を消費税免税区分からそろえるなど。M3-07）。
+          // 欄にあっても見せていない欄（原価など）は書かない
+          const col =
+            cols.find((x) => x.field === field) ??
+            (def.columns.some((x) => x.field === field) ? undefined : ({ field, label: field } as CsvColumn));
           if (!col) continue;
           values[field] = v;
           merged[field] = v;
@@ -990,12 +1031,21 @@ export class MastersCsvService {
 
     // ○×の欄は空欄なら「無効」（×）。追加の行で空にすると「必須」で止まっていた（受入 No.3 D-3）
     if (col.kind === 'bool') {
+      // 「対象／対象外」のように言葉を決めた欄は、その言葉も受ける（下代調整対象。M3-23）
+      if (col.boolLabels && v === col.boolLabels[0]) return true;
+      if (col.boolLabels && v === col.boolLabels[1]) return false;
       if (['有効', '○', '〇', '◯', 'TRUE', 'true', '1', 'はい'].includes(v)) return true;
       if (['無効', '×', '', 'FALSE', 'false', '0', 'いいえ'].includes(v)) return false;
-      throw new Error(`「有効」か「無効」で入れてください（${v}）`);
+      throw new Error(`「${col.boolLabels?.[0] ?? '有効'}」か「${col.boolLabels?.[1] ?? '無効'}」で入れてください（${v}）`);
     }
 
     if (v === '') return col.blankAsEmpty ? '' : null;
+
+    // 値を言葉で書く欄は、言葉を値に戻す（値そのものもそのまま受ける）。合わなければ下の検査で断る
+    if (col.valueLabels) {
+      const hit = Object.entries(col.valueLabels).find(([, label]) => label === v);
+      if (hit) return hit[0];
+    }
 
     switch (col.kind) {
       case 'number': {
@@ -1096,10 +1146,10 @@ export class MastersCsvService {
       return v.map((id) => (col.ref ? (codeById.get(`${col.ref.table}:${Number(id)}`) ?? String(id)) : String(id))).join(MULTI_SEPARATOR);
     }
     if (v === null || v === undefined || v === '') return '（空）';
-    if (col.kind === 'bool') return v ? '有効' : '無効';
+    if (col.kind === 'bool') return v ? (col.boolLabels?.[0] ?? '有効') : (col.boolLabels?.[1] ?? '無効');
     if (col.ref) return codeById.get(`${col.ref.table}:${Number(v)}`) ?? String(v);
     if (col.kind === 'date') return dateText(v);
-    return String(v);
+    return col.valueLabels?.[String(v)] ?? String(v);
   }
 }
 

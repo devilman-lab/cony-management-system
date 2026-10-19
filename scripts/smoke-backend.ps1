@@ -210,9 +210,10 @@ Check '有効在庫＝実在庫−引当済' {
   $bad = $st.items | Where-Object { [decimal]$_.qty_available -ne ([decimal]$_.qty_on_hand - [decimal]$_.qty_allocated) }
   @($bad).Count -eq 0
 }
-Check '管理者には原価が返る' {
+# 2026-10-16 マスター編_3（M3-19）: 原価は SKU ごと。商品の一覧は SKU を1行ずつ持ち、原価は SKU の行に付く
+Check '管理者には原価が返る（SKU の行）' {
   $r = Invoke-RestMethod "$B/masters/products" -Headers $H
-  $r.items[0].PSObject.Properties.Name -contains 'cost_price'
+  @($r.items[0].skus)[0].PSObject.Properties.Name -contains 'cost_price'
 }
 
 Write-Host '=== 6. 閲覧者に見せる範囲 ===' -ForegroundColor Cyan
@@ -226,9 +227,10 @@ $viewer = Invoke-RestMethod "$B/auth/login" -Method Post -ContentType 'applicati
 $HV = @{ Authorization = "Bearer $($viewer.access_token)" }
 
 Check '閲覧者は商品マスタを開ける'   { (Invoke-RestMethod "$B/masters/products" -Headers $HV).total -ge 1 }
-Check '閲覧者に原価は返らない' {
+Check '閲覧者に原価は返らない（商品にも SKU の行にも）' {
   $r = Invoke-RestMethod "$B/masters/products" -Headers $HV
-  -not ($r.items[0].PSObject.Properties.Name -contains 'cost_price')
+  $skuCost = @($r.items | ForEach-Object { @($_.skus) } | Where-Object { $_.PSObject.Properties.Name -match 'cost' })
+  -not ($r.items[0].PSObject.Properties.Name -contains 'cost_price') -and $skuCost.Count -eq 0
 }
 Check '閲覧者は商品1件でも原価が返らない' {
   $r = Invoke-RestMethod "$B/masters/products" -Headers $HV
@@ -750,9 +752,12 @@ if (-not (Test-Path $csvDir)) {
     $b = Invoke-RestMethod "$B/imports/batches?import_type=PARTNER_ORDER" -Headers $H
     $b.total -ge 1 -and $b.items[0].file_name -eq '★白鳩取り込み.csv'
   }
-  Check '同じファイルを2回取り込んでも二重にならない' {
+  # 2026-10-18: 要確認（受注にできなかった）のまま残っている取込は、同じファイルで取り込み直せる（前は「取込済のため除外」で
+  # 取り込み直す手段が無かった）。取り込み直しても、外部受注は1件のまま・受注は作られない（二重にならない）
+  Check '同じファイルを2回取り込んでも二重にならない（要確認は取り込み直しになる）' {
     $again = ImportCsv 'SHIRAHATO' '★白鳩取り込み.csv' $false
-    $again.skipped_orders -ge 1 -and $again.created_orders -eq 0
+    $n = Invoke-Psql -Command "select 'DUP=' || count(*) from (select eo.external_order_no from cony.external_orders eo join cony.import_batches b on b.id = eo.import_batch_id join cony.import_templates t on t.id = b.import_template_id where t.template_code = 'SHIRAHATO' group by eo.external_order_no having count(*) > 1) x"
+    $again.created_orders -eq 0 -and ($again.skipped_orders + $again.pending_orders) -ge 1 -and ($n.text -match 'DUP=0\b')
   }
 }
 
@@ -1771,6 +1776,22 @@ Write-Host '--- 在庫（閲覧者の入出荷履歴、入荷日、セット商�
 RunVerify 'verify-fb1012-e.mjs'
 Write-Host '--- 売上側の通貨（取引先・受注・請求・入金・仕入）' -ForegroundColor DarkCyan
 RunVerify 'verify-fb1012-f.mjs'
+
+Write-Host '=== 34. マスター編_3・在庫編_2（2026-10-16）のご要望 ===' -ForegroundColor Cyan
+Write-Host '--- 取引先（並び・区分・消費税免税区分・追加項目）・納品先・販社CSVの先方JAN照合' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-a.mjs'
+Write-Host '--- 商品（SKU ごとの一覧・SKU の旧原価・ロイヤリティ区分）・商品分類のブランド・仕入品目' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-b.mjs'
+Write-Host '--- 得意先別商品（1つの SKU に複数の単価・先方コード）・受注入力の選択' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-c.mjs'
+Write-Host '--- ロイヤリティ規定（請求月に統一・対象外の商品・一覧の表示）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-d.mjs'
+Write-Host '--- 共通（コピー・表示／非表示・登録日と更新日・区分値の削除）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-e.mjs'
+Write-Host '--- 在庫表・在庫調整・引当在庫（販売カテゴリーを任意に）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-f.mjs'
+Write-Host '--- 画面確認（W1〜W3）で見つかった点（狭い画面の操作・取込の要確認・呼び方・商品のコピー・請求書の免税）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-g.mjs'
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

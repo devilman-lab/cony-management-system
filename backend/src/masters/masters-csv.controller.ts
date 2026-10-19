@@ -166,7 +166,8 @@ export class MastersCsvController {
     const [showSensitive, canCreate, canDeactivate] = await Promise.all([
       this.auth.canSeeSensitive(user.id),
       this.auth.can(user.id, def.functionId, 'create'),
-      this.auth.can(user.id, def.functionId, def.deactivateAction ?? 'delete'),
+      // 有効→無効（非表示）は、画面の編集画面の「表示／非表示」と同じ「更新」の権限（2026-10-18。以前は一覧の「使わない」と同じ「削除」だった）
+      this.auth.can(user.id, def.functionId, def.deactivateAction ?? 'update'),
     ]);
     return this.csv.importCsv(slug, body.content_base64, body.dry_run, showSensitive, user.id, { canCreate, canDeactivate });
   }

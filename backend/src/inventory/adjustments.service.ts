@@ -120,6 +120,10 @@ export class AdjustmentsService {
     }
   }
 
+  /**
+   * 調整理由の ID。使わないにした理由（2026-10-16 在庫編_2 Z3-08 の破損・紛失・品質振替）も、
+   * 過去の調整・API・取込のために受け付ける。画面の選択肢には使う理由だけを出す。
+   */
   private async reasonId(trx: Transaction<DB>, reasonCode: string): Promise<number> {
     const reason = await trx
       .selectFrom('codes as c')
@@ -540,7 +544,7 @@ export class AdjustmentsService {
     const missing = required.filter(([f]) => col[f] < 0).map(([, l]) => l);
     if (missing.length > 0) {
       throw new BadRequestException(
-        `見出しに「${missing.join('」「')}」がありません。1行目は 調整日,倉庫,理由,商品コード,増減,品質(前),品質(後),メモ,備考 にしてください`,
+        `見出しに「${missing.join('」「')}」がありません。1行目は 調整日,倉庫,理由,商品コード,増減,メモ,備考 にしてください（品質(前)・品質(後) の列は任意）`,
       );
     }
     const cell = (r: string[], field: string) => (col[field] >= 0 ? (r[col[field]] ?? '').trim() : '');
@@ -551,8 +555,9 @@ export class AdjustmentsService {
       this.db
         .selectFrom('codes as c')
         .innerJoin('code_categories as cc', 'cc.id', 'c.code_category_id')
-        .select(['c.id as id', 'c.code as code', 'c.name as name'])
+        .select(['c.id as id', 'c.code as code', 'c.name as name', 'c.is_active as is_active'])
         .where('cc.code', '=', category)
+        .orderBy('c.sort_order', 'asc')
         .execute();
     const [reasons, qualities] = await Promise.all([codesOf('ADJUSTMENT_REASON'), codesOf('QUALITY_DIVISION')]);
     const skuCodes = [...new Set(body.map((r) => cell(r, 'sku')).filter((v) => v !== ''))];
@@ -596,7 +601,7 @@ export class AdjustmentsService {
       const wh = findWarehouse(cell(r, 'warehouse'));
       if (!wh) problems.push(`倉庫「${cell(r, 'warehouse')}」が倉庫マスタにありません（倉庫コードか略称で指定）`);
       const reason = findCode(reasons, cell(r, 'reason'));
-      if (!reason) problems.push(`理由「${cell(r, 'reason')}」が在庫調整理由にありません（${reasons.map((x) => x.name).join('・')}）`);
+      if (!reason) problems.push(`理由「${cell(r, 'reason')}」が在庫調整理由にありません（${reasons.filter((x) => x.is_active).map((x) => x.name).join('・')}）`);
       const sku = skus.find((s) => s.sku_code === cell(r, 'sku'));
       if (!sku) problems.push(`商品コード「${cell(r, 'sku')}」が商品マスタにありません`);
       else if (sku.is_set) problems.push(`商品コード「${sku.sku_code}」はセット商品です。セット商品は在庫を持たないため、構成品で調整してください`);

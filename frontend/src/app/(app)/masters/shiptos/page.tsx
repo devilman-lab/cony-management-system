@@ -13,6 +13,8 @@ interface DestRow extends Record<string, unknown> {
   partner_id: number;
   partner_code: string;
   partner_name: string;
+  /** 取引先の略称。一覧の「略称」の列に出す（2026-10-16 マスター編_3 M3-13） */
+  partner_short_name: string | null;
   delivery_code: string;
   name: string;
   partner_delivery_no: string | null;
@@ -79,7 +81,9 @@ export default function ShiptosPage() {
       modalWidth={760}
       toolbar={<SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchCustomers} placeholder="取引先で絞る" />}
       columns={[
-        { key: 'partner_name', label: '取引先', width: 200, render: (r) => <span><Num className="text-[var(--color-ink-3)] mr-1">{r.partner_code}</Num>{r.partner_name}</span> },
+        // 取引先は「取引先コード」と「略称」を別の列に（M3-13）。略称が無い取引先は名称を出す
+        { key: 'partner_code', label: '取引先コード', width: 92, nowrap: true, render: (r) => <Num>{r.partner_code}</Num> },
+        { key: 'partner_short_name', label: '略称', width: 130, render: (r) => r.partner_short_name || r.partner_name },
         { key: 'delivery_code', label: 'コード', width: 100, render: (r) => <Num className="font-semibold">{r.delivery_code}</Num> },
         { key: 'name', label: '納品先名' },
         { key: 'partner_delivery_no', label: '先方の店番', width: 100, render: (r) => <Num>{r.partner_delivery_no ?? ''}</Num> },

@@ -96,8 +96,29 @@ function FloatingList({
 }
 
 /**
+ * 選んである値を直すときに、検索欄へ最初に入れておく文字（2026-10-16 在庫編_2 Z3-06）。
+ * 商品（SKU）は SKU コード、取引先は取引先コードなど、候補の元データのコード。元データが無ければ
+ * 見出しの先頭のコード（「コード　名前」の形ならコード）、それも無ければ見出しそのもの（名前で探し直せる）。
+ */
+export function optionEditText(o: Option): string {
+  const raw = (o.raw ?? {}) as Record<string, unknown>;
+  for (const k of ['sku_code', 'partner_code', 'delivery_code', 'product_code', 'code']) {
+    const v = raw[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  const label = o.label.trim();
+  // 先頭が英数字のコードのときだけ（「株式会社　〇〇」のような名前を途中で切らない）
+  const head = label.split(/[　\s]/)[0] ?? '';
+  return /^[0-9A-Za-z][0-9A-Za-z\-_./]*$/.test(head) ? head : label;
+}
+
+/**
  * 文字を打って候補から選ぶ入力（取引先・商品など）。
  * 候補は API から都度取る。マスタが何千件あっても画面が重くならない。
+ *
+ * 選んである欄を押すと、今のコード（optionEditText）が入った検索欄になり、続けて文字を直して
+ * 候補から選び直せる（2026-10-16 在庫編_2 Z3-06。以前は押すと全部消えて、一から打ち直しだった）。
+ * 選び直さずに欄を離れたら元の選択のまま。外すのは「×」。
  */
 export function SearchSelect({
   value,
@@ -107,6 +128,7 @@ export function SearchSelect({
   width = 260,
   disabled,
   renderOption,
+  editText = optionEditText,
 }: {
   value: Option | null;
   onChange: (o: Option | null) => void;
@@ -115,6 +137,8 @@ export function SearchSelect({
   width?: number | string;
   disabled?: boolean;
   renderOption?: (o: Option) => ReactNode;
+  /** 選んである欄を押したとき検索欄に入れる文字。既定は optionEditText */
+  editText?: (o: Option) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -124,6 +148,31 @@ export function SearchSelect({
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  /** 選んである値を直し始めたときに入れた文字。null は「空の欄から探している」 */
+  const startText = useRef<string | null>(null);
+  /** 選んである欄を押したあと、出てきた検索欄へ入力の位置を移す */
+  const focusNext = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!open || !focusNext.current || !input.current) return;
+    focusNext.current = false;
+    const el = input.current;
+    el.focus();
+    // コードの末尾を直すことが多いので、全部を選ばずに最後へ入力の位置を置く
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [open]);
+
+  /** 選んである欄を押したとき。今のコードを入れた検索欄にする */
+  const startEdit = () => {
+    if (!value) return;
+    const text = editText(value);
+    startText.current = text;
+    focusNext.current = true;
+    setQ(text);
+    setActive(0);
+    setOpen(true);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -139,29 +188,36 @@ export function SearchSelect({
   }, [dq, open, fetchOptions]);
 
   const pick = (o: Option) => {
-    onChange(o);
+    // 直していて同じ値を選び直したときは何も変えない（受注入力で単価などを入れ直さないため）
+    if (!(startText.current !== null && o.id === value?.id)) onChange(o);
     setOpen(false);
     setQ('');
+    startText.current = null;
   };
 
   /**
    * 候補を選ばずに欄を離れたとき。打った文字に合う候補が1つに絞れていればそれを選ぶ
    * （コードをそのまま打って Tab で抜ける使い方）。絞れなければ文字を消して、
    * 「まだ選んでいない」ことが見た目で分かるようにする。
+   * 選んである値を直していたときは、入れたコードのまま離れたら何も変えない（元の選択のまま）。
+   * 別のコードに直して1つに絞れていれば、それを選んだことにする。同じ値なら呼び手に知らせない
+   * （受注入力などで、選び直しの扱いで単価・数量を入れ直さないため）。
    */
   const commitTyped = () => {
     if (!open && !q) return;
     const t = q.trim().toLowerCase();
-    if (t) {
+    const untouched = startText.current !== null && t === startText.current.trim().toLowerCase();
+    if (t && !untouched) {
       const hit =
         options.length === 1
           ? options[0]
           : options.find((o) => o.label.toLowerCase().startsWith(t) || (o.sub ?? '').toLowerCase() === t) ?? null;
       const others = hit ? options.filter((o) => o !== hit && o.label.toLowerCase().startsWith(t)) : [];
-      if (hit && others.length === 0) onChange(hit);
+      if (hit && others.length === 0 && hit.id !== value?.id) onChange(hit);
     }
     setOpen(false);
     setQ('');
+    startText.current = null;
   };
   const commitRef = useRef(commitTyped);
   commitRef.current = commitTyped;
@@ -182,7 +238,7 @@ export function SearchSelect({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => setOpen(true)}
+          onClick={startEdit}
           className="inp text-left flex items-center gap-2 !h-[30px]"
           title={value.label}
         >
@@ -204,9 +260,11 @@ export function SearchSelect({
         </button>
       ) : (
         <input
+          ref={input}
           className="inp"
           disabled={disabled}
-          placeholder={placeholder}
+          // 直している途中で文字を全部消したときは、元の選択が残ることを欄に出しておく
+          placeholder={value ? value.label : placeholder}
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -226,7 +284,14 @@ export function SearchSelect({
               if (options[active]) pick(options[active]);
               else commitTyped();
             } else if (e.key === 'Tab') commitTyped();
-            else if (e.key === 'Escape') setOpen(false);
+            else if (e.key === 'Escape') {
+              setOpen(false);
+              // 選んである値を直していたときは、打った文字を捨てて元の表示に戻す
+              if (value) {
+                setQ('');
+                startText.current = null;
+              }
+            }
           }}
         />
       )}
@@ -291,6 +356,7 @@ export function MultiSearchSelect({
   placeholder = '検索して追加…',
   width = '100%',
   max,
+  unit = '社',
   disabled,
   emptyLabel,
 }: {
@@ -301,6 +367,8 @@ export function MultiSearchSelect({
   width?: number | string;
   /** 選べる上限。達すると入力欄を閉じる */
   max?: number;
+  /** 件数の単位（「0 ／ 50 社」の「社」）。販売先は「社」、商品は「件」（2026-10-18 受入 W2） */
+  unit?: string;
   disabled?: boolean;
   /** 1つも選んでいないときに出す説明 */
   emptyLabel?: string;
@@ -409,7 +477,7 @@ export function MultiSearchSelect({
 
       {max !== undefined && (
         <div className="text-[11px] text-[var(--color-ink-3)]">
-          {values.length} ／ {max} 社{full && '（上限です）'}
+          {values.length} ／ {max} {unit}{full && '（上限です）'}
         </div>
       )}
 
@@ -504,6 +572,13 @@ export interface SkuRow {
   partner_jan?: string | null;
   shipping_jan?: string | null;
   partner_product_code?: string | null;
+  /**
+   * 得意先別商品の行が1つに決まったときの行（先方JAN・先方の商品コードで当たった行、または行が1つだけ）。
+   * 同じ SKU に行が複数あって決まらないときは null（受注入力で選ぶ。2026-10-16 マスター編_3 M3-26）
+   */
+  partner_product_id?: number | null;
+  /** その取引先・SKU の得意先別商品の行の数（使っているもの） */
+  partner_product_count?: number;
 }
 
 /**

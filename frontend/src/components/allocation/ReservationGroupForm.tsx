@@ -8,6 +8,7 @@ import type { SalesCategory, SimpleRow } from '@/lib/hooks';
 import { Button, ErrorBox, Input, Modal, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchCustomers, type Option } from '@/components/ui/SearchSelect';
 import { L, Section } from '@/components/masters/Form';
+import { RecordStamp } from '@/components/ui/RecordStamp';
 
 /** 確保の明細（API の形）。 */
 export interface ReservationLine {
@@ -33,9 +34,13 @@ export interface ReservationGroup extends Record<string, unknown> {
   partner_media_name: string | null;
   partner_id: number | null;
   partner_code: string | null;
+  /** 略称（無ければ名称。在庫編_2 Z3-12） */
   partner_name: string | null;
-  sales_category_id: number;
-  sales_category_name: string;
+  /** 正式な名称 */
+  partner_full_name: string | null;
+  /** 空ならどの販売カテゴリーの受注でも減る（Z3-15） */
+  sales_category_id: number | null;
+  sales_category_name: string | null;
   item_label: string | null;
   note: string | null;
   product_class_id: number | null;
@@ -211,7 +216,8 @@ export function ReservationGroupForm({
       period_to: f.period_to,
       media_id: f.media_id ? Number(f.media_id) : null,
       partner_id: f.partner?.id ?? null,
-      sales_category_id: Number(f.sales_category_id),
+      // 空欄なら null（どの販売カテゴリーの受注でも減る。Z3-15）
+      sales_category_id: f.sales_category_id ? Number(f.sales_category_id) : null,
       item_label: f.item_label.trim() || null,
       product_class_id: f.product_class_id ? Number(f.product_class_id) : null,
       note: f.note.trim() || null,
@@ -268,8 +274,10 @@ export function ReservationGroupForm({
               {classes.map((c) => <option key={c.id} value={c.id}>{c.code}</option>)}
             </Select>
           </L>
-          <L label="販売カテゴリー" required>
+          {/* 必須にしない（Z3-15）。空欄が既定で、必要なときだけ選ぶ */}
+          <L label="販売カテゴリー" hint="空欄ならどの販売カテゴリーの受注でも減る">
             <Select value={f.sales_category_id} onChange={(e) => set({ sales_category_id: e.target.value })}>
+              <option value="">（指定なし）</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </L>
@@ -342,6 +350,8 @@ export function ReservationGroupForm({
           </div>
         )}
       </div>
+      {/* 登録日・更新日（2026-10-16 マスター編3 M3-01）。編集のときだけ */}
+      {editingId ? <RecordStamp table="reservation_groups" id={editingId} /> : null}
     </Modal>
   );
 }

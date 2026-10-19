@@ -94,7 +94,8 @@ const ym = z.string().regex(/^\d{4}-\d{2}$/, '年月は YYYY-MM の形式で入�
 const CreateReservationSchema = z.object({
   /** 任意。空なら販売カテゴリー全体の枠（9/17 ご確認②） */
   partner_id: z.number().int().positive().nullish(),
-  sales_category_id: z.number().int().positive(),
+  /** 任意。空ならどの販売カテゴリーの受注でも減る（在庫編_2 Z3-15） */
+  sales_category_id: z.number().int().positive().nullish(),
   sku_id: z.number().int().positive(),
   period_from: ymd,
   period_to: ymd,
@@ -220,7 +221,7 @@ export class InventoryController {
     let base = this.db
       .selectFrom('reservations as r')
       .leftJoin('partners as p', 'p.id', 'r.partner_id')
-      .innerJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
+      .leftJoin('sales_categories as sc', 'sc.id', 'r.sales_category_id')
       .innerJoin('skus as s', 's.id', 'r.sku_id')
       .innerJoin('products as pr', 'pr.id', 's.product_id');
 

@@ -202,11 +202,18 @@ export class PurchasingController {
    * 海外の仕入先を選んだときの、明細の税区分の初期値（2026-10-09 マスター編②）。
    * システム設定の一覧（M-16）を見られない人も仕入は入力するので、仕入の権限で返す。
    * 'purchases/:id' より前に置く（後ろだと :id に取られて数字でないと弾かれる）。
+   * 本体はシステム設定の扱い。仕入先ごとの消費税免税区分（2026-10-16 マスター編_3 M3-07）に合わせられるよう、
+   * 免税（税抜扱い）・課税対象外それぞれの初期値も by_treatment で返す（仕入先を選んだその場で入れ替えるため）。
    */
   @Get('purchases/overseas-tax-default')
   @RequirePermission('P-01', 'view')
-  overseasTaxDefault() {
-    return this.purchasing.overseasTaxDefault();
+  async overseasTaxDefault() {
+    const [base, exempt, nonTaxable] = await Promise.all([
+      this.purchasing.overseasTaxDefault(),
+      this.purchasing.overseasTaxDefault(undefined, 'exempt'),
+      this.purchasing.overseasTaxDefault(undefined, 'non_taxable'),
+    ]);
+    return { ...base, by_treatment: { exempt, non_taxable: nonTaxable } };
   }
 
   @Get('purchases/:id')

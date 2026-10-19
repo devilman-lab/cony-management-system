@@ -33,15 +33,17 @@ export class LookupsController {
     return q.orderBy('sort_order', sql`asc nulls last`).orderBy('warehouse_code', 'asc').execute();
   }
 
-  /** 区分カテゴリーの一覧。区分値マスタ画面でカテゴリーを選ぶために使う。 */
+  /**
+   * 区分カテゴリーの一覧。区分値マスタ画面でカテゴリーを選ぶために使う。
+   * 使わないにしたカテゴリー（費用区分 COST_DIVISION など）は出さない（2026-10-16 マスター編3 M3-41）。
+   * 全部ほしいときは include_inactive=true。
+   */
   @Get('code-categories')
   @RequirePermission('M-16', 'view')
-  codeCategories() {
-    return this.db
-      .selectFrom('code_categories')
-      .select(['id', 'code', 'name'])
-      .orderBy('code', 'asc')
-      .execute();
+  codeCategories(@Query('include_inactive') includeInactive?: string) {
+    let q = this.db.selectFrom('code_categories').select(['id', 'code', 'name']);
+    if (includeInactive !== 'true') q = q.where('is_active', '=', true);
+    return q.orderBy('code', 'asc').execute();
   }
 
   /** 汎用区分。例 /api/masters/codes/QUALITY_DIVISION */

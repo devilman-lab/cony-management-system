@@ -165,7 +165,10 @@ export class PartnerOrderImportService {
         if (outcome.status === '取込済のため除外') result.skipped_orders += 1;
         else if (outcome.order_no) result.created_orders += 1;
         else result.pending_orders += 1;
-        result.orders.push(outcome);
+        // 要確認にした理由（単価が決まらない明細など）は、取込結果の「注意」にも出す
+        const { reasons, ...shown } = outcome;
+        if (reasons) result.warnings.push(...reasons.map((x) => `発注番号 ${externalOrderNo}：${x}（受注にせず要確認に回しました）`));
+        result.orders.push(shown);
       }
 
       // 取込履歴の「登録できた件数」は、通販(OMS)・Amazon と同じく
@@ -248,19 +251,27 @@ export class PartnerOrderImportService {
     externalOrderNo: string,
     rows: MappedRow[],
     userId: number,
-  ): Promise<{ order_no: string; external_order_no: string; lines: number; status: string; shortages?: string[] }> {
+  ): Promise<{ order_no: string; external_order_no: string; lines: number; status: string; shortages?: string[]; reasons?: string[] }> {
     const head = rows[0].values;
 
     // 同じ発注番号を2回取り込んでも二重計上しない（一意制約でも守っている）
     const already = await trx
       .selectFrom('external_orders')
-      .select('id')
+      .select(['id', 'status', 'sales_order_id'])
       .where('channel', '=', template.template_code)
       .where('external_order_no', '=', externalOrderNo)
       .executeTakeFirst();
 
     if (already) {
-      return { order_no: '', external_order_no: externalOrderNo, lines: rows.length, status: '取込済のため除外' };
+      // 前の取込で受注にできず要確認（取込済・受注なし）のまま残っているものは、消して取り込み直す。
+      // 画面は「マスタ登録のあと取り込み直してください」と案内しているのに、同じ発注番号は「取込済のため除外」に
+      // なっていて、取り込み直す手段が無かった（2026-10-18 受入 W2 の JAN 照合の件で要確認を足すのに合わせて直した）
+      if (already.status === '取込済' && already.sales_order_id === null) {
+        await trx.deleteFrom('external_order_lines').where('external_order_id', '=', already.id).execute();
+        await trx.deleteFrom('external_orders').where('id', '=', already.id).execute();
+      } else {
+        return { order_no: '', external_order_no: externalOrderNo, lines: rows.length, status: '取込済のため除外' };
+      }
     }
 
     const partnerCode = head['partner_code'];
@@ -360,6 +371,40 @@ export class PartnerOrderImportService {
       };
     }
 
+    // 明細ごとに使う得意先別商品の行を決める（M3-26）。CSV に単価が無く、その SKU にこの取引先の行が複数あって
+    // どれか決まらない明細があれば、単価を 0 円にして受注にせず、要確認で残す（2026-10-18 受入 W2。
+    // 以前は黙って 0 円の受注になり、引当まで進んでいた）。CSV に単価があるときはその単価で受注にする
+    const picks: Array<{ id: number; unit_price: string; sales_name: string | null } | undefined> = [];
+    const ambiguous: string[] = [];
+    for (let i = 0; i < resolved.length; i += 1) {
+      const line = resolved[i];
+      const r = await this.resolvePartnerProduct(trx, template.sku_match_key, line.values, partner.id, line.sku_id as number);
+      picks.push(r.hit);
+      if (!r.hit && r.candidates > 1 && !line.values['unit_price']?.trim()) {
+        const sku = await trx.selectFrom('skus').select('sku_code').where('id', '=', line.sku_id as number).executeTakeFirst();
+        ambiguous.push(
+          `${rows[i].row_no}行目：商品 ${sku?.sku_code ?? ''} はこの取引先の得意先別商品が ${r.candidates} 件あり、CSV に単価が無いため、どの単価か決まりません`,
+        );
+      }
+    }
+    if (ambiguous.length > 0) {
+      await trx
+        .updateTable('external_orders')
+        .set({
+          status: '取込済',
+          error_message: `${ambiguous.join('。')}。得意先別商品に「先方の JAN」を登録するか、使わない行を非表示にしてから取り込み直してください`,
+        })
+        .where('id', '=', external.id)
+        .execute();
+      return {
+        order_no: '',
+        external_order_no: externalOrderNo,
+        lines: rows.length,
+        status: `要確認（単価が決まらない ${ambiguous.length} 行）`,
+        reasons: ambiguous,
+      };
+    }
+
     // 受注番号は自社で採番する。先方の発注番号は po_no に残す。
     const orderNo =
       template.order_no_source === 'csv' && externalOrderNo
@@ -394,7 +439,7 @@ export class PartnerOrderImportService {
       .returning(['id', 'order_no'])
       .executeTakeFirstOrThrow();
 
-    // CSV に品名が無いときの品名。受注入力と同じく、得意先別商品の販売名があればそれ、無ければ
+    // CSV に品名が無いときの品名。受注入力と同じく、得意先別商品の販売名があればそれ（下の pp）、無ければ
     // SKU の商品名＋カラー＋サイズ（3回目の全面テスト。コネクトの CSV は品名の列が無く「（品名なし）」が納品書に出ていた）
     const nameOf = async (skuId: number): Promise<string> => {
       const r = await trx
@@ -402,19 +447,22 @@ export class PartnerOrderImportService {
         .innerJoin('products as p', 'p.id', 's.product_id')
         .leftJoin('colors as cl', 'cl.id', 's.color_id')
         .leftJoin('sizes as sz', 'sz.id', 's.size_id')
-        .leftJoin('partner_products as pp', (j) => j.onRef('pp.sku_id', '=', 's.id').on('pp.partner_id', '=', partner.id))
-        .select([skuNameExpr('s', 'p').as('name'), 'cl.name as color_name', 'sz.name as size_name', 'pp.sales_name as sales_name'])
+        .select([skuNameExpr('s', 'p').as('name'), 'cl.name as color_name', 'sz.name as size_name'])
         .where('s.id', '=', skuId)
         .executeTakeFirst();
       if (!r) return '（品名なし）';
-      if (r.sales_name?.trim()) return r.sales_name.trim();
       return [r.name, r.color_name, r.size_name].filter((x) => x).join(' ');
     };
 
     let n = 0;
     for (const line of resolved) {
       n += 1;
-      const itemName = line.values['item_name']?.trim() || (line.sku_id !== null ? await nameOf(line.sku_id) : '（品名なし）');
+      // この明細の得意先別商品の行（同じ SKU に複数あるときは、先方の商品コード・先方の JAN で当たった行。M3-26）
+      const pp = picks[n - 1];
+      const itemName =
+        line.values['item_name']?.trim() || pp?.sales_name?.trim() || (line.sku_id !== null ? await nameOf(line.sku_id) : '（品名なし）');
+      // 単価は CSV の値（先方の発注単価）。CSV に無いときだけ、その行の卸単価
+      const unitPrice = line.values['unit_price']?.trim() || (pp ? String(pp.unit_price) : '0');
       await trx
         .insertInto('sales_order_lines')
         .values({
@@ -422,10 +470,12 @@ export class PartnerOrderImportService {
           line_no: n,
           line_type: '商品',
           sku_id: line.sku_id,
+          // 使った得意先別商品の行。上代・出荷JAN はこの行から印字する
+          partner_product_id: pp?.id ?? null,
           item_name: itemName,
           qty: line.values['qty'] ?? '0',
-          unit_price: line.values['unit_price'] ?? '0',
-          amount: sql<string>`${line.values['qty'] ?? '0'}::numeric * ${line.values['unit_price'] ?? '0'}::numeric`,
+          unit_price: unitPrice,
+          amount: sql<string>`${line.values['qty'] ?? '0'}::numeric * ${unitPrice}::numeric`,
           // 海外の得意先は受注入力と同じく 0%（請求・納品書と合わせる。2026-10-12 M-02）。国内は列の既定（10%）
           tax_rate: partner.is_overseas ? OVERSEAS_TAX_RATE : undefined,
           created_by: userId,
@@ -466,6 +516,21 @@ export class PartnerOrderImportService {
     if (matchKey === 'jan') {
       const jan = values['jan'];
       if (!jan) return null;
+      // まずその取引先の得意先別商品の「先方の JAN」で引き、無ければコニーの JAN（SKU の JAN）で引く
+      // （2026-10-16 マスター編_3 M3-27。先方が独自の JAN で発注してくる取引先がある）。
+      // 同じ先方の JAN の行が複数あれば、使っている行を先に
+      if (partnerId) {
+        const own = await trx
+          .selectFrom('partner_products')
+          .select('sku_id')
+          .where('partner_id', '=', partnerId)
+          .where('partner_jan', '=', jan)
+          // 非表示にした行は照合に使わない（2026-10-18 受入 W1 N8。画面は「非表示にすると選択肢から外れます」）
+          .where('is_active', '=', true)
+          .orderBy('id')
+          .executeTakeFirst();
+        if (own) return own.sku_id;
+      }
       const row = await trx.selectFrom('skus').select('id').where('jan', '=', jan).executeTakeFirst();
       return row?.id ?? null;
     }
@@ -478,6 +543,8 @@ export class PartnerOrderImportService {
         .select('sku_id')
         .where('partner_id', '=', partnerId)
         .where('partner_product_code', '=', code)
+        // 非表示にした行は照合に使わない（W1 N8）
+        .where('is_active', '=', true)
         .executeTakeFirst();
       return row?.sku_id ?? null;
     }
@@ -486,6 +553,40 @@ export class PartnerOrderImportService {
     if (!code) return null;
     const row = await trx.selectFrom('skus').select('id').where('sku_code', '=', code).executeTakeFirst();
     return row?.id ?? null;
+  }
+
+  /**
+   * 明細が使う得意先別商品の行（2026-10-16 マスター編_3 M3-26。同じ SKU に先方コード・単価の違う行を複数持てる）。
+   * 先方の商品コードで引いた取込先はその行、JAN で引いた取込先は先方の JAN が同じ行（resolveSku と同じ順）。
+   * それで決まらなければ、その取引先×SKU の使っている行が1つのときだけその行。複数あって決まらなければ無し
+   * （単価・品名は CSV の値、上代・出荷JAN は帳票側で取引先×SKU から引く）。candidates は使っている行の数
+   * （決まらなかったとき、CSV に単価が無ければ要確認にするため）。非表示の行は使わない（W1 N8）。
+   */
+  private async resolvePartnerProduct(
+    trx: Transaction<DB>,
+    matchKey: string,
+    values: Record<string, string | null>,
+    partnerId: number,
+    skuId: number,
+  ): Promise<{ hit?: { id: number; unit_price: string; sales_name: string | null }; candidates: number }> {
+    const base = trx
+      .selectFrom('partner_products')
+      .select(['id', 'unit_price', 'sales_name'])
+      .where('partner_id', '=', partnerId)
+      .where('sku_id', '=', skuId)
+      .where('is_active', '=', true);
+    const code = values['partner_product_code'];
+    if (matchKey === 'partner_code' && code) {
+      const hit = await base.where('partner_product_code', '=', code).executeTakeFirst();
+      if (hit) return { hit, candidates: 1 };
+    }
+    const jan = values['jan'];
+    if (matchKey === 'jan' && jan) {
+      const hit = await base.where('partner_jan', '=', jan).orderBy('id').executeTakeFirst();
+      if (hit) return { hit, candidates: 1 };
+    }
+    const active = await base.orderBy('id').execute();
+    return active.length === 1 ? { hit: active[0], candidates: 1 } : { candidates: active.length };
   }
 
   /** 取込の履歴。何をいつ取り込んで、何件が要確認になったか。 */

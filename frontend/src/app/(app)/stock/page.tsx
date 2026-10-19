@@ -1,12 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { api } from '@/lib/api';
+import { api, type Paged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useList, useWarehouses, useDebounce } from '@/lib/hooks';
+import { useFetch, useWarehouses, useDebounce } from '@/lib/hooks';
 import { money, qty, ymd } from '@/lib/format';
-import { Badge, Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, type Column } from '@/components/ui';
+import { Badge, Button, Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, type Column } from '@/components/ui';
 import { InlineText } from '@/components/inventory/InlineEdit';
 import { useToast } from '@/components/ui/Toast';
 
@@ -43,16 +43,50 @@ export default function StockPage() {
   const warehouses = useWarehouses();
   const [q, setQ] = useState('');
   const dq = useDebounce(q, 300);
-  const [warehouseId, setWarehouseId] = useState('');
-  const [availableOnly, setAvailableOnly] = useState(false);
+  // 開いたときの表示は 倉庫「コニー倉庫」・有効在庫のあるものだけ・商品コードの昇順（2026-10-16 在庫編_2 Z3-01）。
+  // どれも利用者が変えられる。倉庫は一覧を読み込むまで決まらないので、null のあいだは「コニー倉庫」を使う
+  // （略称が一致するもの。「コニー倉庫(EC)」は拾わない。入荷・在庫調整と同じ決め方）
+  const [warehousePick, setWarehousePick] = useState<string | null>(null);
+  const defaultWarehouse = (warehouses.data ?? []).find((w) => w.short_name === 'コニー倉庫');
+  const warehouseId = warehousePick ?? (defaultWarehouse ? String(defaultWarehouse.id) : '');
+  const [availableOnly, setAvailableOnly] = useState(true);
+  const [sort, setSort] = useState<'sku' | 'class'>('sku');
+  // 備考は「一覧で編集」を押したときだけ入力欄にする（Z3-04。ふだんは文字で表示）
+  const [editMode, setEditMode] = useState(false);
 
-  const list = useList<StockRow>('/inventory/stocks', {
+  const filters = {
     q: dq || undefined,
     warehouse_id: warehouseId || undefined,
     available_only: availableOnly ? 'true' : undefined,
-  }, 100);
+    sort,
+  };
+  const LIMIT = 100;
+  const [offset, setOffset] = useState(0);
+  const filterKey = JSON.stringify(filters);
+  useEffect(() => setOffset(0), [filterKey]);
+  // 倉庫の一覧を読み込むまでは在庫を読まない（先に全倉庫を読んでからコニー倉庫に切り替わると、一瞬違う一覧が出るため）
+  const ready = !!warehouses.data || !!warehouses.error;
+  const res = useFetch<Paged<StockRow>>(ready ? '/inventory/stocks' : null, { ...filters, limit: LIMIT, offset });
+  const list = {
+    items: res.data?.items ?? [],
+    total: res.data?.total ?? 0,
+    loading: res.loading || !ready,
+    error: res.error,
+    reload: res.reload,
+  };
 
-  const sum = (k: keyof StockRow) => list.items.reduce((a, r) => a + Number(r[k] ?? 0), 0);
+  /** CSV 出力（Z3-03）。いまの絞り込み・検索・並びのまま、ページに関係なく全件 */
+  const [csvBusy, setCsvBusy] = useState(false);
+  const exportCsv = async () => {
+    setCsvBusy(true);
+    try {
+      await api.download('/inventory/stocks/export', { query: filters });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '出力できませんでした', 'bad');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
 
   const saveNote = async (r: StockRow, note: string) => {
     try {
@@ -65,6 +99,7 @@ export default function StockPage() {
     }
   };
 
+  // 上部の実在庫・引当済・有効在庫の合計は外した（Z3-02「全商品の実在庫・引当済・有効在庫の表示不要」）。
   // 列の並びはご指定の順（Z-04）: 分類コード・商品分類・商品コード・商品名・有効在庫・賞味期限・倉庫・備考・原価。
   // 実在庫・引当済は在庫を直す人のために有効在庫の前に置く。ロットは出さない（Z-06）。
   // 「原価コード」は何を指すかご確認中のため、列を作っていない。
@@ -97,7 +132,8 @@ export default function StockPage() {
       key: 'note',
       label: '備考',
       width: 150,
-      render: (r) => (canUpdate ? <InlineText value={r.note} onSave={(v) => saveNote(r, v)} placeholder="備考" /> : (r.note ?? '')),
+      // 直せるのは在庫を更新できる人（S-01 update）だけ（Z3-05）。閲覧だけの人には「一覧で編集」を出さない
+      render: (r) => (canUpdate && editMode ? <InlineText value={r.note} onSave={(v) => saveNote(r, v)} placeholder="備考" /> : (r.note ?? '')),
     },
     ...(canSeeSensitive
       ? ([{ key: 'cost_price', label: '原価', r: true, width: 74, render: (r) => money(r.cost_price) }] as Column<StockRow>[])
@@ -108,30 +144,22 @@ export default function StockPage() {
     <div className="page-body">
       <PageHead
         title="在庫表"
-        sub={canUpdate ? '有効在庫＝実在庫−引当済。受注登録で引当済が増え、出荷確定で実在庫が減ります。備考はその場で直せます' : '今引き当てられる数（有効在庫）を表示しています'}
-      />
-      <div className="inventory-summary">
-        {canUpdate && (
+        sub={canUpdate ? '有効在庫＝実在庫−引当済。受注登録で引当済が増え、出荷確定で実在庫が減ります。備考は「一覧で編集」を押すと直せます' : '今引き当てられる数（有効在庫）を表示しています'}
+        right={
           <>
-            <div className="card px-3.5 py-3">
-              <div className="text-[11px] text-[var(--color-ink-3)] font-semibold">実在庫（表示分の合計）</div>
-              <div className="num text-[20px] font-bold">{qty(sum('qty_on_hand'))}</div>
-            </div>
-            <div className="card px-3.5 py-3">
-              <div className="text-[11px] text-[var(--color-ink-3)] font-semibold">引当済</div>
-              <div className="num text-[20px] font-bold">{qty(sum('qty_allocated'))}</div>
-            </div>
+            {canUpdate && (
+              <Button icon={editMode ? 'list' : 'edit'} onClick={() => setEditMode((v) => !v)}>
+                {editMode ? '通常の一覧に戻す' : '一覧で編集'}
+              </Button>
+            )}
+            <Button icon="dl" loading={csvBusy} onClick={() => void exportCsv()}>CSV出力</Button>
           </>
-        )}
-        <div className="card px-3.5 py-3">
-          <div className="text-[11px] text-[var(--color-ink-3)] font-semibold">有効在庫{canUpdate ? '' : '（表示分の合計）'}</div>
-          <div className="num text-[20px] font-bold text-[var(--color-brand-700)]">{qty(sum('qty_available'))}</div>
-        </div>
-      </div>
+        }
+      />
       <Card>
         <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="商品コード・JAN・商品名・分類で検索" className="!w-[260px]" />
-          <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="!w-[150px]">
+          <Select value={warehouseId} onChange={(e) => setWarehousePick(e.target.value)} className="!w-[150px]">
             <option value="">倉庫：すべて</option>
             {(warehouses.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.short_name}</option>)}
           </Select>
@@ -139,6 +167,10 @@ export default function StockPage() {
             <input type="checkbox" checked={availableOnly} onChange={(e) => setAvailableOnly(e.target.checked)} />
             有効在庫のあるものだけ
           </label>
+          <Select value={sort} onChange={(e) => setSort(e.target.value as 'sku' | 'class')} className="!w-[170px]">
+            <option value="sku">並び：商品コード順</option>
+            <option value="class">並び：分類コード順</option>
+          </Select>
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         <DataTable<StockRow>
@@ -149,7 +181,7 @@ export default function StockPage() {
           rowKey={(r) => r.id}
           loading={list.loading}
         />
-        <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
+        <Pager total={list.total} limit={LIMIT} offset={offset} onChange={setOffset} />
       </Card>
     </div>
   );

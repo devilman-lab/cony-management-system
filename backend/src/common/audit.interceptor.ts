@@ -139,6 +139,7 @@ const RULES: Record<string, Rule> = {
   'DELETE masters/purchase-items/:id': { table: 'purchase_items', action: 'delete', idFrom: 'param' },
   'POST masters/codes': { table: 'codes', action: 'insert', idFrom: 'response' },
   'PATCH masters/codes/:id': { table: 'codes', action: 'update', idFrom: 'param' },
+  'DELETE masters/codes/:id': { table: 'codes', action: 'delete', idFrom: 'param' },
   'PATCH masters/settings/:key': { table: 'system_settings', action: 'update', idFrom: 'none' },
   'POST masters/royalty-rules': { table: 'royalty_rules', action: 'insert', idFrom: 'response' },
   'PATCH masters/royalty-rules/:id': { table: 'royalty_rules', action: 'update', idFrom: 'param' },

@@ -51,6 +51,32 @@ export function PostalLookup({ value, onChange, onAddress }: { value: string; on
   );
 }
 
+/**
+ * 編集画面の「表示／非表示」（is_active。表示＝有効。2026-10-16 マスター編3 M3-02）。
+ * 一覧の「使わない」をやめ、編集画面で切り替える。MasterPage が編集のときフォームの最後に出す。
+ * MasterPage を使っていない画面（セット・区分値など）もこれを使って見た目をそろえる。
+ */
+export function ActiveToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="master-grid-2 mt-3">
+      <ActiveToggleField value={value} onChange={onChange} />
+    </div>
+  );
+}
+
+/**
+ * 「表示／非表示」の欄だけ（master-grid-2 の1マス）。ページ側で置き場所を決めるとき（MasterPage の placeActiveToggle）に使う。
+ * 取引先は顧客の指定どおり「表示／非表示｜表示順」を同じ行に並べる（2026-10-16 マスター編_3 M3-12）。
+ */
+export function ActiveToggleField({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <L label="表示／非表示" hint="非表示にすると一覧と選択肢から外れます（過去の伝票はそのまま読めます）">
+      <label className="flex items-center gap-1 text-[12px]"><input type="radio" checked={value} onChange={() => onChange(true)} />表示</label>
+      <label className="flex items-center gap-1 text-[12px] ml-3"><input type="radio" checked={!value} onChange={() => onChange(false)} />非表示</label>
+    </L>
+  );
+}
+
 /** チェックボックス1つ。 */
 export function Check({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (

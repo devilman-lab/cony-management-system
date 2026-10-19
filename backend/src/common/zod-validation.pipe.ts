@@ -64,7 +64,11 @@ const FIELD_LABELS: Record<string, string> = {
   delivery_code: '納品先コード',
   product_code: '品番',
   product_name: '商品名',
-  sku_code: 'SKUコード',
+  // 画面では SKU のコードを「商品コード」と呼ぶ（2026-10-18 マスター編_3 M3-16）
+  sku_code: '商品コード',
+  // 商品（2026-10-18 マスター編_3 M3-23）
+  royalty_class_code_id: 'ロイヤリティ区分',
+  is_wholesale_adjust_target: '下代調整対象',
   jan: 'JANコード',
   // 1001 のご要望で足した項目。英語のキー名が画面に出ないように。
   fba_jan: 'FBA用JANコード',
@@ -76,6 +80,15 @@ const FIELD_LABELS: Record<string, string> = {
   price_changed_date: '単価の変更日',
   invoice_addressee: '請求書の宛名',
   invoice_contact_name: '請求書の担当者名',
+  // 取引先（2026-10-16 マスター編_3 M3-07・M3-10・M3-11）
+  overseas_tax_treatment: '消費税免税区分',
+  gross_margin_adjust_code_id: '粗利調整販社',
+  payment_month_offset2: '支払②（月）',
+  payment_day2: '支払②（日）',
+  receipt_method1_code_id: '入金方法①',
+  receipt_method2_code_id: '入金方法②',
+  invoice_send_method_code_id: '請求書送付方法',
+  invoice_email: '請求書送付先メールアドレス',
   category_ids: '取引先カテゴリー',
   new_tax_class_code_id: '税区分',
   media_id: '媒体',

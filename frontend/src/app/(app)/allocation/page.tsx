@@ -4,8 +4,8 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useFetch, useSalesCategories, useSimpleMaster } from '@/lib/hooks';
-import { addMonths, monthRange, qty, thisMonth, ymd } from '@/lib/format';
+import { useDebounce, useFetch, useSalesCategories, useSimpleMaster } from '@/lib/hooks';
+import { monthRange, qty, thisMonth, ymd } from '@/lib/format';
 import { Button, Card, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchCustomers, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -22,7 +22,6 @@ interface ListResponse {
   total: number;
   limit: number;
   offset: number;
-  summary: { reserved: string; consumed: string; remaining: string };
 }
 
 const LIMIT = 50;
@@ -56,6 +55,9 @@ export default function AllocationPage() {
   const [mediaId, setMediaId] = useState('');
   const [partner, setPartner] = useState<Option | null>(null);
   const [sku, setSku] = useState<Option | null>(null);
+  // キーワード（Z3-13）。項目・備考・商品コード・商品名を探す。商品の欄（1つの商品を選ぶ）とは別に置く
+  const [keyword, setKeyword] = useState('');
+  const dKeyword = useDebounce(keyword.trim(), 300);
   const [offset, setOffset] = useState(0);
   // 1440 より狭い画面（1280 など）では、表を詰めて操作のボタンを販売期間の欄に入れる（3回目の全面テスト Z-30）。
   // 右端に貼り付けた操作の列の下に「残り」「確保数合計」「使用数合計」が隠れ、横のスクロールバーも画面の外にあった
@@ -77,6 +79,7 @@ export default function AllocationPage() {
     media_id: mediaId || undefined,
     partner_id: partner?.id,
     sku_id: sku?.id,
+    q: dKeyword || undefined,
   };
   const filterKey = JSON.stringify(filters);
   useEffect(() => setOffset(0), [filterKey]);
@@ -85,7 +88,8 @@ export default function AllocationPage() {
 
   // 登録・変更の画面。開くたびに key を変えて、前の入力を持ち越さない
   const [form, setForm] = useState<{ key: number; title: string; editingId: number | null; initial: Draft } | null>(null);
-  const defaults = () => ({ sales_category_id: categoryId || String(categories.data?.[0]?.id ?? ''), period_from: range.from, period_to: range.to });
+  // 販売カテゴリーは空欄が既定（Z3-15）。一覧を販売カテゴリーで絞っているときだけ、それを入れておく
+  const defaults = () => ({ sales_category_id: categoryId && categoryId !== 'none' ? categoryId : '', period_from: range.from, period_to: range.to });
 
   const openNew = () => setForm({ key: Date.now(), title: '引当在庫の登録', editingId: null, initial: draftFrom(null, 'new', defaults()) });
   const openWith = async (g: ReservationGroup, mode: 'edit' | 'copy') => {
@@ -114,26 +118,14 @@ export default function AllocationPage() {
     }
   };
 
-  const copyFromPrev = async () => {
-    const prev = addMonths(month, -1);
-    if (!(await confirm(`${prev} の確保を ${month} に複写しますか`, '確保（見出し）ごとに明細も写します。同じ見出しの確保がすでにある月には複写しません。複写後に数量を直してください。'))) return;
-    try {
-      const r = await api.post<{ copied: number; skipped: number; lines: number }>('/inventory/reservation-groups/copy-month', { from_month: prev, to_month: month });
-      toast(`${r.copied} 件の確保（明細 ${r.lines} 行）を複写しました（${r.skipped} 件は既にあるため飛ばしました）`, 'good');
-      await list.reload();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
-    }
-  };
+  // 「前月の確保を複写」のボタンは外した（Z3-14。写すときは確保ごとの「コピー」で）。API は残してある
 
   const exportCsv = () => {
-    const { from, to, sales_category_id, media_id, partner_id, sku_id } = filters;
     api
-      .download('/inventory/reservation-groups/export', { query: { from, to, sales_category_id, media_id, partner_id, sku_id } })
+      .download('/inventory/reservation-groups/export', { query: filters })
       .catch((e) => toast(e instanceof Error ? e.message : '失敗しました', 'bad'));
   };
 
-  const sum = list.data?.summary;
   const muted = 'text-[var(--color-ink-3)]';
   // 確保の区切りを見やすくする（楽楽販売の見本と同じく、確保ごとに罫線を太く）
   // 見出しの列と明細の1行目の高さをそろえるため上揃え（表の既定は中央揃え）
@@ -170,21 +162,17 @@ export default function AllocationPage() {
         right={
           <>
             {can('S-08', 'print') && <Button icon="dl" onClick={exportCsv}>CSV出力</Button>}
-            {can('S-08', 'create') && <Button onClick={copyFromPrev}>前月の確保を複写</Button>}
             {can('S-08', 'create') && <Button variant="primary" icon="plus" onClick={openNew}>確保を登録</Button>}
           </>
         }
       />
-      <div className="grid-auto-stats">
-        <div className="card px-3.5 py-3"><div className="text-[11px] text-[var(--color-ink-3)] font-semibold">確保数（絞り込み分）</div><div className="num text-[20px] font-bold">{qty(sum?.reserved ?? 0)}</div></div>
-        <div className="card px-3.5 py-3"><div className="text-[11px] text-[var(--color-ink-3)] font-semibold">受注で使った数</div><div className="num text-[20px] font-bold">{qty(sum?.consumed ?? 0)}</div></div>
-        <div className="card px-3.5 py-3"><div className="text-[11px] text-[var(--color-ink-3)] font-semibold">残り</div><div className="num text-[20px] font-bold text-[var(--color-brand-700)]">{qty(sum?.remaining ?? 0)}</div></div>
-      </div>
+      {/* 上部の確保数・受注で使った数・残りの合計は外した（Z3-11）。確保ごとの合計は表の右に出している */}
       <Card>
         <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.data?.total ?? 0}</Num> 件の確保</span>}>
           <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="!w-[150px]" />
           <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="!w-[170px]">
             <option value="">販売カテゴリー：すべて</option>
+            <option value="none">販売カテゴリー：（指定なし）</option>
             {(categories.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
           <Select value={mediaId} onChange={(e) => setMediaId(e.target.value)} className="!w-[150px]">
@@ -193,6 +181,7 @@ export default function AllocationPage() {
           </Select>
           <SearchSelect value={partner} onChange={setPartner} fetchOptions={fetchPartner} placeholder="取引先：すべて" width={200} />
           <SearchSelect value={sku} onChange={setSku} fetchOptions={fetchSku} placeholder="商品：すべて" width={240} />
+          <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="キーワード（項目・備考・商品）" className="!w-[220px]" />
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         {/* 1440 幅で確保数〜使用数合計まで横スクロールなしに見える幅（Z-30）。
@@ -224,7 +213,7 @@ export default function AllocationPage() {
             <tbody>
               {list.loading && groups.length === 0 && <tr><td colSpan={narrow ? 15 : 16} className={`text-center py-8 ${muted}`}>読み込み中…</td></tr>}
               {!list.loading && groups.length === 0 && (
-                <tr><td colSpan={narrow ? 15 : 16} className={`text-center py-8 ${muted}`}>この条件の確保はありません。「前月の確保を複写」か「確保を登録」から始めてください</td></tr>
+                <tr><td colSpan={narrow ? 15 : 16} className={`text-center py-8 ${muted}`}>この条件の確保はありません。「確保を登録」から始めてください</td></tr>
               )}
               {groups.map((g) => {
                 const lines = g.lines.length > 0 ? g.lines : [null];
@@ -243,10 +232,13 @@ export default function AllocationPage() {
                             <td rowSpan={span} style={firstRow} title={g.media_name ?? g.partner_media_name ?? ''}>
                               {g.media_name ?? (g.partner_media_name ? <span className={muted}>{g.partner_media_name}</span> : '')}
                             </td>
-                            <td rowSpan={span} style={firstRow} title={g.partner_name ?? ''}>
+                            {/* 取引先は略称で（Z3-12）。マウスを乗せると正式な名称 */}
+                            <td rowSpan={span} style={firstRow} title={g.partner_full_name ?? ''}>
                               {g.partner_name ?? <span className={muted}>（指定なし）</span>}
                             </td>
-                            <td rowSpan={span} style={firstRow} className="nw">{g.sales_category_name}</td>
+                            <td rowSpan={span} style={firstRow} className="nw">
+                              {g.sales_category_name ?? <span className={muted}>（指定なし）</span>}
+                            </td>
                             <td rowSpan={span} style={firstRow} title={g.item_label ?? ''}>{g.item_label ?? ''}</td>
                             <td rowSpan={span} style={firstRow} title={g.note ?? ''}>{g.note ?? ''}</td>
                             <td rowSpan={span} style={firstRow} className="nw">{g.product_class_code ?? ''}</td>

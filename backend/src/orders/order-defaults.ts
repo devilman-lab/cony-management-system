@@ -17,9 +17,10 @@ export function orderTradeType(defaultTradeType: string | null | undefined): '�
 }
 
 /**
- * 海外の得意先（取引先マスタの「海外」）の受注明細の税率。
+ * 海外の得意先（取引先マスタの「消費税免税区分」が「なし」以外）の受注明細の税率。
  * 請求（billing.service の締め）と同じく 0%。免税（税抜扱い）か課税対象外かは
- * システム設定 OVERSEAS_TAX_TREATMENT で決まり、帳票・画面の表記だけが変わる。
+ * 取引先の消費税免税区分（空ならシステム設定 OVERSEAS_TAX_TREATMENT）で決まり、
+ * 帳票・画面の表記だけが変わる（2026-10-16 マスター編_3 M3-07）。
  */
 export const OVERSEAS_TAX_RATE = '0.00';
 

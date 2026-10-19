@@ -254,7 +254,7 @@ export default function OrderDetailPage() {
                 // 海外の得意先は税 0 で請求・納品書を出す。海外にする前に登録した明細（10% など）は、
                 // 実際に使う 0% を出し、登録時の税率を小さく添える（2026-10-13 再テスト N4。下の「税率 0%」と食い違っていた）
                 { key: 'tax_rate', label: '税率', c: true, width: 60, render: (l) => (o.overseas_tax_label && Number(l.tax_rate) !== 0
-                  ? <span title={`登録時の税率 ${Number(l.tax_rate)}%。海外の得意先のため 0% で請求します`}>0%<span className="block text-[10px] text-[var(--color-ink-3)]">（登録 {Number(l.tax_rate)}%）</span></span>
+                  ? <span title={`登録時の税率 ${Number(l.tax_rate)}%。消費税免税区分が「${o.overseas_tax_label}」の得意先のため 0% で請求します`}>0%<span className="block text-[10px] text-[var(--color-ink-3)]">（登録 {Number(l.tax_rate)}%）</span></span>
                   : `${Number(l.tax_rate)}%`) },
                 { key: 'amount', label: '金額', r: true, width: 100, render: (l) => moneyIn(l.amount, o.currency) },
               ]}
@@ -265,11 +265,11 @@ export default function OrderDetailPage() {
               {/* 海外の得意先は消費税 0。請求書・納品書と同じ言い方で扱いを出す（2026-10-12 M-02） */}
               {o.overseas_tax_label && (
                 <span className="mr-5">
-                  消費税　<b>{o.overseas_tax_label}</b>（海外の得意先・税率 0%）
+                  消費税　<b>{o.overseas_tax_label}</b>（取引先の消費税免税区分・税率 0%）
                 </span>
               )}
               {o.overseas_tax_label && o.lines.some((l) => Number(l.tax_rate) !== 0) && (
-                <span className="mr-5 text-[11px] text-[var(--color-ink-3)]">この受注は取引先を海外にする前の税率で登録されています。請求書・納品書は税 0 で出します</span>
+                <span className="mr-5 text-[11px] text-[var(--color-ink-3)]">この受注は取引先に消費税免税区分を付ける前の税率で登録されています。請求書・納品書は税 0 で出します</span>
               )}
               合計（税抜）　<b className="num text-[14px]">{moneyWithCurrency(o.lines.reduce((a, l) => a + Number(l.amount), 0), o.currency)}</b>
             </div>

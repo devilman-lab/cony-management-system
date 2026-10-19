@@ -203,6 +203,7 @@ export class OrdersService {
     userId: number,
     overseas: boolean,
   ): Promise<void> {
+    await this.assertPartnerProducts(trx, orderId, lines);
     await trx
       .insertInto('sales_order_lines')
       .values(
@@ -222,6 +223,28 @@ export class OrdersService {
         })),
       )
       .execute();
+  }
+
+  /**
+   * 明細が指す得意先別商品が、この受注の取引先・明細の SKU のものか。
+   * 同じ SKU に先方コード・単価の違う行が複数あり（2026-10-16 マスター編_3 M3-26）、上代・出荷JAN は
+   * 明細が指す行から印字するので、取引先を変えたあとに前の取引先の行を指したまま残らないようにする。
+   */
+  private async assertPartnerProducts(trx: Transaction<DB>, orderId: number, lines: OrderLineInput[]): Promise<void> {
+    const ids = [...new Set(lines.map((l) => l.partner_product_id).filter((v): v is number => typeof v === 'number'))];
+    if (ids.length === 0) return;
+    const order = await trx.selectFrom('sales_orders').select('partner_id').where('id', '=', orderId).executeTakeFirstOrThrow();
+    const rows = await trx.selectFrom('partner_products').select(['id', 'partner_id', 'sku_id']).where('id', 'in', ids).execute();
+    const byId = new Map(rows.map((r) => [Number(r.id), r]));
+    for (const l of lines) {
+      if (typeof l.partner_product_id !== 'number') continue;
+      const pp = byId.get(l.partner_product_id);
+      if (!pp || Number(pp.partner_id) !== Number(order.partner_id) || Number(pp.sku_id) !== Number(l.sku_id ?? 0)) {
+        throw new BadRequestException(
+          `${l.line_no}行目：得意先別商品（先方コード・単価）がこの取引先・商品のものではありません。商品を選び直してください`,
+        );
+      }
+    }
   }
 
   private validate(input: CreateOrderInput): void {
@@ -368,6 +391,8 @@ export class OrdersService {
     const lines = await this.db
       .selectFrom('sales_order_lines as l')
       .leftJoin('skus as s', 's.id', 'l.sku_id')
+      // 明細が使った得意先別商品の行。修正画面で同じ行を選んだまま開くため（2026-10-16 マスター編_3 M3-26）
+      .leftJoin('partner_products as pp', 'pp.id', 'l.partner_product_id')
       .select([
         'l.id as id',
         'l.line_no as line_no',
@@ -375,6 +400,10 @@ export class OrdersService {
         'l.line_type as line_type',
         'l.sku_id as sku_id',
         's.sku_code as sku_code',
+        'l.partner_product_id as partner_product_id',
+        'pp.partner_product_code as partner_product_code',
+        'pp.partner_jan as partner_jan',
+        'pp.shipping_jan as shipping_jan',
         'l.item_name as item_name',
         'l.qty as qty',
         'l.unit_price as unit_price',
@@ -387,17 +416,18 @@ export class OrdersService {
       .orderBy('l.line_no', 'asc')
       .execute();
 
-    // 海外の得意先は消費税の欄に「免税（税抜扱い）」／「課税対象外」と出す（請求書・納品書と同じ表記）
+    // 海外の得意先は消費税の欄に「免税（税抜扱い）」／「課税対象外」と出す（請求書・納品書と同じ表記）。
+    // どちらかは取引先の消費税免税区分、無ければシステム設定（2026-10-16 マスター編_3 M3-07）
     const partner = await this.db
       .selectFrom('partners')
-      .select('is_overseas')
+      .select(['is_overseas', 'overseas_tax_treatment'])
       .where('id', '=', order.partner_id)
       .executeTakeFirst();
     const overseas = partner?.is_overseas === true;
     return {
       ...order,
       partner_is_overseas: overseas,
-      overseas_tax_label: overseas ? await this.settings.overseasTaxLabel() : null,
+      overseas_tax_label: overseas ? await this.settings.overseasTaxLabel(partner?.overseas_tax_treatment) : null,
       lines,
     };
   }

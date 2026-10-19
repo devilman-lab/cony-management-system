@@ -1,18 +1,35 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebounce, useList } from '@/lib/hooks';
 import { Button, Card, type Column, DataTable, ErrorBox, Input, Modal, PageHead, Pager, Toolbar, useConfirm } from '@/components/ui';
 import { useToast } from '@/components/ui/Toast';
+import { RecordStamp } from '@/components/ui/RecordStamp';
+import { ActiveToggle } from './Form';
 import { MasterCsv } from './MasterCsv';
 import { MasterGrid } from './MasterGrid';
 
 /**
- * マスタ画面の共通部品。一覧＋検索＋「無効も表示」＋登録・編集モーダル＋無効化。
- * マスタは物理削除しないため、削除の代わりに「使わない（無効）」にする。
+ * マスタ画面の共通部品。一覧＋検索＋「使わないものも表示」＋登録・編集モーダル＋コピー＋削除。
+ *
+ * 2026-10-16 マスター編3（M3-01・M3-02）からの決まり。各画面はこれらを自分で作らず、ここに任せる:
+ *  - 一覧の操作は「編集」「コピー」「削除」。以前の「使わない」「有効に戻す」は一覧から外した。
+ *  - 「使わない」は編集画面の「表示／非表示」で切り替える（is_active。表示＝有効）。編集のときだけ
+ *    フォームの最後に出し、保存の本体（toBody の結果）に is_active を足して PATCH で送る。
+ *    新規登録・コピーでは出さない（登録したものは「表示」）。出したくない画面は activeToggle={false}。
+ *  - 「コピー」は、その行の内容（コードも）で「登録」の画面を開く。保存すると POST で新しく登録する
+ *    （editing は null。renderForm・toBody には新規と同じく null が渡る）。
+ *    写し方は toCopyForm(row) → フォームの値。省略時は toForm(row) の値をそのまま使う（フォームの id は外す）。
+ *    **フォームの中に既存の子の行の id（商品の SKU など）を持つ画面は、toCopyForm で必ず外すこと。**
+ *    外さないと afterSave などで元の行を書き換えてしまう。コピーを出さない画面は toCopyForm={null}。
+ *  - 編集画面の下に「登録日：YYYY/MM/DD hh:mm 名前　更新日：…」を出す（新規・コピーでは出さない）。
+ *    読むテーブルは stampTable（省略時は writePath の末尾。/masters/partner-products → partner_products）。
+ *    backend の record-stamps.controller.ts の表に載っているテーブルだけ読める。出さないときは stampTable={null}。
+ *
+ * マスタは伝票から参照されるので、削除はどこからも使われていないものだけ（使われていれば理由を出して断る）。
  */
 export interface MasterPageProps<T extends Record<string, unknown>, F> {
   title: string;
@@ -32,10 +49,17 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
   /** フォーム → 送信ボディ */
   toBody: (f: F, editing: T | null) => Record<string, unknown>;
   /** フォームの見た目 */
-  renderForm: (f: F, set: (patch: Partial<F>) => void, editing: T | null) => ReactNode;
+  renderForm: (f: F, set: (patch: Partial<F>) => void, editing: T | null, active: ActiveSlot) => ReactNode;
   modalWidth?: number;
-  /** 無効化 POST のパス（省略時は writePath/:id/deactivate。null で機能なし） */
-  deactivatePath?: ((r: T) => string) | null;
+  /**
+   * 一覧の「コピー」で開く登録画面の初期値（M3-02）。省略時は toForm(r) の値（id は外す）。
+   * フォームに子の行の id を持つ画面は、ここで外すこと。null でコピーのボタンを出さない。
+   */
+  toCopyForm?: ((r: T) => F | Promise<F>) | null;
+  /** 編集画面の「表示／非表示」（is_active）を出すか。既定は出す */
+  activeToggle?: boolean;
+  /** 「登録日・更新日」を読むテーブル名（省略時は writePath の末尾の - を _ にしたもの。null で出さない） */
+  stampTable?: string | null;
   /** 削除 DELETE のパス（省略時は writePath/:id。null で機能なし） */
   deletePath?: ((r: T) => string) | null;
   /** 削除の確認で出す名前。「○○を完全に消します」の○○。 */
@@ -62,6 +86,33 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
    * 失敗したら画面を閉じずに理由を出す（本体は保存済みなので、新規なら編集の状態に切り替える）。
    */
   afterSave?: (row: Record<string, unknown>, form: F, set: (patch: Partial<F>) => void) => Promise<void>;
+  /**
+   * 一覧の表を画面の側で組むとき（商品の一覧のように、1件の下に子の行を rowSpan で並べる表。2026-10-18 M3-15）。
+   * actions(r) は操作の列の中身（編集・コピー・削除）、actionWidth はその列の幅。省略時は columns で表を出す。
+   */
+  renderTable?: (t: { rows: T[]; loading: boolean; actions: (r: T) => ReactNode; actionWidth?: number | string; isActive: (r: T) => boolean }) => ReactNode;
+  /**
+   * 1440 より狭い画面（1280 など）では、操作のボタン（編集・コピー・削除）を右端の列ではなく、指定した列（key）の
+   * 中身の下に入れる（引当在庫・商品の一覧と同じ。2026-10-18 受入 W1 N1・W2 M3-30）。true なら最初の列。
+   * ボタン3つが横に並ぶ幅（約 150px）のある列（名称など）を選ぶと、行が高くならない。
+   * 列が多く、操作の列まで入れると 1280 の枠（約 1025px）に収まらない一覧で使う。ほかの一覧は今までどおり右端の列。
+   */
+  narrowActions?: boolean | string;
+  /**
+   * 編集画面の「表示／非表示」をページ側で置く（M3-12。取引先は「表示順」と同じ行に並べる）。
+   * 指定すると、フォームの最後には出さず、renderForm の4番目の引数（ActiveSlot）を使ってページが置く。
+   */
+  placeActiveToggle?: boolean;
+}
+
+/**
+ * 編集画面の「表示／非表示」をページ側で置くときに renderForm に渡すもの（placeActiveToggle）。
+ * show は「表示／非表示」を出す場面か（編集のときだけ true。新規・コピーでは false）。
+ */
+export interface ActiveSlot {
+  show: boolean;
+  value: boolean;
+  onChange: (v: boolean) => void;
 }
 
 export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPageProps<T, F>) {
@@ -80,21 +131,68 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
   const [form, setForm] = useState<F | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  // コピーで開いた登録画面か（見出しを「登録（コピー）」にするだけ。保存は新規と同じ）
+  const [copying, setCopying] = useState(false);
+  // 編集画面の「表示／非表示」（M3-02）。表示＝有効
+  const [active, setActive] = useState(true);
+  // 1440 より狭い画面か（narrowActions の一覧だけが使う）
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (!p.narrowActions) return;
+    const mq = window.matchMedia('(max-width: 1439px)');
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [p.narrowActions]);
+
+  const isActive = p.isActive ?? ((r: T) => r.is_active !== false);
+  const showToggle = p.activeToggle !== false;
+  const stampTable = p.stampTable === undefined ? (p.writePath.split('/').pop() ?? '').replace(/-/g, '_') : p.stampTable;
 
   const setFormPatch = (patch: Partial<F>) => setForm((s) => (s ? { ...s, ...patch } : s));
   const openNew = () => {
     setEditing(null);
+    setCopying(false);
     setForm(p.empty());
+    setActive(true);
     setError(null);
     setOpen(true);
   };
   const openEdit = async (r: T) => {
     setEditing(r);
+    setCopying(false);
+    setActive(isActive(r));
     setError(null);
     setForm(null);
     setOpen(true);
     try {
       setForm(await p.toForm(r));
+    } catch (e) {
+      setError(e);
+    }
+  };
+  /** コピー。その行の内容（コードも）で登録の画面を開く（M3-02） */
+  const openCopy = async (r: T) => {
+    setEditing(null);
+    setCopying(true);
+    setActive(true);
+    setError(null);
+    setForm(null);
+    setOpen(true);
+    try {
+      if (p.toCopyForm) {
+        setForm(await p.toCopyForm(r));
+      } else {
+        const f = (await p.toForm(r)) as F & { id?: unknown };
+        if (f && typeof f === 'object' && 'id' in f) {
+          const { id: _omit, ...rest } = f;
+          void _omit;
+          setForm(rest as F);
+        } else {
+          setForm(f);
+        }
+      }
     } catch (e) {
       setError(e);
     }
@@ -105,6 +203,8 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
     setBusy(true);
     try {
       const body = p.toBody(form, editing);
+      // 「表示／非表示」は編集のときだけ送る（新規は API の既定で「表示」）
+      if (editing && showToggle) body.is_active = active;
       const row = editing
         ? await api.patch<Record<string, unknown>>(`${p.writePath}/${p.rowKey(editing)}`, body)
         : await api.post<Record<string, unknown>>(p.writePath, body);
@@ -130,17 +230,6 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
       setBusy(false);
     }
   };
-  const deactivate = async (r: T) => {
-    if (!(await confirm('このデータを「使わない」にしますか', '一覧から外れますが、過去の伝票からは引き続き参照できます。'))) return;
-    try {
-      const path = p.deactivatePath ? p.deactivatePath(r) : `${p.writePath}/${p.rowKey(r)}/deactivate`;
-      await api.post(path);
-      toast('無効にしました', 'good');
-      await list.reload();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
-    }
-  };
   /**
    * 一覧から消す。
    *
@@ -157,7 +246,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
           {label ? <b>{label}</b> : null}
           {label ? 'を' : 'このデータを'}完全に消します。元に戻せません。
           <br />
-          伝票などで使われているものは消せません。その場合は「使わない」をお使いください。
+          伝票などで使われているものは消せません。その場合は「編集」で「非表示」にしてください。
         </>,
         true,
       ))
@@ -173,20 +262,10 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
       toast(e instanceof Error ? e.message : '失敗しました', 'bad');
     }
   };
-  const reactivate = async (r: T) => {
-    try {
-      await api.patch(`${p.writePath}/${p.rowKey(r)}`, { is_active: true });
-      toast('有効に戻しました', 'good');
-      await list.reload();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '失敗しました', 'bad');
-    }
-  };
-
-  const isActive = p.isActive ?? ((r: T) => r.is_active !== false);
-  // 操作のボタンは列の幅で折り返す（編集・使わない／削除 の2段）。横一列に並べて列を広げると、
-  // 画面幅 1440 でも右の列が画面の外に出てしまうため（2026-10-09 顧客「見切れているので全部出るように」）
-  const buttons = 1 + (p.deactivatePath !== null ? 1 : 0) + (p.deletePath !== null ? 1 : 0);
+  // 操作のボタンは列の幅で折り返す（編集・コピー／削除 の2段）。横一列に並べて列を広げると、
+  // 画面幅 1440 でも右の列が画面の外に出てしまうため（2026-10-09 顧客「見切れているので全部出るように」）。
+  // 「使わない」は一覧から外し、編集画面の「表示／非表示」にした（2026-10-16 マスター編3 M3-02）
+  const buttons = 1 + (p.toCopyForm !== null ? 1 : 0) + (p.deletePath !== null ? 1 : 0);
   const actionCol: Column<T> = {
     key: '_act',
     label: '',
@@ -194,12 +273,32 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
     render: (r) => (
       <span className="tbl-acts justify-end">
         {can(p.functionId, 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
-        {p.deactivatePath !== null && can(p.functionId, 'delete') && isActive(r) && <Button size="sm" variant="danger" onClick={() => deactivate(r)}>使わない</Button>}
-        {p.deactivatePath !== null && can(p.functionId, 'update') && !isActive(r) && <Button size="sm" onClick={() => reactivate(r)}>有効に戻す</Button>}
+        {p.toCopyForm !== null && can(p.functionId, 'create') && <Button size="sm" onClick={() => openCopy(r)}>コピー</Button>}
         {p.deletePath !== null && can(p.functionId, 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
       </span>
     ),
   };
+
+  // 狭い画面で操作のボタンを指定の列の下に入れる（narrowActions）。閲覧者などボタンが1つも無い人には何も足さない
+  const canAct = can(p.functionId, 'update') || (p.toCopyForm !== null && can(p.functionId, 'create')) || (p.deletePath !== null && can(p.functionId, 'delete'));
+  const host = typeof p.narrowActions === 'string' ? p.columns.find((c) => c.key === p.narrowActions) : p.columns[0];
+  const tableColumns: Column<T>[] =
+    p.narrowActions && narrow && host
+      ? p.columns.map((c) =>
+          c !== host
+            ? c
+            : {
+                ...c,
+                render: (r: T, i: number) => (
+                  <>
+                    {c.render ? c.render(r, i) : ((r[c.key] as ReactNode) ?? '')}
+                    {canAct && <div className="mt-1.5 [&_.tbl-acts]:justify-start">{actionCol.render?.(r, i)}</div>}
+                  </>
+                ),
+              },
+        )
+      : [...p.columns, actionCol];
+  const slot: ActiveSlot = { show: !!(editing && showToggle), value: active, onChange: setActive };
 
   return (
     <div className="page-body">
@@ -245,22 +344,33 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
         </Toolbar>
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         {/* 文字の列は「…」で切らずに折り返して全文を出す */}
+        {p.renderTable ? (
+          p.renderTable({ rows: list.items, loading: list.loading, actions: (r) => actionCol.render?.(r, 0), actionWidth: actionCol.width, isActive })
+        ) : (
         <DataTable<T>
           fit
-          columns={[...p.columns, actionCol]}
+          columns={tableColumns}
           rows={list.items}
           rowKey={p.rowKey}
           loading={list.loading}
           rowClassName={(r) => (isActive(r) ? '' : 'opacity-50')}
         />
+        )}
         <Pager total={list.total} limit={list.limit} offset={list.offset} onChange={list.setOffset} />
         </>
         )}
       </Card>
 
-      <Modal open={open} title={editing ? `${p.title}の編集` : `${p.title}の登録`} onClose={() => setOpen(false)} width={p.modalWidth ?? 640} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!form} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
+      <Modal open={open} title={editing ? `${p.title}の編集` : copying ? `${p.title}の登録（コピー）` : `${p.title}の登録`} onClose={() => setOpen(false)} width={p.modalWidth ?? 640} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!form} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
-        {form ? p.renderForm(form, setFormPatch, editing) :<div className="py-6 text-center text-[12px] text-[var(--color-ink-3)]">読み込み中…</div>}
+        {copying && !editing && (
+          <div className="mb-2 text-[11.5px] text-[var(--color-ink-2)]">選んだ行の内容を写しました。コードなどを直して「登録する」を押すと、新しく登録します（元のデータはそのままです）。</div>
+        )}
+        {form ? p.renderForm(form, setFormPatch, editing, slot) :<div className="py-6 text-center text-[12px] text-[var(--color-ink-3)]">読み込み中…</div>}
+        {/* 表示／非表示（M3-02）。編集のときだけフォームの最後に出す */}
+        {form && editing && showToggle && !p.placeActiveToggle && <ActiveToggle value={active} onChange={setActive} />}
+        {/* 登録日・更新日（M3-01）。新規・コピーでは出さない */}
+        {editing && stampTable ? <RecordStamp table={stampTable} id={p.rowKey(editing)} /> : null}
       </Modal>
     </div>
   );

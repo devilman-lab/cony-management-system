@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useSalesCategories, useSimpleMaster, useWarehouses } from '@/lib/hooks';
@@ -9,6 +9,7 @@ import { isYen, moneyIn, moneyWithCurrency, plainDecimal, today } from '@/lib/fo
 import { Button, Card, CardHead, ErrorBox, FormRow, Input, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchDestinations, fetchPartners, fetchSkusFor, skuItemName, type DestinationRow, type Option, type PartnerRow, type SkuRow } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
+import { RecordStamp } from '@/components/ui/RecordStamp';
 
 const LINE_TYPES = ['商品', 'セット商品', '販促品', '送料', '値引', '非商品'] as const;
 type LineType = (typeof LINE_TYPES)[number];
@@ -24,7 +25,46 @@ export interface LineDraft {
   partner_product_id: number | null;
   /** 得意先別商品からの補足表示 */
   note?: string;
+  /**
+   * 同じ SKU にこの取引先の得意先別商品が複数あるときの選択肢（先方コード・販売名・卸単価で選ぶ。
+   * 2026-10-16 マスター編_3 M3-26）。1つ以下なら持たない。
+   */
+  pp_choices?: PartnerProductChoice[];
+  /** SKU の品名（販売名の無い行を選び直したときに戻す名前）。修正画面で開いた明細は持たない */
+  base_name?: string;
 }
+
+/** 得意先別商品の1行（/masters/partner-products/lookup の戻り） */
+export interface PartnerProductChoice {
+  id: number;
+  partner_product_code: string | null;
+  partner_jan: string | null;
+  shipping_jan: string | null;
+  sales_name: string | null;
+  unit_price: string;
+  retail_price: string | null;
+  note: string | null;
+}
+
+/** 明細の品名の下に出す補足（先方コード・出荷JAN）。出荷JANが無ければ先方JANを出す（1001 ご要望） */
+export const partnerProductNote = (pp: Pick<PartnerProductChoice, 'partner_product_code' | 'shipping_jan' | 'partner_jan'>): string =>
+  [
+    pp.partner_product_code ? `専用コード ${pp.partner_product_code}` : '',
+    pp.shipping_jan ? `出荷JAN ${pp.shipping_jan}` : pp.partner_jan ? `先方JAN ${pp.partner_jan}` : '',
+  ]
+    .filter(Boolean)
+    .join('　') || '得意先別単価';
+
+/** 選ぶときの見出し。先方コード・卸単価・販売名で見分ける（閉じた欄は幅が狭いので、短い先方コードと単価を先に） */
+const choiceLabel = (pp: PartnerProductChoice): string =>
+  [
+    pp.partner_product_code ? `先方コード ${pp.partner_product_code}` : '先方コードなし',
+    `卸単価 ${Number(pp.unit_price).toLocaleString('ja-JP', { maximumFractionDigits: 4 })}`,
+    pp.sales_name?.trim() || '',
+    pp.note?.trim() ? `（${pp.note.replace(/\s+/g, ' ').trim()}）` : '',
+  ]
+    .filter(Boolean)
+    .join('　');
 
 export interface OrderDraft {
   order_type: '卸' | '直送' | '通販' | 'サンプル';
@@ -132,7 +172,8 @@ function toBody(d: OrderDraft) {
       line_no: i + 1,
       line_type: l.line_type,
       sku_id: l.sku?.id ?? null,
-      partner_product_id: l.partner_product_id,
+      // 使った得意先別商品の行（同じ SKU に複数あるときは選んだ行。M3-26）。商品の無い行は持たない
+      partner_product_id: l.sku ? l.partner_product_id : null,
       // 得意先別商品に販売名が無いと undefined が入りうるので、必ず文字列として扱う
       item_name: (l.item_name ?? '').trim() || l.sku?.label.split('　')[1] || l.line_type,
       qty: l.qty.trim() || '0',
@@ -158,14 +199,85 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
   const warehouses = useWarehouses();
   const staff = useSimpleMaster('sales_staff');
   const fetchCustomers = useMemo(() => fetchPartners('customer'), []);
-  // 海外の得意先の消費税の表記（免税（税抜扱い）／課税対象外）。システム設定で決まる
+  // 海外の得意先の消費税の表記（免税（税抜扱い）／課税対象外）。取引先の消費税免税区分（取引先の検索結果の
+  // overseas_tax_label）があればそれ、無ければシステム設定（2026-10-16 マスター編_3 M3-07）
   const overseasTax = useFetch<{ tax_rate: string; label: string }>('/orders/overseas-tax');
   const overseas = isOverseasPartner(d.partner);
+  const overseasLabel = (d.partner?.raw as { overseas_tax_label?: string | null } | undefined)?.overseas_tax_label ?? overseasTax.data?.label;
   const currency = partnerCurrency(d.partner);
 
   const set = <K extends keyof OrderDraft>(k: K, v: OrderDraft[K]) => setD((s) => ({ ...s, [k]: v }));
   const setLine = (key: number, patch: Partial<LineDraft>) =>
     setD((s) => ({ ...s, lines: s.lines.map((l) => (l.key === key ? { ...l, ...patch } : l)) }));
+
+  /**
+   * 明細に得意先別商品の行を当てる。単価・品名（販売名）・補足（先方コード・出荷JAN）がその行に従う。
+   * 返事を待つ間に商品を選び直していたら当てない（skuId で確かめる）。
+   */
+  const applyPartnerProduct = useCallback((key: number, skuId: number, pp: PartnerProductChoice) => {
+    setD((s) => ({
+      ...s,
+      lines: s.lines.map((l) =>
+        l.key === key && l.sku?.id === skuId
+          ? {
+              ...l,
+              // 得意先別の単価は "12.5000" の形で返るので、入力欄には "12.5" で入れる（再テスト R4）
+              unit_price: plainDecimal(pp.unit_price),
+              partner_product_id: pp.id,
+              // 販売名が未登録（null・空）なら SKU の品名にする。undefined を入れると品名が失われ、
+              // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
+              item_name: pp.sales_name?.trim() || l.base_name || l.item_name,
+              note: partnerProductNote(pp),
+            }
+          : l,
+      ),
+    }));
+  }, []);
+
+  /**
+   * 取引先×SKU の得意先別商品を引いて明細に当てる（2026-10-16 マスター編_3 M3-26）。
+   * 行が1つならその行。複数あるときは preferredId の行（先方JAN・先方の商品コードで探して選んだ行、
+   * 修正画面で開いた明細が使っていた行）。決まらなければ選択肢を出し、先方コード・販売名・卸単価で選んでもらう。
+   * keepCurrent は修正画面で開いたとき。単価・品名は変えずに、選び直せるよう選択肢だけ用意する。
+   */
+  const loadPartnerProducts = useCallback(
+    async (key: number, partnerId: number, skuId: number, preferredId: number | null, keepCurrent = false) => {
+      let list: PartnerProductChoice[];
+      try {
+        list = await api.get<PartnerProductChoice[]>('/masters/partner-products/lookup', { partner_id: partnerId, sku_id: skuId });
+      } catch {
+        return; /* 得意先別商品がなければ手入力 */
+      }
+      const choices = list.length > 1 ? list : undefined;
+      const picked = list.find((x) => x.id === preferredId) ?? (list.length === 1 ? list[0] : undefined);
+      const patch = (l: LineDraft): LineDraft => {
+        if (keepCurrent || picked) return { ...l, pp_choices: choices };
+        return {
+          ...l,
+          pp_choices: choices,
+          partner_product_id: null,
+          note: choices ? `この商品は得意先別商品が ${choices.length} 件あります。先方コード・単価を選んでください` : undefined,
+        };
+      };
+      setD((s) => ({ ...s, lines: s.lines.map((l) => (l.key === key && l.sku?.id === skuId ? patch(l) : l)) }));
+      if (picked && !keepCurrent) applyPartnerProduct(key, skuId, picked);
+    },
+    [applyPartnerProduct],
+  );
+
+  // 取引先を替えたときに明細の得意先別商品を引き直すため、今の入力を覚えておく
+  const draftRef = useRef(d);
+  useEffect(() => {
+    draftRef.current = d;
+  }, [d]);
+
+  // 修正画面: 同じ SKU に得意先別商品が複数ある明細は、選び直せるよう選択肢を用意する（単価・品名は変えない）
+  useEffect(() => {
+    if (!initial?.partner) return;
+    for (const l of initial.lines) {
+      if (l.sku) void loadPartnerProducts(l.key, initial.partner.id, l.sku.id, l.partner_product_id, true);
+    }
+  }, [initial, loadPartnerProducts]);
 
   // 販売カテゴリーの初期値
   useEffect(() => {
@@ -177,19 +289,28 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
 
   // 取引先を選んだら納品先・取引条件・販売担当を引き継ぐ
   const onPartner = useCallback(async (o: Option | null) => {
+    const prev = draftRef.current;
     setD((s) => {
       // 海外の得意先にしたら明細の税率を 0% に、海外から国内に戻したら商品の税率に戻す
       const toOverseas = isOverseasPartner(o);
       const fromOverseas = isOverseasPartner(s.partner);
-      const lines = toOverseas
+      const taxed = toOverseas
         ? s.lines.map((l) => ({ ...l, tax_rate: '0.00' }))
         : fromOverseas
           ? s.lines.map((l) => ({ ...l, tax_rate: domesticRate(l) }))
           : s.lines;
+      // 得意先別商品は取引先ごと。取引先を替えたら前の取引先の行を外す（下で新しい取引先の行を引き直す。M3-26）
+      const changed = (o?.id ?? null) !== (s.partner?.id ?? null);
+      const lines = changed ? taxed.map((l) => ({ ...l, partner_product_id: null, pp_choices: undefined, note: undefined })) : taxed;
       return { ...s, partner: o, delivery_destination_id: '', lines };
     });
     setDestinations([]);
     if (!o) return;
+    if (o.id !== prev.partner?.id) {
+      for (const l of prev.lines) {
+        if (l.sku) void loadPartnerProducts(l.key, o.id, l.sku.id, null);
+      }
+    }
     const p = o.raw as PartnerRow;
     setD((s) => ({
       ...s,
@@ -207,7 +328,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     } catch {
       /* 納品先なしでも入力は続けられる */
     }
-  }, []);
+  }, [loadPartnerProducts]);
 
   // 修正のときは納品先一覧を先に取る
   useEffect(() => {
@@ -221,7 +342,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
 
   const onSku = async (key: number, o: Option | null) => {
     if (!o) {
-      setLine(key, { sku: null, partner_product_id: null, note: undefined });
+      setLine(key, { sku: null, partner_product_id: null, note: undefined, pp_choices: undefined });
       return;
     }
     const s = o.raw as SkuRow;
@@ -230,47 +351,15 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     setLine(key, {
       sku: o,
       item_name: skuName,
+      base_name: skuName,
       tax_rate: isOverseasPartner(d.partner) ? '0.00' : Number(s.tax_rate).toFixed(2),
       line_type: s.is_set ? 'セット商品' : '商品',
       partner_product_id: null,
       note: undefined,
+      pp_choices: undefined,
     });
-    if (d.partner) {
-      try {
-        const pp = await api.get<{
-          id: number;
-          partner_product_code: string | null;
-          partner_jan: string | null;
-          shipping_jan: string | null;
-          sales_name: string | null;
-          unit_price: string;
-        } | null>(
-          '/masters/partner-products/lookup',
-          { partner_id: d.partner.id, sku_id: o.id },
-        );
-        if (pp) {
-          setLine(key, {
-            // 得意先別の単価は "12.5000" の形で返るので、入力欄には "12.5" で入れる（再テスト R4）
-            unit_price: plainDecimal(pp.unit_price),
-            partner_product_id: pp.id,
-            // 販売名が未登録（null・空）なら SKU の品名のままにする。undefined を入れると品名が失われ、
-            // 送信時に item_name.trim() で落ちて受注が登録できなくなる。
-            item_name: pp.sales_name?.trim() || skuName,
-            // 出荷JANが登録されていれば、倉庫がそれを見られるよう備考に出す。
-            // 先方JANしか無いときは先方JANを出す（1001 ご要望）。
-            note:
-              [
-                pp.partner_product_code ? `専用コード ${pp.partner_product_code}` : '',
-                pp.shipping_jan ? `出荷JAN ${pp.shipping_jan}` : pp.partner_jan ? `先方JAN ${pp.partner_jan}` : '',
-              ]
-                .filter(Boolean)
-                .join('　') || '得意先別単価',
-          });
-        }
-      } catch {
-        /* 得意先別商品がなければ手入力 */
-      }
-    }
+    // 先方JAN・先方の商品コードで探して選んだときは、当たった行を使う（partner_product_id。M3-26）
+    if (d.partner && (s.partner_product_count ?? 1) > 0) await loadPartnerProducts(key, d.partner.id, o.id, s.partner_product_id ?? null);
   };
 
   const total = d.lines.reduce((a, l) => a + Number(l.qty || 0) * Number(l.unit_price || 0), 0);
@@ -281,6 +370,9 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
     if (!d.partner) return setError(new ApiError(400, '取引先を選んでください'));
     if (d.order_type === '卸' && !d.delivery_destination_id) return setError(new ApiError(400, '卸の受注では納品先を選んでください'));
     if (d.lines.some((l) => ['商品', 'セット商品'].includes(l.line_type) && !l.sku)) return setError(new ApiError(400, '商品の行には商品を選んでください'));
+    // 同じ商品に得意先別商品が複数ある行は、どれかを選んでから登録する（単価・販売名・出荷JAN が行で違うため。M3-26）
+    const unpicked = d.lines.findIndex((l) => l.sku && l.pp_choices && l.pp_choices.length > 1 && !l.partner_product_id);
+    if (unpicked >= 0) return setError(new ApiError(400, `${unpicked + 1}行目：この商品は得意先別商品（先方コード・単価）が複数あります。どれかを選んでください`));
     setBusy(true);
     try {
       const body = toBody(d);
@@ -457,11 +549,20 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                 <tbody>
                   {d.lines.map((l, i) => {
                     const needsSku = l.line_type === '商品' || l.line_type === 'セット商品';
+                    const pickedPp = l.pp_choices?.find((x) => x.id === l.partner_product_id);
                     return (
                       <tr key={l.key}>
                         <td className="c num">{i + 1}</td>
                         <td>
-                          <Select value={l.line_type} onChange={(e) => setLine(l.key, { line_type: e.target.value as LineType, sku: needsSku ? l.sku : null })}>
+                          <Select
+                            value={l.line_type}
+                            onChange={(e) => {
+                              const next = e.target.value as LineType;
+                              // 商品でない種別にしたら得意先別商品の行も外す（商品を指さない明細が行を指したまま残らないように）
+                              const goods = next === '商品' || next === 'セット商品';
+                              setLine(l.key, { line_type: next, sku: needsSku ? l.sku : null, ...(goods ? {} : { partner_product_id: null, pp_choices: undefined }) });
+                            }}
+                          >
                             {LINE_TYPES.map((t) => (
                               <option key={t}>{t}</option>
                             ))}
@@ -469,7 +570,26 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                         </td>
                         <td>
                           {needsSku ? (
-                            <SearchSelect value={l.sku} onChange={(o) => onSku(l.key, o)} fetchOptions={fetchSkusForPartner} placeholder={d.partner ? 'SKU・JAN・先方JAN・商品名で検索' : 'SKU・JAN・商品名で検索'} width="100%" />
+                            <>
+                              <SearchSelect value={l.sku} onChange={(o) => onSku(l.key, o)} fetchOptions={fetchSkusForPartner} placeholder={d.partner ? 'SKU・JAN・先方JAN・先方コード・商品名で検索' : 'SKU・JAN・商品名で検索'} width="100%" />
+                              {/* 同じ商品にこの取引先の得意先別商品が複数あるときは、先方コード・販売名・卸単価で選ぶ（M3-26） */}
+                              {l.sku && l.pp_choices && l.pp_choices.length > 1 && (
+                                <Select
+                                  value={l.partner_product_id ? String(l.partner_product_id) : ''}
+                                  onChange={(e) => {
+                                    const pp = l.pp_choices?.find((x) => String(x.id) === e.target.value);
+                                    if (pp && l.sku) applyPartnerProduct(l.key, l.sku.id, pp);
+                                  }}
+                                  className="mt-1"
+                                  title={pickedPp ? choiceLabel(pickedPp) : undefined}
+                                >
+                                  <option value="" disabled>得意先別商品を選ぶ（{l.pp_choices.length}件）</option>
+                                  {l.pp_choices.map((pp) => (
+                                    <option key={pp.id} value={pp.id}>{choiceLabel(pp)}</option>
+                                  ))}
+                                </Select>
+                              )}
+                            </>
                           ) : (
                             <span className="text-[11px] text-[var(--color-ink-3)]">—</span>
                           )}
@@ -488,7 +608,7 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
                           <Input right value={l.unit_price} onChange={(e) => setLine(l.key, { unit_price: e.target.value })} className="!w-[90px]" />
                         </td>
                         <td className="c">
-                          <Select value={overseas ? '0.00' : l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} disabled={overseas} title={overseas ? '海外の得意先は 0% です' : undefined} className="!w-[72px]">
+                          <Select value={overseas ? '0.00' : l.tax_rate} onChange={(e) => setLine(l.key, { tax_rate: e.target.value })} disabled={overseas} title={overseas ? `消費税免税区分が「${overseasLabel ?? ''}」の得意先は 0% です` : undefined} className="!w-[72px]">
                             <option value="10.00">10%</option>
                             <option value="8.00">8%</option>
                             <option value="0.00">0%</option>
@@ -514,8 +634,9 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
               {overseas && (
                 <>
                   <span className="text-[var(--color-ink-3)]">消費税</span>
-                  <b>{overseasTax.data?.label ?? '0%'}</b>
-                  <span className="text-[10.5px] text-[var(--color-ink-3)]">海外の得意先のため税率 0%（請求書・納品書も同じ）</span>
+                  <b>{overseasLabel ?? '0%'}</b>
+                  {/* 「海外」ではなく取引先マスタの呼び方（消費税免税区分）で出す。国内の免税先もある（2026-10-18 受入 W1 N3） */}
+                  <span className="text-[10.5px] text-[var(--color-ink-3)]">消費税免税区分が「{overseasLabel ?? ''}」の取引先のため税率 0%（請求書・納品書も同じ）</span>
                 </>
               )}
               <span className="text-[var(--color-ink-3)]">送料調整</span>
@@ -552,6 +673,8 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
           </Card>
         </div>
       </div>
+      {/* 登録日・更新日（2026-10-16 マスター編3 M3-01）。修正のときだけ */}
+      {orderId ? <RecordStamp table="sales_orders" id={orderId} /> : null}
     </div>
   );
 }

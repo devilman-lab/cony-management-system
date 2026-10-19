@@ -193,9 +193,11 @@ export class ReportDoc {
     this.rule();
   }
 
-  /** 合計欄など、表のあとに右寄せで並べる。 */
-  totals(rows: [string, string][]): void {
-    const labelWidth = 120;
+  /**
+   * 合計欄など、表のあとに右寄せで並べる。
+   * labelWidth は項目名の欄の幅（既定 120pt）。長い項目名（「未計上（免税（税抜扱い））」など）は広げて1行に収める
+   */
+  totals(rows: [string, string][], labelWidth = 120): void {
     const valueWidth = 110;
     const x = MARGIN + CONTENT_WIDTH - labelWidth - valueWidth;
     this.doc.fontSize(10);

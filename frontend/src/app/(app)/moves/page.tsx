@@ -11,8 +11,12 @@ interface MoveRow extends Record<string, unknown> {
   id: number;
   moved_at: string;
   movement_type: string;
+  /** 画面に出す種別。在庫調整は「在庫調整（再生）」のように理由を添える（API が作る。2026-10-18 受入 W3） */
+  movement_label?: string;
   ref_table: string;
   ref_id: number;
+  /** 元伝票の番号（在庫調整の調整番号） */
+  ref_no?: string | null;
   qty: string;
   /** 実在庫そのもの。在庫を更新できない人には API が返さない（在庫編 Z-02） */
   qty_before?: string;
@@ -50,7 +54,8 @@ export default function MovesPage() {
         <Toolbar right={<span className="text-[11.5px] text-[var(--color-ink-2)]"><Num className="text-[13px] text-[var(--color-ink)]">{list.total}</Num> 件</span>}>
           <Select value={type} onChange={(e) => setType(e.target.value)} className="!w-[130px]">
             <option value="">種別：すべて</option>
-            {TYPES.map((t) => <option key={t}>{t}</option>)}
+            {/* 在庫調整は記録の上では「棚卸調整」。画面の呼び方の「在庫調整」で出す */}
+            {TYPES.map((t) => <option key={t} value={t}>{t === '棚卸調整' ? '在庫調整' : t}</option>)}
           </Select>
           <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="!w-[140px]">
             <option value="">倉庫：すべて</option>
@@ -67,7 +72,7 @@ export default function MovesPage() {
           columns={[
             // 1280 幅でも担当まで見える幅。日時は日付と時刻の2行に折り返す
             { key: 'moved_at', label: '日時', width: 84, render: (r) => <Num>{ymdhm(r.moved_at)}</Num> },
-            { key: 'movement_type', label: '種別', width: 64 },
+            { key: 'movement_type', label: '種別', width: 84, render: (r) => r.movement_label ?? r.movement_type },
             { key: 'sku_code', label: 'SKU', width: 124, render: (r) => <Num>{r.sku_code}</Num> },
             { key: 'product_name', label: '商品' },
             { key: 'warehouse_name', label: '倉庫', width: 72 },
@@ -78,7 +83,7 @@ export default function MovesPage() {
                   { key: 'qty_after', label: '後', r: true, width: 58, render: (r) => qty(r.qty_after) },
                 ] as Column<MoveRow>[])
               : []),
-            { key: 'ref_table', label: '元伝票', width: 96, render: (r) => `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}` },
+            { key: 'ref_table', label: '元伝票', width: 96, render: (r) => (r.ref_no ? <>{REF[r.ref_table] ?? r.ref_table} <Num>{r.ref_no}</Num></> : `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}`) },
             { key: 'user_name', label: '担当', width: 72, render: (r) => r.user_name ?? '' },
           ]}
           rows={list.items}

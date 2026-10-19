@@ -49,6 +49,7 @@ export const UNIQUE_MESSAGES: Record<string, string> = {
   external_orders_channel_external_order_no_key: 'この受注は取込済みです（同じ受注番号があります）',
   invoices_partner_id_period_to_key: 'この取引先・締め期間の請求はすでに作られています',
   ux_partner_products_code: 'この取引先で同じ専用コードがすでに使われています',
+  ux_partner_products_nocode: 'この取引先・この商品には、先方の商品コードが空の行がすでにあります。先方の商品コードを入れて登録してください',
   ux_royalty_rules_scope: '同じ範囲・同じ適用開始日のロイヤリティ規定がすでにあります',
   royalty_calculations_target_month_payee_partner_id_key:
     'この支払先・対象月のロイヤリティ計算はすでにあります',
@@ -60,7 +61,8 @@ export const UNIQUE_MESSAGES: Record<string, string> = {
   ux_skus_jan:
     'この JAN コードは、品番の左6桁が違う商品で使われています。' +
     '同じ品番グループ（左6桁が同じ）の中でなら、同じ JAN を付けられます',
-  skus_sku_code_key: 'この SKU コードはすでに登録されています',
+  // 画面では SKU のコードを「商品コード」と呼ぶ（2026-10-18 マスター編_3 M3-16）。行のコピーはコードも写すので、直してもらう
+  skus_sku_code_key: 'この商品コードはすでに登録されています。コピーした行は商品コードを直してください',
   partners_partner_code_key: 'この取引先コードはすでに登録されています',
   products_product_code_key: 'この品番はすでに登録されています',
   warehouses_warehouse_code_key: 'この倉庫コードはすでに登録されています',

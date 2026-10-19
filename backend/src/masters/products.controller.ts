@@ -20,7 +20,8 @@ const ListQuerySchema = z.object({
 type ListQuery = z.infer<typeof ListQuerySchema>;
 
 const SkuSearchSchema = z.object({
-  q: z.string().trim().min(1).max(60).optional(),
+  // 空の文字（?q=）は「指定なし」と同じに扱う（候補の欄を押しただけ・文字を全部消したとき。2026-10-18 画面確認 W3 N1）
+  q: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().trim().min(1).max(60).optional()),
   /** 受注入力で取引先を選んでいるとき。その取引先の先方JAN・出荷JAN・専用コードでも引けるようにする */
   partner_id: z.coerce.number().int().positive().optional(),
   /** true＝セット商品の SKU だけ／false＝セット商品以外だけ。省くと絞らない（セット登録のセット SKU 欄で使う） */

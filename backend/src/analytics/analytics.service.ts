@@ -15,8 +15,10 @@ export const DIMENSIONS = {
   受注区分: sql`o.order_type`,
   ブランド: sql`coalesce(b.name, '(未設定)')`,
   商品: sql`pr.product_name`,
-  商品コード: sql`pr.product_code`,
-  SKU: sql`s.sku_code`,
+  // 画面の呼び方にそろえる（2026-10-18 受入 W2。M3-16 で品番＝「品番（商品分類コード）」、SKU＝「商品コード」に改めた）。
+  // 以前の「商品コード」（品番を指していた）と「SKU」は LEGACY_DIMENSIONS で読み替えて受ける
+  '品番（商品分類コード）': sql`pr.product_code`,
+  '商品コード（SKU）': sql`s.sku_code`,
   倉庫: sql`w.short_name`,
   取引条件: sql`o.trade_type`,
   // 受注の販売担当（販売担当マスタ。取引先の既定担当を初期値に受注ごとに変更できる。9/15・9/17 ご要望）
@@ -26,6 +28,15 @@ export const DIMENSIONS = {
 } as const;
 
 export type Dimension = keyof typeof DIMENSIONS;
+
+/**
+ * 前の軸の名前 → 今の名前。保存した集計条件や前からの呼び出しを、前と同じ意味のまま読む
+ * （前の「商品コード」は品番を指していた。今の画面の「商品コード」＝SKU と取り違えないよう、SKU の軸は「商品コード（SKU）」）。
+ */
+export const LEGACY_DIMENSIONS: Readonly<Record<string, Dimension>> = {
+  商品コード: '品番（商品分類コード）',
+  SKU: '商品コード（SKU）',
+};
 
 /**
  * 品物の行（数量として数えてよい行）。
@@ -41,7 +52,8 @@ const IS_GOODS = sql`(sl.line_type in ('商品', 'セット商品')
  *
  * セット商品はそれ自体が在庫を持たないため（商品マスタの原価も 0 のまま）、
  * 実際に倉庫から出た構成品の原価を合計する。それ以外の行は
- * **得意先別商品 → SKU → 商品マスタ** の順に、細かいものを先に見る。
+ * **SKU → 商品マスタ** の順に、細かいものを先に見る。得意先別商品の原価は使わない
+ * （2026-10-16 マスター編_3 M3-28「得意先別原価はない」。以前は得意先別商品の原価を先に見ていた）。
  * SKU の原価は「大きいサイズだけ原価が違う」ときに入れる（1001 ご要望）。
  * 送料・値引のような商品でない行は原価 0 になる。
  */
@@ -55,7 +67,7 @@ const COST_PER_LINE = sql`(
        and a.status in ('引当中', '出荷済')
   )
   -- 在庫が動く行だけ原価を持つ。販促品・非商品は倉庫から出ないので 0。
-  when sl.is_stock_target then coalesce(pp.cost_price, s.cost_price, pr.cost_price, 0) * sl.qty
+  when sl.is_stock_target then coalesce(s.cost_price, pr.cost_price, 0) * sl.qty
   else 0 end
 )`;
 
@@ -66,7 +78,7 @@ export const MEASURES = {
   件数: sql`count(distinct o.id)`,
   明細数: sql`count(*)`,
   // ここから下は機微項目（SENSITIVE:view が要る）。9/15 ご要望「利益＝売上−（原価＋ロイヤリティ）」。
-  // 原価は得意先別商品 → 商品マスタの順。
+  // 原価は SKU → 商品マスタの順（得意先別商品の原価は使わない。M3-28）。
   // ロイヤリティは月次のロイヤリティ計算表と同じ当て方・同じ端数処理にするため、別の集計で出して
   // あとから足し合わせる（sales() の royaltyQuery）。ここに置くのは「ロイヤリティを引く前の値」。
   原価: sql`coalesce(sum(${COST_PER_LINE}), 0)`,
@@ -151,7 +163,6 @@ export class AnalyticsService {
       .leftJoin('products as pr', 'pr.id', 's.product_id')
       .leftJoin('brands as b', 'b.id', 'pr.brand_id')
       .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
-      .leftJoin('partner_products as pp', 'pp.id', 'sl.partner_product_id')
       .where('sh.status', '=', '出荷済')
       // サンプル出荷は実績に含めない
       .where('o.is_billable', '=', true)

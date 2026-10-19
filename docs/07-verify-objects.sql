@@ -61,9 +61,9 @@ WITH expected(sort_key, category, item, actual, expect) AS (
 
   -- 3. 初期データ
   UNION ALL
-  SELECT 310, '初期データ', '区分カテゴリー',       (SELECT count(*) FROM code_categories), 24
+  SELECT 310, '初期データ', '区分カテゴリー',       (SELECT count(*) FROM code_categories), 27
   UNION ALL
-  SELECT 320, '初期データ', '区分値',               (SELECT count(*) FROM codes), 59
+  SELECT 320, '初期データ', '区分値',               (SELECT count(*) FROM codes), 70
   UNION ALL
   SELECT 330, '初期データ', '販売カテゴリー',       (SELECT count(*) FROM sales_categories), 3
   UNION ALL

@@ -64,7 +64,7 @@ BEGIN
   RAISE NOTICE 'T02 OK  ドメイン money_amt / qty_num / tax_rate';
 
   SELECT count(*) INTO n FROM code_categories;
-  IF n <> 24 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 24 件）', n USING ERRCODE='TF001'; END IF;
+  IF n <> 27 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 27 件。2026-10-18 に入金方法・請求書送付方法・ロイヤリティ区分を追加）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM sales_categories;
   IF n <> 3  THEN RAISE EXCEPTION 'T03 失敗: 販売カテゴリー % 件（期待 3 件）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM roles;

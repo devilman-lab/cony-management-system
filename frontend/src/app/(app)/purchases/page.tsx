@@ -65,13 +65,17 @@ interface LineDraft {
 let seq = 1;
 const newLine = (): LineDraft => ({ key: seq++, purchase_item_id: '', item_name: '', qty: '1', unit_cost: '', target: 'none', product: null, brand_id: '', class_id: '', tax_division_id: '', tax_rate: '10.00', tax_auto: true });
 
-/** GET /purchases/overseas-tax-default。海外の仕入先の明細の税区分の初期値（システム設定 OVERSEAS_TAX_TREATMENT から決まる）。 */
+/**
+ * GET /purchases/overseas-tax-default。海外の仕入先の明細の税区分の初期値（システム設定 OVERSEAS_TAX_TREATMENT から決まる）。
+ * by_treatment は免税（税抜扱い）・課税対象外それぞれの値。仕入先に消費税免税区分があればそちらを使う（2026-10-16 M3-07）。
+ */
 interface OverseasTaxDefault {
   treatment: string;
   label: string;
   tax_division_code_id: number | null;
   tax_division_name: string | null;
   tax_rate: string;
+  by_treatment?: Record<string, Omit<OverseasTaxDefault, 'by_treatment'>>;
 }
 
 /** 税区分ごとの税率。税率は税区分から決め、食い違ったまま保存されないようにする */
@@ -119,10 +123,16 @@ export default function PurchasesPage() {
   const overseasTax = useFetch<OverseasTaxDefault>('/purchases/overseas-tax-default');
   const isOverseas = (o: Option | null) => Boolean((o?.raw as { is_overseas?: boolean } | undefined)?.is_overseas);
   const supplierOverseas = isOverseas(f.supplier);
+  /** 仕入先の消費税免税区分の初期値。仕入先で選んでいなければシステム設定のもの（2026-10-16 マスター編_3 M3-07） */
+  const overseasOf = (o: Option | null) => {
+    const t = (o?.raw as { overseas_tax_treatment?: string | null } | undefined)?.overseas_tax_treatment;
+    return (t && overseasTax.data?.by_treatment?.[t]) || overseasTax.data;
+  };
+  const supplierTax = overseasOf(f.supplier);
 
   /** 自動で決める税区分。海外の仕入先 → 仕入項目マスタ → 指定なし（10%）の順。サーバー（resolveLineTax）と同じ順。 */
-  const autoTax = (purchaseItemId: string, overseas: boolean): Pick<LineDraft, 'tax_division_id' | 'tax_rate'> => {
-    const o = overseasTax.data;
+  const autoTax = (purchaseItemId: string, overseas: boolean, supplier: Option | null = f.supplier): Pick<LineDraft, 'tax_division_id' | 'tax_rate'> => {
+    const o = overseasOf(supplier);
     if (overseas && o?.tax_division_code_id) return { tax_division_id: String(o.tax_division_code_id), tax_rate: o.tax_rate };
     const m = (items.data?.items ?? []).find((x) => String(x.id) === purchaseItemId);
     // 仕入項目マスタの税区分・税率も写す（1001 ご要望。以前は品名と単価だけで、軽減8%の品目も10%で登録されていた）
@@ -135,7 +145,7 @@ export default function PurchasesPage() {
     // 通貨の初期値は仕入先の取引通貨（取引先マスタ。2026-10-12 No.39）。選び直しもできる
     setF({ ...f, supplier: o, currency: (o?.raw as { currency?: string } | undefined)?.currency || f.currency });
     // 手で選び直していない行だけ、新しい仕入先に合わせて税区分を入れ直す
-    setLines((s) => s.map((l) => (l.tax_auto ? { ...l, ...autoTax(l.purchase_item_id, isOverseas(o)) } : l)));
+    setLines((s) => s.map((l) => (l.tax_auto ? { ...l, ...autoTax(l.purchase_item_id, isOverseas(o), o) } : l)));
   };
 
   // 仕入項目を選んだら品名と単価をその場で埋める。単価はマスタの値を起点に手で直せる
@@ -249,7 +259,7 @@ export default function PurchasesPage() {
             <Select value={f.division} onChange={(e) => setF({ ...f, division: e.target.value })} className="!w-[110px]"><option>仕入</option><option>経費</option></Select>
           </FormRow>
           <FormRow label="日付" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="!w-[150px]" /></FormRow>
-          <FormRow label="仕入先" required hint={supplierOverseas ? `海外：税区分の初期値は「${overseasTax.data?.tax_division_name ?? ''}」（${overseasTax.data?.label ?? ''}）・0%` : undefined}><SearchSelect value={f.supplier} onChange={pickSupplier} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" /></FormRow>
+          <FormRow label="仕入先" required hint={supplierOverseas ? `消費税免税区分が「${supplierTax?.label ?? ''}」の仕入先のため、税区分の初期値は「${supplierTax?.tax_division_name ?? ''}」・0%` : undefined}><SearchSelect value={f.supplier} onChange={pickSupplier} fetchOptions={fetchSuppliers} placeholder="仕入先を検索" width="100%" /></FormRow>
           <FormRow label="支払予定日"><Input type="date" value={f.payment_date1} onChange={(e) => setF({ ...f, payment_date1: e.target.value })} className="!w-[150px]" /></FormRow>
           <FormRow label="通貨" hint="海外からの仕入に使います。「分類・区分・設定」の「通貨」タブで増やせます">
             <Select value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} className="!w-[140px]">

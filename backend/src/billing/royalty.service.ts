@@ -20,19 +20,27 @@ import { ROYALTY_GOODS_LINE, royaltyAmount, royaltyRuleFor } from './royalty-rul
  *
  * 規定の「計算の基準」で、どの月に計上するかが変わる（2026-10-12 T3 No.33。以前は常に出荷で計算していた）。
  *   出荷 … 出荷日の月　／　売上 … その出荷を載せた請求の締め日の月　／　入金 … 請求に入金（消込）された月に、入金の割合で按分
+ * 2026-10-16（マスター編_3 M3-32）から基準は「請求月」（中の値は売上）に統一し、規定の画面では選ばせない。
+ * 出荷・入金の経路は、API で作った規定のために残してある。
  */
 /**
- * 計算表の「基準」の表示。当てた規定の基準を「出荷・入金」のように全部並べる。
+ * 計算の基準の表示名。基準は請求月（中の値は「売上」＝締めた請求の月に計上）に統一した（2026-10-16 M3-32）。
+ * 出荷・入金の経路は残してあるので、その名前はそのまま出す。
+ */
+const calcBaseName = (col: RawBuilder<unknown>) => sql<string>`(case ${col} when '売上' then '請求月' else ${col} end)`;
+
+/**
+ * 計算表の「基準」の表示。当てた規定の基準を「請求月・入金」のように全部並べる。
  * 計算表の列（calc_base）は1つしか持てないため、基準の違う規定が混ざった月はここで補う。
  * 明細の無い計算表は列の値のまま。
  */
 const CALC_BASE_LABEL = sql<string>`coalesce((
-  select string_agg(b.calc_base, '・' order by array_position(array['出荷', '売上', '入金']::text[], b.calc_base::text))
+  select string_agg(${calcBaseName(sql`b.calc_base`)}, '・' order by array_position(array['出荷', '売上', '入金']::text[], b.calc_base::text))
     from (select distinct rr.calc_base
             from royalty_calculation_lines l
             join royalty_rules rr on rr.id = l.royalty_rule_id
            where l.royalty_calculation_id = c.id) b
-), c.calc_base)`;
+), ${calcBaseName(sql`c.calc_base`)})`;
 
 @Injectable()
 export class RoyaltyService {
@@ -147,7 +155,7 @@ export class RoyaltyService {
       .values({
         target_month: monthStart,
         payee_partner_id: payeeId,
-        calc_base: '出荷',
+        calc_base: '売上',
         status: '計算済',
         created_by: userId,
         updated_by: userId,
@@ -368,7 +376,7 @@ export class RoyaltyService {
         .where('payee_partner_id', '=', payeeId)
         .where('is_active', '=', true)
         .execute();
-      calcBase = ruleBases.length === 1 ? ruleBases[0].calc_base : '出荷';
+      calcBase = ruleBases.length === 1 ? ruleBases[0].calc_base : '売上';
     }
 
     await trx
@@ -439,8 +447,8 @@ export class RoyaltyService {
       .innerJoin('products as pr', 'pr.id', 's.product_id')
       .leftJoin('royalty_rules as rr', 'rr.id', 'l.royalty_rule_id')
       .select([
-        // 当てた規定の計算の基準（出荷／売上／入金）
-        'rr.calc_base as calc_base',
+        // 当てた規定の計算の基準（請求月／出荷／入金）
+        calcBaseName(sql`rr.calc_base`).as('calc_base'),
         'cp.name1 as customer_name',
         'b.name as brand_name',
         's.sku_code as sku_code',

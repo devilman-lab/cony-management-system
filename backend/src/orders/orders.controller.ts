@@ -93,8 +93,9 @@ export class OrdersController {
   }
 
   /**
-   * 海外の得意先の消費税の表記（システム設定 OVERSEAS_TAX_TREATMENT）。
+   * 海外の得意先の消費税の表記の既定（システム設定 OVERSEAS_TAX_TREATMENT）。
    * 受注入力で海外の得意先を選んだとき、合計の横に請求書と同じ言い方で出すために使う。
+   * 取引先に消費税免税区分があれば、画面はそちら（取引先の検索結果の overseas_tax_label）を出す（2026-10-16 M3-07）。
    */
   @Get('overseas-tax')
   @RequirePermission('O-01', 'view')

@@ -424,6 +424,20 @@ export interface PartnersTable {
   payment_month_offset: number | null;
   /** [SMALLINT] */
   payment_day: number | null;
+  /** 支払②（2026-10-16 マスター編_3「支払日をもう1種」）。登録・表示だけで、支払予定日は支払①で決める  [SMALLINT] */
+  payment_month_offset2: number | null;
+  /** [SMALLINT] */
+  payment_day2: number | null;
+  /** 入金方法①②（区分値 RECEIPT_METHOD：振込・電子債権・その他）と請求書送付方法（区分値 INVOICE_SEND_METHOD）  [-> codes / BIGINT] */
+  receipt_method1_code_id: number | null;
+  /** [-> codes / BIGINT] */
+  receipt_method2_code_id: number | null;
+  /** [-> codes / BIGINT] */
+  invoice_send_method_code_id: number | null;
+  /** 請求書送付先メールアドレス  [VARCHAR(200)] */
+  invoice_email: string | null;
+  /** 消費税免税区分（2026-10-16 マスター編_3）。is_overseas の取引先の税の扱いを取引先ごとに決める。 exempt＝免税（税抜扱い）／non_taxable＝課税対象外。空ならシステム設定 OVERSEAS_TAX_TREATMENT  [VARCHAR(20)] */
+  overseas_tax_treatment: string | null;
   /** [VARCHAR(8)] */
   postal_code: string | null;
   /** [VARCHAR(200)] */
@@ -700,6 +714,8 @@ export interface ProductClassesTable {
   code: string;
   /** [VARCHAR(120)] */
   name: string;
+  /** この分類のブランド。商品の登録でブランドを選ぶと、そのブランドの分類だけを候補に出す（2026-10-16）。空はどのブランドでも出す  [-> brands / BIGINT] */
+  brand_id: number | null;
   /** [INTEGER] */
   sort_order: number | null;
   /** [BOOLEAN] */
@@ -797,7 +813,11 @@ export interface ProductsTable {
   old_cost_price: string | null;
   /** [BOOLEAN] */
   is_cost_undecided: Generated<boolean>;
-  /** ロイヤリティは royalty_rules に一本化したため、商品側では持たない（v1.5）  [tax_rate] */
+  /** ロイヤリティは royalty_rules に一本化したため、商品側では持たない（v1.5） ロイヤリティ区分（区分値 ROYALTY_CLASS：機械／機械以外）と下代調整対象（2026-10-16 マスター編_3）。登録・表示のみ  [-> codes / BIGINT] */
+  royalty_class_code_id: number | null;
+  /** [BOOLEAN] */
+  is_wholesale_adjust_target: Generated<boolean>;
+  /** [tax_rate] */
   tax_rate: Generated<string>;
   /** [-> codes / BIGINT] */
   division_code_id: number | null;
@@ -848,6 +868,8 @@ export interface SkusTable {
   shop_product_code: string | null;
   /** このSKUだけの原価。空欄なら商品の原価を使う（大きいサイズだけ原価が違う。1001 ご要望）  [money_amt] */
   cost_price: string | null;
+  /** 旧原価（2026-10-16 マスター編_3。原価は SKU ごとに持つ）  [money_amt] */
+  old_cost_price: string | null;
   /** [INTEGER] */
   sort_order: number | null;
   /** [BOOLEAN] */
@@ -969,7 +991,7 @@ export interface PartnerProductsTable {
   created_by: number | null;
   /** [TIMESTAMPTZ] */
   updated_at: Generated<Date>;
-  /** [-> users / BIGINT] */
+  /** 同じ取引先・同じ SKU でも、先方コード・単価の違う行を複数持てる（2026-10-16 マスター編_3「複数単価・複数先方コードがある」）。 以前は UNIQUE (partner_id, sku_id) で1行に限っていた。先方の商品コードは取引先の中で重ならない（下の索引）  [-> users / BIGINT] */
   updated_by: number | null;
 }
 export type PartnerProducts = Selectable<PartnerProductsTable>;
@@ -1087,8 +1109,8 @@ export interface ReservationGroupsTable {
   media_id: number | null;
   /** 入っていれば、この取引先の受注で減らす  [-> partners / BIGINT] */
   partner_id: number | null;
-  /** [-> sales_categories / BIGINT] */
-  sales_category_id: number;
+  /** 空ならどの販売カテゴリーの受注でも減る（2026-10-16 在庫編_2）  [-> sales_categories / BIGINT] */
+  sales_category_id: number | null;
   /** 項目（楽楽販売の「集計」にあたる見出し）  [VARCHAR(60)] */
   item_label: string | null;
   /** [-> product_classes / BIGINT] */
@@ -1118,8 +1140,8 @@ export interface ReservationsTable {
   partner_id: number | null;
   /** 見出しと同じ値を持つ  [-> media / BIGINT] */
   media_id: number | null;
-  /** [-> sales_categories / BIGINT] */
-  sales_category_id: number;
+  /** 空ならどの販売カテゴリーの受注でも減る（2026-10-16 在庫編_2）  [-> sales_categories / BIGINT] */
+  sales_category_id: number | null;
   /** [-> skus / BIGINT] */
   sku_id: number;
   /** [DATE] */
@@ -1992,7 +2014,7 @@ export interface RoyaltyRulesTable {
   media_id: number | null;
   /** この組み合わせではロイヤリティが発生しないことを表す  [BOOLEAN] */
   is_excluded: Generated<boolean>;
-  /** 売上／出荷／入金  [VARCHAR(20)] */
+  /** 売上（＝請求月）／出荷／入金。2026-10-16 から画面では請求月に統一  [VARCHAR(20)] */
   calc_base: Generated<string>;
   /** [NUMERIC(7,4)] */
   rate: string | null;

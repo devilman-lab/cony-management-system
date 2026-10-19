@@ -28,6 +28,8 @@ interface SavedQuery {
 }
 
 const COUNT_MEASURES = new Set(['数量', '件数', '明細数']);
+/** 前の軸の名前 → 今の名前（backend の LEGACY_DIMENSIONS と同じ） */
+const LEGACY_DIMENSIONS: Record<string, string> = { 商品コード: '品番（商品分類コード）', SKU: '商品コード（SKU）' };
 
 /** 販売実績（A-01）と汎用クエリ集計（A-03）。軸と指標を選んで集計し、条件を保存できる。 */
 export default function AnalyticsPage() {
@@ -77,7 +79,8 @@ export default function AnalyticsPage() {
     const c = q.conditions ?? {};
     if (c.from) setFrom(c.from);
     if (c.to) setTo(c.to);
-    if (c.dimensions) setDims(c.dimensions);
+    // 前に保存した条件の軸の名前は今の名前に直す（「商品コード」＝品番、「SKU」。2026-10-18 受入 W2。API も同じ読み替え）
+    if (c.dimensions) setDims(c.dimensions.map((d) => LEGACY_DIMENSIONS[d] ?? d));
     if (c.measures) setMeasures(c.measures);
     setOrderType(c.order_type ?? '');
   };
@@ -104,7 +107,7 @@ export default function AnalyticsPage() {
                 <div className="text-[10.5px] font-semibold text-[var(--color-ink-3)] mb-1">軸（集計の単位）</div>
                 <div className="flex gap-2">
                   {[0, 1, 2].map((i) => (
-                    <Select key={i} value={dims[i] ?? ''} onChange={(e) => setDim(i, e.target.value)} className="!w-[130px]">
+                    <Select key={i} value={dims[i] ?? ''} onChange={(e) => setDim(i, e.target.value)} className="!w-[170px]">
                       <option value="">{i === 0 ? '選んでください' : '（なし）'}</option>
                       {(options.data?.dimensions ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
                     </Select>

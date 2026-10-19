@@ -13,6 +13,7 @@
  *   - 取り込みは **CSV に載っている列だけ**を書き換える。載っていない列には触らない
  */
 
+import { OVERSEAS_TAX_LABEL, OVERSEAS_TAX_TREATMENTS } from '../common/settings.service';
 import { rateForTaxDivision } from './purchase-item-tax';
 
 /** 欄の種類。書き出しの見せ方と、取り込みの読み取り方を決める。 */
@@ -83,6 +84,18 @@ export interface CsvColumn {
   /** 空欄を空の文字として入れる（データベースでは空にできないが、入力は任意の欄。作業指示の本文など） */
   blankAsEmpty?: boolean;
   multi?: CsvMulti;
+  /**
+   * 取り込みで同じ欄として受ける別の見出し（画面の呼び名を変えたとき、新しい名前の見出しでも読めるように。
+   * 2026-10-18 マスター編_3 M3-16「品番（商品分類コード）」）。書き出しは label のまま。
+   */
+  aliases?: readonly string[];
+  /** ○×の欄を「有効／無効」以外の言葉で書き出すとき（[真, 偽]。例「対象／対象外」）。取り込みはこの言葉も受ける */
+  boolLabels?: readonly [string, string];
+  /**
+   * 文字の欄で、データベースの値を画面の言葉で書き出すとき（値 → 言葉。例 exempt →「免税（税抜扱い）」）。
+   * 取り込みは言葉も値も受ける。options にはデータベースの値を書く（2026-10-18 マスター編_3 M3-07）。
+   */
+  valueLabels?: Readonly<Record<string, string>>;
 }
 
 /** 行ごとの決まりを確かめるときに渡すもの。 */
@@ -109,10 +122,24 @@ export interface MasterCsvDef {
    * 鍵が一致する行があれば更新、無ければ追加。
    */
   keyFields: string[];
+  /**
+   * 前の書式の見出し（呼び名を変えて、同じ見出しが前と今とで別の欄を指すようになったもの）。
+   * 見出し行に marker があれば前の書式として、labels の見出しを前の欄（field）で読む。
+   * SKU の CSV は、前は「SKUコード」＝SKU・「商品コード」＝品番、今は「商品コード」＝SKU・「品番（商品分類コード）」＝品番
+   * （2026-10-18 受入 W2。M3-16 の呼び名に CSV もそろえた）。
+   */
+  legacyHeaders?: { marker: string; labels: Readonly<Record<string, string>> };
+  /**
+   * 鍵のうち、見出しに無くても・空欄でもよい欄（得意先別商品の「先方の商品コード」。2026-10-16 マスター編_3 M3-26）。
+   * 空欄は「空」という値として突き合わせる。見出しに無いときは残りの鍵で突き合わせ、
+   * 当てはまる行が2つ以上あればその行はエラーにする（どの行を直すか決められないため）。
+   */
+  optionalKeyFields?: string[];
   columns: CsvColumn[];
   /**
-   * 有効→無効（使わない）にするのに要る権限。画面の「使わない」と同じにする（2026-10-12 受入 No.3 D-2）。
-   * 既定は delete。区分値は画面の「使わない」が update で動くので update。
+   * 有効→無効（非表示）にするのに要る権限（2026-10-12 受入 No.3 D-2）。
+   * 既定は update。2026-10-16 M3-02 で画面は編集画面の「表示／非表示」（更新の権限）になったので、CSV もそろえた
+   * （以前の既定は一覧の「使わない」と同じ delete）。
    */
   deactivateAction?: 'delete' | 'update';
   /**
@@ -125,6 +152,10 @@ export interface MasterCsvDef {
    * 返した欄は CSV に列が無くても書き込む。`touched` は CSV で値を変える欄。
    */
   complete?: (row: Record<string, unknown>, ctx: CsvRowContext & { touched: Set<string> }) => Record<string, unknown>;
+  /**
+   * complete で必ず埋める列。追加の行でも CSV に列が無くてよい（作業指示内容の名称をコードで埋める。M3-40）。
+   */
+  filled?: readonly string[];
   /** 鍵のほかに、重なってはいけない欄の組（空欄は数えない） */
   unique?: string[][];
   /** 一覧で編集・書き出しを絞る欄（区分値のカテゴリーなど）。URL の scope にコードを渡す */
@@ -192,6 +223,8 @@ const SIMPLE_EXTRA: Record<string, CsvColumn[]> = {
   ],
   // 本文は空でもよい（画面の登録も空で通る）。データベースでは空欄にできないので空の文字で持つ（2026-10-12 受入 No.3 D-4）
   work_instructions: [{ field: 'instruction_body', label: '指示内容', blankAsEmpty: true }],
+  // 商品分類のブランド。商品の登録でブランドを選ぶと、そのブランドの分類（と未設定の分類）だけを候補に出す（M3-18・M3-42）
+  product_classes: [{ field: 'brand_id', label: 'ブランドコード', ref: { table: 'brands', codeColumn: 'code', label: 'ブランド' } }],
 };
 
 const SIMPLE_LABELS: Record<string, string> = {
@@ -216,12 +249,14 @@ const simpleDef = (table: string): MasterCsvDef => ({
   keyFields: ['code'],
   columns: [
     textCode('code', 'コード', { readOnly: true }),
-    { field: 'name', label: '名称' },
+    // 作業指示内容は「名称」を使わない（コードと本文だけ。2026-10-16 マスター編3 M3-40）。名称はコードで埋める
+    ...(table === 'work_instructions' ? [] : [{ field: 'name', label: '名称' }]),
     ...(SIMPLE_EXTRA[table] ?? []),
     SORT,
     NOTE,
     ACTIVE,
   ],
+  ...(table === 'work_instructions' ? { complete: (row: Record<string, unknown>) => ({ name: row.code }), filled: ['name'] } : {}),
 });
 
 /* ---------- それぞれのマスタ ---------- */
@@ -232,38 +267,36 @@ const PARTNERS: MasterCsvDef = {
   label: '取引先',
   functionId: 'M-01',
   keyFields: ['partner_code'],
+  // 並びは取引先の編集画面と同じ（2026-10-16 マスター編_3 M3-12）。
+  // 取引先カテゴリー・通貨は取引先マスタでは扱わない（M3-08・M3-09。データベースの値はそのまま残る）
   columns: [
     textCode('partner_code', '取引先コード', { readOnly: true }),
-    { field: 'name1', label: '取引先名' },
-    { field: 'name2', label: '取引先名2' },
-    { field: 'short_name', label: '略称' },
     { field: 'is_customer', label: '得意先', kind: 'bool' },
     { field: 'is_supplier', label: '仕入先', kind: 'bool' },
-    // 海外の取引先。消費税の扱い（免税／課税対象外）はシステム設定 OVERSEAS_TAX_TREATMENT で決める（2026-10-09 マスター編②）
-    { field: 'is_overseas', label: '海外', kind: 'bool' },
-    // 取引通貨（区分値 CURRENCY のコード）。受注・請求・入金はこの通貨で作る（2026-10-12 No.39）
-    { field: 'currency', label: '通貨' },
-    { field: 'media_id', label: '媒体コード', ref: ref('media', '媒体') },
-    // 1取引先に複数のカテゴリー（1001 ご要望 No.8）。「Q1TV、Q1CAT」のように区切って1欄に書く。先頭が代表
+    { field: 'is_royalty_payee', label: 'ロイヤリティ支払先', kind: 'bool' },
+    { field: 'name1', label: '取引先名', aliases: ['名称①', '名称1'] },
+    { field: 'name2', label: '取引先名2', aliases: ['名称②', '名称2'] },
+    { field: 'short_name', label: '略称' },
+    // 消費税免税区分（M3-07）。空欄＝なし（国内）。選ぶと海外の取引先として税を 0 にする（complete で is_overseas をそろえる）
     {
-      field: 'partner_category_id',
-      label: '取引先カテゴリーコード',
-      ref: ref('partner_categories', '取引先カテゴリー'),
-      multi: { linkTable: 'partner_category_links', ownerColumn: 'partner_id', refColumn: 'partner_category_id' },
+      field: 'overseas_tax_treatment',
+      label: '消費税免税区分',
+      options: OVERSEAS_TAX_TREATMENTS,
+      optionsLabel: `${OVERSEAS_TAX_LABEL.exempt}・${OVERSEAS_TAX_LABEL.non_taxable}（空欄はなし）`,
+      valueLabels: OVERSEAS_TAX_LABEL,
     },
+    // 粗利調整販社（区分値 GROSS_MARGIN_ADJUST：TARGET＝対象／NOT_TARGET＝対象外。M3-10）
+    { field: 'gross_margin_adjust_code_id', label: '粗利調整販社', ref: codeRef('GROSS_MARGIN_ADJUST', '粗利調整販社') },
     { field: 'sales_staff_id', label: '販売担当コード', ref: ref('sales_staff', '販売担当') },
-    { field: 'division_code_id', label: '区分', ref: codeRef('PARTNER_DIVISION', '区分') },
-    { field: 'division2_code_id', label: '区分2', ref: codeRef('PARTNER_DIVISION2', '区分2') },
-    { field: 'invoice_registration_no', label: 'インボイス登録番号' },
-    { field: 'invoice_addressee', label: '請求書の宛名' },
-    { field: 'invoice_contact_name', label: '請求書の担当者名' },
-    { field: 'invoice_note', label: '請求書の備考' },
+    { field: 'default_trade_type', label: '取引区分', options: TRADE_TYPE_OPTIONS },
+    { field: 'media_id', label: '媒体コード', ref: ref('media', '媒体') },
     { field: 'shipping_fee_threshold', label: '送料無料になる金額', kind: 'decimal', min: 0 },
     { field: 'shipping_fee_amount', label: '送料', kind: 'decimal', min: 0 },
-    { field: 'default_trade_type', label: '取引区分', options: TRADE_TYPE_OPTIONS },
-    { field: 'is_royalty_payee', label: 'ロイヤリティ支払先', kind: 'bool' },
+    { field: 'division_code_id', label: '区分', ref: codeRef('PARTNER_DIVISION', '区分') },
+    { field: 'division2_code_id', label: '区分2', ref: codeRef('PARTNER_DIVISION2', '区分2') },
     // 締め日・支払は編集画面の選択肢だけを受ける（2026-10-12 受入 No.2・No.6）
     { field: 'closing_day', label: '締め日', kind: 'number', options: DAY_OPTIONS, optionsLabel: DAY_OPTIONS_LABEL },
+    { field: 'invoice_registration_no', label: 'インボイス登録番号' },
     {
       field: 'payment_month_offset',
       label: '支払月（何ヶ月後）',
@@ -272,28 +305,46 @@ const PARTNERS: MasterCsvDef = {
       optionsLabel: PAYMENT_MONTH_OPTIONS_LABEL,
     },
     { field: 'payment_day', label: '支払日', kind: 'number', options: DAY_OPTIONS, optionsLabel: DAY_OPTIONS_LABEL },
+    // 支払②・入金方法①②・請求書送付方法（M3-11）。登録・表示だけで、支払予定日は支払①で決める
+    {
+      field: 'payment_month_offset2',
+      label: '支払②の月（何ヶ月後）',
+      kind: 'number',
+      options: PAYMENT_MONTH_OPTIONS,
+      optionsLabel: PAYMENT_MONTH_OPTIONS_LABEL,
+    },
+    { field: 'payment_day2', label: '支払②の日', kind: 'number', options: DAY_OPTIONS, optionsLabel: DAY_OPTIONS_LABEL },
+    { field: 'receipt_method1_code_id', label: '入金方法①', ref: codeRef('RECEIPT_METHOD', '入金方法') },
+    { field: 'receipt_method2_code_id', label: '入金方法②', ref: codeRef('RECEIPT_METHOD', '入金方法') },
+    { field: 'invoice_send_method_code_id', label: '請求書送付方法', ref: codeRef('INVOICE_SEND_METHOD', '請求書送付方法') },
+    { field: 'invoice_note', label: '請求書の備考' },
+    { field: 'invoice_addressee', label: '請求書の宛名' },
+    { field: 'invoice_contact_name', label: '請求書の担当者名' },
     textCode('postal_code', '郵便番号'),
-    { field: 'address1', label: '住所1' },
-    { field: 'address2', label: '住所2' },
     textCode('tel', '電話番号'),
     textCode('fax', 'FAX'),
+    { field: 'address1', label: '住所1' },
+    { field: 'address2', label: '住所2' },
+    { field: 'invoice_email', label: '請求書送付先メールアドレス' },
     SORT,
     NOTE,
     ACTIVE,
   ],
-  // データベースの決まり ck_partners_role と同じ。確定で弾かれる前に下見で止める
-  rowCheck: (row, ctx) => [
+  // 消費税免税区分を変えた行は「海外」をそろえる（なし＝国内）。画面・API と同じ（M3-07）
+  complete: (row, ctx) =>
+    ctx.touched.has('overseas_tax_treatment') ? { is_overseas: row.overseas_tax_treatment !== null && row.overseas_tax_treatment !== undefined } : {},
+  rowCheck: (row) => [
+    // データベースの決まり ck_partners_role と同じ。確定で弾かれる前に下見で止める
     ...(row.is_customer || row.is_supplier ? [] : ['得意先・仕入先：どちらかを「有効」にしてください']),
-    // 通貨は英大文字3文字のコード（区分値 CURRENCY。2026-10-12 No.39）。新しい行の空欄は円（JPY）になる
-    ...(row.currency === undefined || (row.currency === null && ctx.isNew) || /^[A-Z]{3}$/.test(String(row.currency ?? ''))
-      ? []
-      : ['通貨：英大文字3文字のコードで入力してください（円は JPY、米ドルは USD）']),
-    // 区分値に無い通貨は、取引先の画面と同じく断る（3回目の全面テスト。「XYZ」が入り、受注も XYZ で作られていた）
-    ...(typeof row.currency === 'string' && /^[A-Z]{3}$/.test(row.currency) && !ctx.currencies.has(row.currency)
-      ? [`通貨：「${row.currency}」は登録されていません。「分類・区分・設定」の「通貨」タブで足してから入れてください`]
+    // 請求書送付先メールアドレスの形（画面・API と同じ）
+    ...(typeof row.invoice_email === 'string' && row.invoice_email !== '' && !EMAIL_RE.test(row.invoice_email)
+      ? ['請求書送付先メールアドレス：メールアドレスの形が正しくありません']
       : []),
   ],
 };
+
+/** メールアドレスのおおまかな形（zod の email と同じ程度） */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const DESTINATIONS: MasterCsvDef = {
   slug: 'delivery-destinations',
@@ -330,19 +381,22 @@ const PRODUCTS: MasterCsvDef = {
   functionId: 'M-08',
   keyFields: ['product_code'],
   columns: [
-    textCode('product_code', '商品コード', { readOnly: true }),
+    // 見出しは画面の呼び方「品番（商品分類コード）」（M3-16。2026-10-18 受入 W2 で CSV もそろえた）。
+    // 前の見出し「商品コード」（この CSV では品番を指していた）と「品番」でも読む
+    textCode('product_code', '品番（商品分類コード）', { readOnly: true, aliases: ['品番', '商品コード'] }),
     { field: 'product_name', label: '商品名' },
     { field: 'set_product_name', label: 'セット商品名' },
     { field: 'brand_id', label: 'ブランドコード', ref: ref('brands', 'ブランド') },
     { field: 'category_id', label: 'カテゴリーコード', ref: ref('categories', 'カテゴリー') },
     { field: 'product_class_id', label: '商品分類コード', ref: ref('product_classes', '商品分類') },
     { field: 'carton_qty', label: '入数', kind: 'number', min: 0 },
-    // 原価は SENSITIVE の権限がある人にだけ出す。権限がなければ列ごと出さない
-    { field: 'cost_price', label: '原価', kind: 'decimal', sensitive: true },
-    { field: 'old_cost_price', label: '旧原価', kind: 'decimal', sensitive: true },
-    { field: 'is_cost_undecided', label: '原価未定', kind: 'bool', sensitive: true },
+    // 原価・旧原価は SKU ごとに持つ（2026-10-18 マスター編_3 M3-19）。商品の原価は SKU の CSV で直す。
+    // 今までの CSV に「原価」「旧原価」「原価未定」の列があっても、知らない見出しとして読み飛ばす
     { field: 'tax_rate', label: '税率', kind: 'decimal', options: TAX_OPTIONS, optionsLabel: '0・8・10' },
     { field: 'is_set', label: 'セット商品', kind: 'bool' },
+    // ロイヤリティ区分（機械／機械以外）・下代調整対象（M3-23）。今は登録・表示・CSV のみで、計算には使わない（M3-24 確認中）
+    { field: 'royalty_class_code_id', label: 'ロイヤリティ区分', ref: codeRef('ROYALTY_CLASS', 'ロイヤリティ区分') },
+    { field: 'is_wholesale_adjust_target', label: '下代調整対象', kind: 'bool', boolLabels: ['対象', '対象外'] },
     SORT,
     NOTE,
     ACTIVE,
@@ -355,9 +409,18 @@ const SKUS: MasterCsvDef = {
   label: 'SKU',
   functionId: 'M-09',
   keyFields: ['sku_code'],
+  // 前の書式（見出しに「SKUコード」がある CSV）では、「商品コード」は品番を指す。前に書き出した CSV もそのまま読める
+  legacyHeaders: { marker: 'SKUコード', labels: { SKUコード: 'sku_code', 商品コード: 'product_id' } },
   columns: [
-    textCode('sku_code', 'SKUコード', { readOnly: true }),
-    { field: 'product_id', label: '商品コード', ref: ref('products', '商品', 'product_code') },
+    // 見出しは画面の呼び方にそろえる。SKU コード＝「商品コード」、商品の品番＝「品番（商品分類コード）」
+    // （M3-16。2026-10-18 受入 W2）。前の見出しは legacyHeaders で読み分ける
+    textCode('sku_code', '商品コード', { readOnly: true }),
+    {
+      field: 'product_id',
+      label: '品番（商品分類コード）',
+      ref: ref('products', '商品', 'product_code'),
+      aliases: ['品番'],
+    },
     // SKU ごとの商品名。空なら商品の商品名を使う（2026-10-09 マスター編②）
     { field: 'sku_name', label: 'SKUの商品名' },
     { field: 'color_id', label: 'カラーコード', ref: ref('colors', 'カラー') },
@@ -369,6 +432,8 @@ const SKUS: MasterCsvDef = {
     textCode('shop_product_code', 'ショップ商品コード'),
     // サイズ別の原価。空欄なら商品の原価を使う（1001 ご要望）
     { field: 'cost_price', label: '原価', kind: 'decimal', sensitive: true },
+    // 旧原価も SKU ごと（2026-10-18 マスター編_3 M3-19）
+    { field: 'old_cost_price', label: '旧原価', kind: 'decimal', sensitive: true },
     SORT,
     NOTE,
     ACTIVE,
@@ -380,12 +445,16 @@ const PARTNER_PRODUCTS: MasterCsvDef = {
   table: 'partner_products',
   label: '得意先別商品',
   functionId: 'M-11',
-  // 1つの取引先に同じ SKU は1件まで。この2つで突き合わせる
-  keyFields: ['partner_id', 'sku_id'],
+  // 同じ取引先・同じ SKU で、先方コード・単価の違う行を複数持てる（2026-10-16 マスター編_3 M3-26）。
+  // 行は 取引先＋SKU＋先方の商品コード で突き合わせる。先方の商品コードが空の行は 取引先＋SKU ごとに1つまで
+  // （画面・API でも同じ決まり）。先方の商品コードの列が無い CSV は、取引先＋SKU の行が1つのときだけ直せる
+  keyFields: ['partner_id', 'sku_id', 'partner_product_code'],
+  optionalKeyFields: ['partner_product_code'],
   columns: [
     { field: 'partner_id', label: '取引先コード', ref: ref('partners', '取引先', 'partner_code'), readOnly: true },
     { field: 'sku_id', label: 'SKUコード', ref: ref('skus', 'SKU', 'sku_code'), readOnly: true },
-    textCode('partner_product_code', '先方の商品コード'),
+    // 行を見分ける鍵なので、CSV・一覧で編集では書き換えない（変えるときは編集画面で）
+    textCode('partner_product_code', '先方の商品コード', { readOnly: true }),
     { field: 'partner_jan', label: '先方JAN', kind: 'digits' },
     { field: 'shipping_jan', label: '出荷JAN', kind: 'digits' },
     { field: 'sales_name', label: '販売名' },
@@ -394,11 +463,10 @@ const PARTNER_PRODUCTS: MasterCsvDef = {
     { field: 'old_unit_price', label: '旧単価', kind: 'decimal' },
     { field: 'price_changed_date', label: '単価変更日', kind: 'date' },
     { field: 'retail_price', label: '上代', kind: 'decimal' },
-    { field: 'cost_price', label: '原価', kind: 'decimal', sensitive: true },
+    // 原価・メモは使わない（2026-10-16 マスター編_3 M3-28「得意先別原価はない」「メモ不要」）。列はデータベースに残す
     textCode('partner_color', '先方カラー'),
     textCode('partner_size', '先方サイズ'),
     { field: 'product_class_id', label: '商品分類コード', ref: ref('product_classes', '商品分類') },
-    { field: 'memo', label: 'メモ' },
     SORT,
     NOTE,
     ACTIVE,

@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { api } from '@/lib/api';
-import { OrderForm, emptyOrder, emptyLine, type OrderDraft } from '@/components/orders/OrderForm';
+import { OrderForm, emptyOrder, emptyLine, partnerProductNote, type OrderDraft } from '@/components/orders/OrderForm';
 import { ErrorBox, Loading } from '@/components/ui';
 
 interface OrderDetail {
@@ -15,6 +15,8 @@ interface OrderDetail {
   partner_code: string;
   partner_name: string;
   partner_is_overseas?: boolean;
+  /** 海外の得意先の消費税の表記（取引先の消費税免税区分、無ければシステム設定。2026-10-16 M3-07） */
+  overseas_tax_label?: string | null;
   /** 受注の通貨（取引先の通貨で固定。2026-10-12 No.39） */
   currency?: string;
   delivery_destination_id: number | null;
@@ -40,6 +42,11 @@ interface OrderDetail {
     line_type: OrderDraft['lines'][number]['line_type'] | '内訳商品';
     sku_id: number | null;
     sku_code: string | null;
+    // 明細が使った得意先別商品の行（同じ SKU に複数あるときに選んだ行。2026-10-16 マスター編_3 M3-26）
+    partner_product_id: number | null;
+    partner_product_code: string | null;
+    partner_jan: string | null;
+    shipping_jan: string | null;
     item_name: string;
     qty: string;
     unit_price: string;
@@ -63,7 +70,7 @@ export default function EditOrderPage() {
         setDraft({
           ...base,
           order_type: o.order_type,
-          partner: { id: o.partner_id, label: o.partner_name, sub: o.partner_code, raw: { id: o.partner_id, is_overseas: o.partner_is_overseas ?? false, currency: o.currency ?? 'JPY' } },
+          partner: { id: o.partner_id, label: o.partner_name, sub: o.partner_code, raw: { id: o.partner_id, is_overseas: o.partner_is_overseas ?? false, overseas_tax_label: o.overseas_tax_label ?? null, currency: o.currency ?? 'JPY' } },
           delivery_destination_id: o.delivery_destination_id ? String(o.delivery_destination_id) : '',
           sales_category_id: String(o.sales_category_id),
           trade_type: o.trade_type,
@@ -91,6 +98,9 @@ export default function EditOrderPage() {
             qty: l.qty,
             unit_price: l.unit_price,
             tax_rate: Number(l.tax_rate).toFixed(2),
+            // 使っていた得意先別商品の行と、その先方コード・出荷JAN の補足（入力画面と同じ表示）
+            partner_product_id: l.sku_id ? l.partner_product_id : null,
+            note: l.sku_id && l.partner_product_id ? partnerProductNote(l) : undefined,
           })),
         });
       })

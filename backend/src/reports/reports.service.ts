@@ -365,7 +365,8 @@ export class ReportsService {
         // 海外の得意先は消費税 0。請求書（締め）と同じく、明細の税率にかかわらず 0 にし、
         // 扱い（免税（税抜扱い）／課税対象外）を請求書と同じ言い方で書く（2026-10-12 受入テスト M-02）。
         // 海外の印を付ける前に 10% で登録した受注でも、請求書と金額が食い違わないようにするため。
-        const overseasLabel = sh.partner_is_overseas ? await this.settings.overseasTaxLabel() : null;
+        // どちらで書くかは取引先の消費税免税区分、空ならシステム設定（2026-10-16 マスター編_3 M3-07）
+        const overseasLabel = sh.partner_is_overseas ? await this.settings.overseasTaxLabel(sh.partner_overseas_tax_treatment) : null;
         const tax = overseasLabel ? 0 : await this.taxOf(lines, sh.currency);
         if (overseasLabel) doc.line(`消費税　${overseasLabel}`);
         doc.totals([
@@ -410,6 +411,11 @@ export class ReportsService {
         'p.invoice_contact_name as invoice_contact_name',
         // 海外の得意先は消費税 0 で締めてある。税の欄に免税／課税対象外と書くために使う（2026-10-09 マスター編②）
         'p.is_overseas as is_overseas',
+        // 免税（税抜扱い）か課税対象外か。取引先ごと（空ならシステム設定。2026-10-16 マスター編_3 M3-07）
+        'p.overseas_tax_treatment as overseas_tax_treatment',
+        // 消費税免税区分のある取引先は、未計上・調整を税率で分けずに1行で出す（下の totals）
+        sql<string>`(iv.unposted_10 + iv.unposted_8)::text`.as('unposted_total'),
+        sql<string>`(iv.adjust_10 + iv.adjust_8)::text`.as('adjust_total'),
       ])
       .where('iv.id', 'in', invoiceIds)
       .orderBy('iv.invoice_no')
@@ -418,19 +424,18 @@ export class ReportsService {
     if (headers.length === 0) throw new NotFoundException('請求書が見つかりません');
 
     const printIssueDate = await this.settings.bool('INVOICE_PRINT_ISSUE_DATE', false);
-    // 海外の得意先の税の表記。設定 OVERSEAS_TAX_TREATMENT で選ぶ（税額はどちらも 0）。
-    const overseasTaxLabel =
-      (await this.settings.text('OVERSEAS_TAX_TREATMENT', 'exempt')) === 'non_taxable' ? '課税対象外' : '免税（税抜扱い）';
     const company = await this.company();
     const doc = new ReportDoc('請求書');
 
     for (const [i, iv] of headers.entries()) {
       if (i > 0) doc.newPage();
+      // 海外の得意先の税の表記（税額はどちらも 0）。取引先の消費税免税区分、空ならシステム設定 OVERSEAS_TAX_TREATMENT
+      const overseasTaxLabel = await this.settings.overseasTaxLabel(iv.overseas_tax_treatment);
 
       const [lines, taxes] = await Promise.all([
         this.db
           .selectFrom('invoice_lines')
-          .select(['line_no', 'item_name', 'qty', 'unit_price', 'tax_rate', 'amount'])
+          .select(['line_no', 'item_name', 'qty', 'unit_price', 'tax_rate', 'amount', 'shipment_id', 'return_id'])
           .where('invoice_id', '=', iv.id)
           .orderBy('line_no')
           .execute(),
@@ -501,15 +506,25 @@ export class ReportsService {
         ['繰越残高', amountWithCode(iv.carryover_balance, iv.currency)],
         ['出荷', amountWithCode(iv.shipment_amount, iv.currency)],
         ['返品額', amountWithCode(iv.return_amount, iv.currency)],
-        ['未計上10%', amountWithCode(iv.unposted_10, iv.currency)],
-        ['未計上8%', amountWithCode(iv.unposted_8, iv.currency)],
-        ['調整10%', amountWithCode(iv.adjust_10, iv.currency)],
-        ['調整8%', amountWithCode(iv.adjust_8, iv.currency)],
+        // 消費税免税区分のある取引先（税率はすべて 0）は、10%・8% の行を出さず「未計上（免税（税抜扱い））」の形で1行にする
+        // （2026-10-18 受入 W1 N7。上の税率別の内訳・「消費税　免税（税抜扱い）」と表記をそろえる）
+        ...((iv.is_overseas
+          ? [
+              [`未計上（${overseasTaxLabel}）`, amountWithCode(iv.unposted_total, iv.currency)],
+              [`調整（${overseasTaxLabel}）`, amountWithCode(iv.adjust_total, iv.currency)],
+            ]
+          : [
+              ['未計上10%', amountWithCode(iv.unposted_10, iv.currency)],
+              ['未計上8%', amountWithCode(iv.unposted_8, iv.currency)],
+              ['調整10%', amountWithCode(iv.adjust_10, iv.currency)],
+              ['調整8%', amountWithCode(iv.adjust_8, iv.currency)],
+            ]) as [string, string][]),
         ['手数料', amountWithCode(iv.fee_amount, iv.currency)],
         ['送料', amountWithCode(iv.shipping_fee_amount, iv.currency)],
         ['当月請求額', amountWithCode(iv.current_invoice_amount, iv.currency)],
         ['今回請求残高', amountWithCode(iv.current_balance, iv.currency)],
-      ]);
+        // 消費税免税区分のある取引先は「未計上（免税（税抜扱い））」が長いので、項目名の欄を広げて1行に収める
+      ], iv.is_overseas ? 160 : 120);
 
       if (lines.length > 0) {
         doc.y += 6;
@@ -523,11 +538,13 @@ export class ReportsService {
             { label: '税率', width: 40, align: 'center' },
             { label: '金額', width: 82, align: 'right' },
           ],
+          // 出荷・返品の明細は1出荷（×税率）の合計なので単価は持たない（締めで 0 を入れてある）。0 と印字すると
+          // 単価 0 円で売ったように読めるため空欄にする（2026-10-18 受入 W1 N7。金額・請求額は正しい）。
           lines.map((l) => [
             l.line_no,
             l.item_name,
             qty(l.qty),
-            amountIn(l.unit_price, iv.currency),
+            (l.shipment_id !== null || l.return_id !== null) && Number(l.unit_price) === 0 ? '' : amountIn(l.unit_price, iv.currency),
             `${Number(l.tax_rate)}%`,
             amountIn(l.amount, iv.currency),
           ]),
@@ -592,6 +609,7 @@ export class ReportsService {
         'wi.instruction_body as work_instruction_body',
         // 海外の得意先は納品書の消費税を 0 にする（請求書と同じ扱い）
         'p.is_overseas as partner_is_overseas',
+        'p.overseas_tax_treatment as partner_overseas_tax_treatment',
         // 受注の通貨（取引先の通貨で固定。2026-10-12 No.39）。納品書の金額に添える
         'o.currency as currency',
         'dr.name as delivery_rule',
@@ -608,28 +626,34 @@ export class ReportsService {
 
   /**
    * 上代（9/15 ご回答：得意先別商品マスタに置く）。
-   * 明細が得意先別商品を指していればそれを、指していなければ取引先×SKU で引く。
+   * 明細が得意先別商品を指していればその行だけを、指していなければ取引先×SKU で引く（表示の行を先に、いちばん古い行。非表示の行は表示の行が無いときだけ）。
+   * 同じ SKU に行が複数あるとき（2026-10-16 マスター編_3 M3-26）、受注で選んだ行の上代が空でも
+   * 別の行の上代を出さない。
    */
   private retailPriceExpr(lineAlias: string, orderAlias: string) {
-    return sql<string | null>`coalesce(
-      (select pp.retail_price from partner_products pp where pp.id = ${sql.ref(`${lineAlias}.partner_product_id`)}),
-      (select pp2.retail_price from partner_products pp2
+    const ppId = sql.ref(`${lineAlias}.partner_product_id`);
+    return sql<string | null>`case when ${ppId} is not null
+      then (select pp.retail_price from partner_products pp where pp.id = ${ppId})
+      else (select pp2.retail_price from partner_products pp2
         where pp2.partner_id = ${sql.ref(`${orderAlias}.partner_id`)} and pp2.sku_id = ${sql.ref(`${lineAlias}.sku_id`)}
-        order by pp2.id limit 1))`;
+        order by pp2.is_active desc, pp2.id limit 1) end`;
   }
 
   /**
    * 出荷系帳票に印字する JAN（2026-10-09 マスター編② M-18「出荷JANが空欄ならコニーJAN」）。
    * 得意先別商品の出荷JAN → SKU の JAN の順。得意先別商品は上代と同じく、明細が指していれば
-   * それを、指していなければ取引先×SKU で引く。空白だけの出荷JANは空とみなす。
+   * その行だけを、指していなければ取引先×SKU で引く。空白だけの出荷JANは空とみなす。
+   * 受注で選んだ行の出荷JANが空なら、同じ SKU の別の行ではなく SKU の JAN を出す（M3-26）。
    */
   private shippingJanExpr(lineAlias: string, orderAlias: string, skuAlias: string) {
+    const ppId = sql.ref(`${lineAlias}.partner_product_id`);
     return sql<string | null>`coalesce(
-      (select nullif(btrim(pp.shipping_jan), '') from partner_products pp where pp.id = ${sql.ref(`${lineAlias}.partner_product_id`)}),
-      (select nullif(btrim(pp2.shipping_jan), '') from partner_products pp2
-        where pp2.partner_id = ${sql.ref(`${orderAlias}.partner_id`)} and pp2.sku_id = ${sql.ref(`${lineAlias}.sku_id`)}
-          and nullif(btrim(pp2.shipping_jan), '') is not null
-        order by pp2.id limit 1),
+      case when ${ppId} is not null
+        then (select nullif(btrim(pp.shipping_jan), '') from partner_products pp where pp.id = ${ppId})
+        else (select nullif(btrim(pp2.shipping_jan), '') from partner_products pp2
+          where pp2.partner_id = ${sql.ref(`${orderAlias}.partner_id`)} and pp2.sku_id = ${sql.ref(`${lineAlias}.sku_id`)}
+            and nullif(btrim(pp2.shipping_jan), '') is not null
+          order by pp2.is_active desc, pp2.id limit 1) end,
       ${sql.ref(`${skuAlias}.jan`)})`;
   }
 

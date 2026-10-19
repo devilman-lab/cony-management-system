@@ -108,6 +108,8 @@ export class AmazonImportService {
         .select(['partner_product_code', 'sku_id'])
         .where('partner_id', '=', partner.id)
         .where('partner_product_code', 'in', skuCodes)
+        // 非表示にした得意先別商品は読み替えに使わない（2026-10-18 受入 W1 N8。販社CSV取込と同じ）
+        .where('is_active', '=', true)
         .execute();
       for (const f of found) {
         if (f.partner_product_code) mapping.set(f.partner_product_code, f.sku_id);

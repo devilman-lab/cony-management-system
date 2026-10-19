@@ -173,13 +173,103 @@ export class MastersCrudService {
     } catch (e) {
       // 23503 ＝ 外部キー違反。どこかの伝票・マスタから使われている。
       if ((e as { code?: string }).code === '23503') {
+        // どこで使われているかを出す（2026-10-16 マスター編3 M3-39「使われていれば理由を出して断る」）
+        const where = await this.usages(table, id).catch(() => '');
         throw new ConflictException(
-          `この${label}はすでに伝票などで使われているため、削除できません。` +
-            `一覧から外したいときは「使わない」をお使いください`,
+          (where ? `この${label}は次で使われているため削除できません：${where}。` : `この${label}はすでに伝票などで使われているため、削除できません。`) +
+            `一覧や選択肢から外したいときは、編集画面で「非表示」にしてください`,
         );
       }
       throw e;
     }
     return { id, deleted: true };
   }
+
+  /**
+   * どこで何件使われているか（「取引先 3件、受注 2件」の形）。削除を断るときの理由に使う。
+   *
+   * 参照元は外部キーの定義（pg_constraint）から拾う（products.service.ts の usages と同じ考え方）。
+   * 消すと一緒に消える参照（ON DELETE CASCADE・SET NULL・SET DEFAULT）は数えない。
+   */
+  async usages(table: WritableTable, id: number): Promise<string> {
+    const fks = await sql<{ table_name: string; column_name: string }>`
+      select cl.relname as table_name, a.attname as column_name
+        from pg_constraint c
+        join pg_class cl on cl.oid = c.conrelid
+        join pg_class rf on rf.oid = c.confrelid
+        join pg_namespace n on n.oid = rf.relnamespace
+        join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+       where c.contype = 'f'
+         and rf.relname = ${table}
+         and n.nspname = current_schema()
+         and array_length(c.conkey, 1) = 1
+         and c.confdeltype not in ('c', 'n', 'd')
+       order by cl.relname, a.attname`.execute(this.db);
+
+    const counts = new Map<string, number>();
+    for (const fk of fks.rows) {
+      // 表・列の名前はデータベースの定義から取ったもの。利用者の入力は値としてのみ渡る
+      const r = await sql<{ n: number }>`
+        select count(*)::int as n from ${sql.table(fk.table_name)} where ${sql.ref(fk.column_name)} = ${id}`.execute(this.db);
+      const n = Number(r.rows[0]?.n ?? 0);
+      if (n === 0) continue;
+      const name = TABLE_LABELS[fk.table_name] ?? fk.table_name;
+      counts.set(name, (counts.get(name) ?? 0) + n);
+    }
+    return [...counts].map(([name, n]) => `${name} ${n}件`).join('、');
+  }
 }
+
+/**
+ * 参照元の表の呼び名（削除を断る理由に出す）。載っていない表は表の名前のまま出す。
+ * 見出しと明細は同じ呼び名にする（「受注 3件」のように、利用者には1つの伝票に見えるため）。
+ */
+const TABLE_LABELS: Record<string, string> = {
+  allocations: '引当（出荷）',
+  ap_ledgers: '買掛',
+  ar_ledgers: '売掛',
+  cash_payments: '支払',
+  cash_receipts: '入金',
+  cash_transactions: '入出金',
+  codes: '区分値',
+  delivery_destinations: '納品先',
+  external_order_lines: '受注取込',
+  external_orders: '受注取込',
+  import_templates: '取込の設定',
+  invoice_lines: '請求書',
+  invoices: '請求書',
+  partner_category_links: '取引先',
+  partner_product_prices: '得意先別商品',
+  partner_products: '得意先別商品',
+  partners: '取引先',
+  platform_transactions: 'Amazon 取引取込',
+  product_classes: '商品分類',
+  products: '商品',
+  purchase_items: '仕入項目',
+  purchase_lines: '仕入',
+  purchases: '仕入',
+  receipt_lines: '入荷',
+  receipts: '入荷',
+  refurbishments: '再生',
+  reservation_groups: '引当在庫',
+  reservations: '引当在庫',
+  return_lines: '返品',
+  returns: '返品',
+  royalty_calculation_lines: 'ロイヤリティ計算',
+  royalty_calculations: 'ロイヤリティ計算',
+  royalty_rules: 'ロイヤリティ規定',
+  sales_order_lines: '受注',
+  sales_orders: '受注',
+  sales_schedules: '販売予定',
+  set_components: 'セット登録',
+  set_headers: 'セット登録',
+  shipment_lines: '出荷',
+  shipments: '出荷',
+  skus: 'SKU',
+  stock_adjustment_lines: '在庫調整',
+  stock_adjustments: '在庫調整',
+  stock_movements: '在庫の動き',
+  stocks: '在庫表',
+  users: '利用者',
+  warehouses: '倉庫',
+};

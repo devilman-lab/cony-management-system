@@ -344,6 +344,17 @@ CREATE TABLE partners (
   closing_day                 SMALLINT,                      -- 締め日（99＝月末）
   payment_month_offset        SMALLINT,
   payment_day                 SMALLINT,
+  -- 支払②（2026-10-16 マスター編_3「支払日をもう1種」）。登録・表示だけで、支払予定日は支払①で決める
+  payment_month_offset2       SMALLINT,
+  payment_day2                SMALLINT,
+  -- 入金方法①②（区分値 RECEIPT_METHOD：振込・電子債権・その他）と請求書送付方法（区分値 INVOICE_SEND_METHOD）
+  receipt_method1_code_id     BIGINT REFERENCES codes(id),
+  receipt_method2_code_id     BIGINT REFERENCES codes(id),
+  invoice_send_method_code_id BIGINT REFERENCES codes(id),
+  invoice_email               VARCHAR(200),                  -- 請求書送付先メールアドレス
+  -- 消費税免税区分（2026-10-16 マスター編_3）。is_overseas の取引先の税の扱いを取引先ごとに決める。
+  -- exempt＝免税（税抜扱い）／non_taxable＝課税対象外。空ならシステム設定 OVERSEAS_TAX_TREATMENT
+  overseas_tax_treatment      VARCHAR(20),
   postal_code                 VARCHAR(8),
   address1                    VARCHAR(200),
   address2                    VARCHAR(200),
@@ -357,6 +368,9 @@ CREATE TABLE partners (
   CONSTRAINT ck_partners_role    CHECK (is_customer OR is_supplier),
   CONSTRAINT ck_partners_closing CHECK (closing_day IS NULL OR closing_day BETWEEN 1 AND 99),
   CONSTRAINT ck_partners_payday  CHECK (payment_day IS NULL OR payment_day BETWEEN 1 AND 99),
+  CONSTRAINT ck_partners_payday2 CHECK (payment_day2 IS NULL OR payment_day2 BETWEEN 1 AND 99),
+  CONSTRAINT ck_partners_overseas_tax CHECK (
+    overseas_tax_treatment IS NULL OR overseas_tax_treatment IN ('exempt','non_taxable')),
   CONSTRAINT ck_partners_shipfee CHECK (
     (shipping_fee_threshold IS NULL OR shipping_fee_threshold >= 0) AND
     (shipping_fee_amount    IS NULL OR shipping_fee_amount    >= 0)),
@@ -491,6 +505,8 @@ COMMENT ON TABLE categories IS 'カテゴリー';
 CREATE TABLE product_classes (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   code VARCHAR(40) NOT NULL UNIQUE, name VARCHAR(120) NOT NULL,
+  -- この分類のブランド。商品の登録でブランドを選ぶと、そのブランドの分類だけを候補に出す（2026-10-16）。空はどのブランドでも出す
+  brand_id BIGINT REFERENCES brands(id),
   sort_order INTEGER, is_active BOOLEAN NOT NULL DEFAULT true, note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id)
@@ -531,6 +547,9 @@ CREATE TABLE products (
   old_cost_price        money_amt,                        -- 旧原価。変更前の値を残す（1001 ご要望）
   is_cost_undecided     BOOLEAN     NOT NULL DEFAULT false,
   -- ロイヤリティは royalty_rules に一本化したため、商品側では持たない（v1.5）
+  -- ロイヤリティ区分（区分値 ROYALTY_CLASS：機械／機械以外）と下代調整対象（2026-10-16 マスター編_3）。登録・表示のみ
+  royalty_class_code_id BIGINT REFERENCES codes(id),
+  is_wholesale_adjust_target BOOLEAN NOT NULL DEFAULT false,
   tax_rate              tax_rate    NOT NULL DEFAULT 10.00,
   division_code_id      BIGINT REFERENCES codes(id),
   display_code_id       BIGINT REFERENCES codes(id),
@@ -561,6 +580,7 @@ CREATE TABLE skus (
   shop_product_code VARCHAR(60),
   -- このSKUだけの原価。空欄なら商品の原価を使う（大きいサイズだけ原価が違う。1001 ご要望）
   cost_price    money_amt,
+  old_cost_price money_amt,                    -- 旧原価（2026-10-16 マスター編_3。原価は SKU ごとに持つ）
   sort_order INTEGER,
   is_active  BOOLEAN NOT NULL DEFAULT true,
   note       TEXT,
@@ -665,13 +685,18 @@ CREATE TABLE partner_products (
   sort_order INTEGER,
   note       TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
-  UNIQUE (partner_id, sku_id)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id)
+  -- 同じ取引先・同じ SKU でも、先方コード・単価の違う行を複数持てる（2026-10-16 マスター編_3「複数単価・複数先方コードがある」）。
+  -- 以前は UNIQUE (partner_id, sku_id) で1行に限っていた。先方の商品コードは取引先の中で重ならない（下の索引）
 );
 COMMENT ON TABLE partner_products IS '取引先別商品。Amazon SKU 等の専用コード読み替えの中核';
 CREATE UNIQUE INDEX ux_partner_products_code
   ON partner_products (partner_id, partner_product_code)
   WHERE partner_product_code IS NOT NULL;
+-- 先方の商品コードが空の行は、取引先×SKU ごとに1つまで（どの行かを決められなくなるため。2026-10-18）
+CREATE UNIQUE INDEX ux_partner_products_nocode
+  ON partner_products (partner_id, sku_id)
+  WHERE partner_product_code IS NULL;
 
 -- (28) partner_product_prices 取引先別単価履歴
 CREATE TABLE partner_product_prices (
@@ -750,7 +775,7 @@ CREATE TABLE reservation_groups (
   period_to         DATE    NOT NULL,
   media_id          BIGINT  REFERENCES media(id),          -- 取引先が空のとき、この媒体の取引先の受注で減らす
   partner_id        BIGINT  REFERENCES partners(id),       -- 入っていれば、この取引先の受注で減らす
-  sales_category_id BIGINT  NOT NULL REFERENCES sales_categories(id),
+  sales_category_id BIGINT  REFERENCES sales_categories(id),   -- 空ならどの販売カテゴリーの受注でも減る（2026-10-16 在庫編_2）
   item_label        VARCHAR(60),                           -- 項目（楽楽販売の「集計」にあたる見出し）
   product_class_id  BIGINT  REFERENCES product_classes(id),
   note              TEXT,
@@ -766,7 +791,7 @@ CREATE TABLE reservations (
   group_id          BIGINT  REFERENCES reservation_groups(id) ON DELETE CASCADE,
   partner_id        BIGINT  REFERENCES partners(id),     -- 任意。空なら販売カテゴリー全体の枠（v1.7）。見出しと同じ値を持つ
   media_id          BIGINT  REFERENCES media(id),        -- 見出しと同じ値を持つ
-  sales_category_id BIGINT  NOT NULL REFERENCES sales_categories(id),
+  sales_category_id BIGINT  REFERENCES sales_categories(id),   -- 空ならどの販売カテゴリーの受注でも減る（2026-10-16 在庫編_2）
   sku_id            BIGINT  NOT NULL REFERENCES skus(id),
   period_from       DATE    NOT NULL,
   period_to         DATE    NOT NULL,
@@ -1342,7 +1367,7 @@ CREATE TABLE royalty_rules (
   customer_partner_id BIGINT REFERENCES partners(id),    -- 販売先。空欄＝すべての販売先
   media_id            BIGINT REFERENCES media(id),       -- 媒体。空欄＝すべての媒体（1001 ご要望）
   is_excluded         BOOLEAN     NOT NULL DEFAULT false,-- true＝この組み合わせは発生しない
-  calc_base           VARCHAR(20) NOT NULL DEFAULT '出荷',   -- 売上／出荷／入金
+  calc_base           VARCHAR(20) NOT NULL DEFAULT '売上',   -- 売上（＝請求月）／出荷／入金。2026-10-16 から画面では請求月に統一
   rate                NUMERIC(7,4),
   fixed_amount        money_amt,
   valid_from          DATE NOT NULL,

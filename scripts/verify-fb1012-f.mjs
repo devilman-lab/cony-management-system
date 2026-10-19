@@ -135,23 +135,14 @@ await check('No.39 閲覧者は取引先の通貨を変えられない（403）'
   const r = await call('PATCH', `/masters/partners/${usd.id}`, V, { currency: 'JPY' });
   return r.status === 403 || r.status;
 });
-await check('No.39 取引先 CSV の書き出しに「通貨」列がある', async () => {
+// 2026-10-16 マスター編_3（M3-09）「取引先マスタでの通貨設定は不要」: 取引先の画面・CSV から通貨の列を外した。
+// 取引先の通貨（partners.currency）と受注・請求の通貨の仕組みはそのまま（API では今までどおり直せる）
+await check('M3-09 取引先 CSV に「通貨」列が無く、書き出し・取込で取引先の通貨は変わらない', async () => {
   const csv = (await raw('/masters/csv/partners/export', A)).toString('utf8').replace(/^﻿/, '');
-  const lines = csv.split(/\r?\n/);
-  const head = lines[0].split(',').map((c) => c.replace(/^"|"$/g, ''));
-  const idx = head.indexOf('通貨');
-  const row = lines.find((x) => x.includes(usd.partner_code));
-  return (idx >= 0 && row?.includes('USD')) || { idx, row };
-});
-await check('No.39 取引先 CSV の取込で通貨を書き換えられ、英大文字3文字でない値は止まる', async () => {
-  const put = async (v, dry) => call('POST', '/masters/csv/partners/import', A, { content_base64: Buffer.from(`取引先コード,通貨\r\n${jpy.partner_code},${v}\r\n`, 'utf8').toString('base64'), dry_run: dry });
-  // 小文字の usd は3文字だが英大文字ではない（取込の行の決まりで止まる）
-  const bad = await put('usd', true);
-  const badRow = bad.body?.rows?.[0];
-  ok(await put('EUR', false), 'import');
-  const a = await one('select currency from partners where id = $1', [jpy.id]);
-  ok(await call('PATCH', `/masters/partners/${jpy.id}`, A, { currency: 'JPY' }), 'back');
-  return (a.currency === 'EUR' && badRow?.action === 'エラー' && /通貨/.test(badRow.message ?? '')) || { a, bad: bad.status, badRow };
+  const head = csv.split(/\r?\n/)[0].split(',').map((c) => c.replace(/^"|"$/g, ''));
+  const r = await call('POST', '/masters/csv/partners/import', A, { content_base64: Buffer.from(`取引先コード,略称\r\n${usd.partner_code},FF略称\r\n`, 'utf8').toString('base64'), dry_run: false });
+  const a = await one('select currency from partners where id = $1', [usd.id]);
+  return (!head.includes('通貨') && r.status < 300 && a.currency === 'USD') || { head, status: r.status, a };
 });
 
 // ---- 2. 受注の通貨 ---------------------------------------------------------------
@@ -396,7 +387,7 @@ await check('U3 N2 ロイヤリティ計算は外貨の売上を含めず、含�
   ok(await call('PATCH', `/masters/partners/${usd.id}`, A, { media_id: media.id }), 'usd media');
   ok(await call('PATCH', `/masters/partners/${jpy.id}`, A, { media_id: media.id }), 'jpy media');
   const payee = ok(await call('POST', '/masters/partners', A, { partner_code: `FFY${t}`, name1: `FF支払先${t}`, is_supplier: true, is_royalty_payee: true }), 'payee');
-  ok(await call('POST', '/masters/royalty-rules', A, { payee_partner_id: payee.id, media_id: media.id, rate: '0.0500', valid_from: `${month}-01` }), 'rule');
+  ok(await call('POST', '/masters/royalty-rules', A, { payee_partner_id: payee.id, media_id: media.id, rate: '0.0500', calc_base: '出荷', valid_from: `${month}-01` }), 'rule');
   const r = ok(await call('POST', '/billing/royalties/calculate', A, { target_month: month }), 'calc');
   const lines = (await db.query(
     `select l.customer_partner_id::int as c from royalty_calculation_lines l join royalty_calculations k on k.id = l.royalty_calculation_id

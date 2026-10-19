@@ -20,6 +20,8 @@ INSERT INTO code_categories (code, name, sort_order) VALUES
   ('PARTNER_DIVISION',       '取引先区分',          20),
   ('PARTNER_DIVISION2',      '取引先区分2',         21),
   ('GROSS_MARGIN_ADJUST',    '粗利調整対象',        22),
+  ('RECEIPT_METHOD',         '入金方法',            26),
+  ('INVOICE_SEND_METHOD',    '請求書送付方法',      27),
   ('MONTHLY_INVOICE',        '毎月請求書発行',      23),
   ('DIGITIZED',              '電子化',              24),
   ('SHIPPING_FEE_RULE',      '送料3万以下・直送',   25),
@@ -28,6 +30,7 @@ INSERT INTO code_categories (code, name, sort_order) VALUES
   ('SLIP_ISSUE_CLASS',       '伝票発行分類',        32),
   ('PRODUCT_DIVISION',       '商品区分',            40),
   ('PRODUCT_DISPLAY',        '商品表示',            41),
+  ('ROYALTY_CLASS',          'ロイヤリティ区分',    42),
   ('WAREHOUSE_DIVISION',     '倉庫区分',            50),
   ('TAX_DIVISION',           '税区分',              60),
   ('EXPENSE_DIVISION',       '経費区分',            61),
@@ -40,6 +43,9 @@ INSERT INTO code_categories (code, name, sort_order) VALUES
   ('CASH_TYPE',              '入出金種類',          70),
   ('PROCESS',                '処理',                71),
   ('ADJUSTMENT_REASON',      '在庫調整理由',        80);
+
+-- 費用区分は楽楽販売から引き継いだ器で、どこにも使っておらず値も無い（2026-10-16「費用区分と経費区分の違い？」）
+UPDATE code_categories SET is_active = false WHERE code = 'COST_DIVISION';
 
 -- ----------------------------------------------------------------------------
 -- 2. 区分値
@@ -69,6 +75,29 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
   ('TARGET',     '対象',   10),
   ('NOT_TARGET', '対象外', 20)
 ) AS v(code, name, so) WHERE code_categories.code = 'GROSS_MARGIN_ADJUST';
+
+-- 入金方法・請求書送付方法（2026-10-16 マスター編_3。取引先マスタの入金方法①②・請求書送付方法）
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('TRANSFER',     '振込',     10),
+  ('E_RECEIVABLE', '電子債権', 20),
+  ('OTHER',        'その他',   90)
+) AS v(code, name, so) WHERE code_categories.code = 'RECEIPT_METHOD';
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('MAIL',      'メール送付', 10),
+  ('EDI',       'EDI',        20),
+  ('POST',      '郵送',       30),
+  ('FAX_RECV',  'FAX受信',    40),
+  ('MAIL_RECV', 'メール受信', 50)
+) AS v(code, name, so) WHERE code_categories.code = 'INVOICE_SEND_METHOD';
+
+-- ロイヤリティ区分（2026-10-16 マスター編_3。商品マスタ）
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('MACHINE',     '機械',     10),
+  ('NON_MACHINE', '機械以外', 20)
+) AS v(code, name, so) WHERE code_categories.code = 'ROYALTY_CLASS';
 
 -- 毎月請求書発行
 INSERT INTO codes (code_category_id, code, name, sort_order)
@@ -172,12 +201,17 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
 -- 在庫調整理由（確認事項⑫）※要確認
 INSERT INTO codes (code_category_id, code, name, sort_order)
 SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
-  ('STOCKTAKE', '棚卸差異',   10),
-  ('DAMAGE',    '破損',       20),
-  ('LOSS',      '紛失',       30),
-  ('QUALITY',   '品質振替',   40),
-  ('OTHER',     'その他',     90)
+  ('OTHER',     'その他',     10),
+  ('REFURB',    '再生',       20),
+  ('STOCKTAKE', '棚卸差異',   30),
+  ('DAMAGE',    '破損',       40),
+  ('LOSS',      '紛失',       50),
+  ('QUALITY',   '品質振替',   60)
 ) AS v(code, name, so) WHERE code_categories.code = 'ADJUSTMENT_REASON';
+-- 2026-10-16 在庫編_2: 理由は「その他・再生・棚卸差異」の3種類。破損・紛失・品質振替は使わない（過去の調整のために残す）
+UPDATE codes SET is_active = false
+ WHERE code IN ('DAMAGE', 'LOSS', 'QUALITY')
+   AND code_category_id = (SELECT id FROM code_categories WHERE code = 'ADJUSTMENT_REASON');
 
 -- 伝票発行分類（9/15 ご回答：納品書の様式は納品先マスタのこの分類で選ぶ）
 --   名称は納品書の様式名と一致させる。帳票はこの名称で様式を決める。
@@ -393,8 +427,8 @@ VALUES
   ('PICKING_EXPAND_SET', 'DOCUMENT', 'ピッキングリストでセットを構成品に展開する', 'true',
    'boolean', NULL, 'いただいた帳票サンプルどおり、展開したうえで同一商品を合算する。', 20),
   -- 海外の取引先（取引先マスタの「海外」）の消費税の扱い（2026-10-09 マスター編②）
-  ('OVERSEAS_TAX_TREATMENT', 'TAX', '海外取引先の消費税', 'exempt', 'text', 'exempt,non_taxable',
-   'exempt＝免税（税抜扱い）／non_taxable＝課税対象外。どちらも消費税は 0 で計算し、帳票の表記だけが変わる。', 40),
+  ('OVERSEAS_TAX_TREATMENT', 'TAX', '海外取引先の消費税（取引先で選ばないとき）', 'exempt', 'text', 'exempt,non_taxable',
+   'exempt＝免税（税抜扱い）／non_taxable＝課税対象外。取引先マスタの「消費税免税区分」が空の海外取引先に使う。どちらも消費税は 0 で計算し、帳票の表記だけが変わる。', 40),
   ('DELIVERY_NOTE_DEFAULT_FORM', 'DOCUMENT', '納品書の既定様式', '単価あり', 'text',
    '単価あり,単価あり2,上代あり,単価なし',
    '※ 納品先マスタの伝票発行分類が未設定のときに使う様式。使い分け一覧を頂戴後に見直す。', 30),

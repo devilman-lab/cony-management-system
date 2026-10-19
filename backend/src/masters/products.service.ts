@@ -202,18 +202,38 @@ export interface SkuSearchQuery {
 export class ProductsService {
   constructor(@Inject(KYSELY) private readonly db: ConyDatabase) {}
 
+  /**
+   * 商品の一覧。1件＝1つの品番で、その下の SKU を `skus` に並べて返す。
+   *
+   * 2026-10-18 マスター編_3 M3-15: 引当在庫の一覧のように、品番ごとにまとめて SKU を1行ずつ見せる。
+   * 件数・ページ送りは今までどおり品番の数で数える（SKU の数で区切ると、1つの品番が2ページに割れるため）。
+   * 「使わないものも表示」を外しているときは、使わない（無効）の SKU も出さない。
+   */
   async list(query: ProductListQuery): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
       .selectFrom('products as p')
       .leftJoin('brands as b', 'b.id', 'p.brand_id')
-      .leftJoin('categories as c', 'c.id', 'p.category_id');
+      .leftJoin('categories as c', 'c.id', 'p.category_id')
+      .leftJoin('product_classes as pc', 'pc.id', 'p.product_class_id')
+      .leftJoin('codes as rc', 'rc.id', 'p.royalty_class_code_id');
 
     if (!query.include_inactive) base = base.where('p.is_active', '=', true);
     if (query.brand_id !== undefined) base = base.where('p.brand_id', '=', query.brand_id);
     if (query.q) {
       const like = `%${query.q}%`;
+      // 一覧に SKU を並べるようにしたので、SKU の商品コード・JAN・SKU の商品名でも引けるようにする
       base = base.where((eb) =>
-        eb.or([eb('p.product_code', 'ilike', like), eb('p.product_name', 'ilike', like)]),
+        eb.or([
+          eb('p.product_code', 'ilike', like),
+          eb('p.product_name', 'ilike', like),
+          eb.exists(
+            eb
+              .selectFrom('skus as qs')
+              .select('qs.id')
+              .whereRef('qs.product_id', '=', 'p.id')
+              .where((w) => w.or([w('qs.sku_code', 'ilike', like), w('qs.jan', 'ilike', like), w('qs.sku_name', 'ilike', like)])),
+          ),
+        ]),
       );
     }
 
@@ -226,14 +246,18 @@ export class ProductsService {
           'p.set_product_name as set_product_name',
           'b.name as brand_name',
           'c.name as category_name',
+          'pc.code as product_class_code',
+          'pc.name as product_class_name',
           'p.tax_rate as tax_rate',
           'p.carton_qty as carton_qty',
           'p.is_set as is_set',
-          'p.cost_price as cost_price',
-          'p.old_cost_price as old_cost_price',
-          'p.is_cost_undecided as is_cost_undecided',
+          'p.royalty_class_code_id as royalty_class_code_id',
+          'rc.name as royalty_class_name',
+          'p.is_wholesale_adjust_target as is_wholesale_adjust_target',
           'p.is_active as is_active',
-          // SKU が何件ぶら下がっているか。一覧から展開するかの判断に使う。
+          'p.created_at as created_at',
+          'p.updated_at as updated_at',
+          // SKU が何件ぶら下がっているか（削除の確認の文言に使う）
           (eb) =>
             eb
               .selectFrom('skus as s')
@@ -248,8 +272,38 @@ export class ProductsService {
       base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
     ]);
 
+    const ids = items.map((r) => Number(r.id));
+    let sq = this.db
+      .selectFrom('skus as s')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .select([
+        's.id as id',
+        's.product_id as product_id',
+        's.sku_code as sku_code',
+        // 商品名（SKU の商品名か商品名）にカラー・サイズを付けたもの（引当在庫の一覧と同じ見せ方）
+        sql<string>`concat_ws(' ', ${skuNameExpr('s', 'p')}, cl.name, sz.name)`.as('item_name'),
+        's.jan as jan',
+        's.cost_price as cost_price',
+        's.old_cost_price as old_cost_price',
+        // SKU の原価が空のときに使われる商品の原価（原価の計算は SKU → 商品 の順。画面では薄い字で出す）
+        'p.cost_price as product_cost_price',
+        's.is_active as is_active',
+      ])
+      .where('s.product_id', 'in', ids.length > 0 ? ids : [-1]);
+    if (!query.include_inactive) sq = sq.where('s.is_active', '=', true);
+    const skus = await sq.orderBy('s.sku_code', 'asc').execute();
+    const byProduct = new Map<number, Record<string, unknown>[]>();
+    for (const k of skus) {
+      const { product_cost_price, ...rest } = k as Record<string, unknown>;
+      const row = query.showCost ? { ...rest, product_cost_price } : stripCost(rest, false);
+      const pid = Number(k.product_id);
+      byProduct.set(pid, [...(byProduct.get(pid) ?? []), row]);
+    }
+
     return {
-      items: items.map((r) => stripCost(r as Record<string, unknown>, query.showCost)),
+      items: items.map((r) => ({ ...(r as Record<string, unknown>), skus: byProduct.get(Number(r.id)) ?? [] })),
       total: Number(total.n),
       limit: query.limit,
       offset: query.offset,
@@ -281,8 +335,15 @@ export class ProductsService {
         'p.is_cost_undecided as is_cost_undecided',
         'p.tax_rate as tax_rate',
         'p.is_set as is_set',
+        // ロイヤリティ区分・下代調整対象（2026-10-18 マスター編_3 M3-23）
+        'p.royalty_class_code_id as royalty_class_code_id',
+        'p.is_wholesale_adjust_target as is_wholesale_adjust_target',
         'p.is_active as is_active',
         'p.note as note',
+        'p.created_at as created_at',
+        'p.created_by as created_by',
+        'p.updated_at as updated_at',
+        'p.updated_by as updated_by',
       ])
       .where('p.id', '=', id)
       .executeTakeFirst();
@@ -306,6 +367,8 @@ export class ProductsService {
         's.pack_division as pack_division',
         // このSKUだけの原価（サイズ別原価。1001 ご要望）。権限が無い人には下で落とす
         's.cost_price as cost_price',
+        // 旧原価も SKU ごと（2026-10-18 マスター編_3 M3-19）
+        's.old_cost_price as old_cost_price',
         's.color_id as color_id',
         's.size_id as size_id',
         'c.code as color_code',
@@ -332,25 +395,56 @@ export class ProductsService {
    */
   async searchSkus(query: SkuSearchQuery) {
     // 取引先が分かっているときは、その取引先の得意先別商品（先方JAN・出荷JAN・専用コード）も一緒に引く。
-    // 受注入力で先方JANを打つと出荷JANが出るようにするため（1001 ご要望）。取引先×SKU は1件まで（一意）。
+    // 受注入力で先方JANを打つと出荷JANが出るようにするため（1001 ご要望）。
+    // 取引先×SKU の行は複数ありうる（2026-10-16 マスター編_3 M3-26）。候補は SKU ごとに1つにし、
+    // 先方JAN・出荷JAN・先方の商品コードで当たった行が1つならその行、当たらず行が1つだけならその行を返す
+    // （partner_product_id）。決まらないときは空で返し、受注入力で行を選んでもらう（partner_product_count）。
     const partnerId = query.partner_id ?? 0;
+    const like = query.q ? `%${query.q}%` : null;
+    const hit = like
+      ? sql<boolean>`coalesce(p2.partner_jan ilike ${like} or p2.shipping_jan ilike ${like} or p2.partner_product_code ilike ${like}, false)`
+      // 検索の文字が空のときは「当たり」は無い。素の false は ORDER BY に置くと PostgreSQL が定数として弾き、
+      // 空の商品欄を押しただけで候補が 500 で出なくなっていた（2026-10-18 画面確認 W3 N1）。列を使った式で常に偽にする
+      : sql<boolean>`(p2.id is null)`;
     let q = this.db
       .selectFrom('skus as s')
       .innerJoin('products as p', 'p.id', 's.product_id')
       .leftJoin('colors as c', 'c.id', 's.color_id')
       .leftJoin('sizes as z', 'z.id', 's.size_id')
-      .leftJoin('partner_products as pp', (j) =>
-        j.onRef('pp.sku_id', '=', 's.id').on('pp.partner_id', '=', partnerId).on('pp.is_active', '=', true),
+      .leftJoinLateral(
+        (eb) =>
+          eb
+            .selectFrom('partner_products as p2')
+            .select([
+              'p2.id as id',
+              'p2.partner_jan as partner_jan',
+              'p2.shipping_jan as shipping_jan',
+              'p2.partner_product_code as partner_product_code',
+              hit.as('hit'),
+              // 窓関数は limit の前に数えるので、行の数・当たった行の数はこの SKU の全部の行で数える
+              sql<number>`(count(*) over ())::int`.as('n_rows'),
+              sql<number>`(count(*) filter (where ${hit}) over ())::int`.as('n_hits'),
+            ])
+            .whereRef('p2.sku_id', '=', 's.id')
+            .where('p2.partner_id', '=', partnerId)
+            .where('p2.is_active', '=', true)
+            .orderBy(sql`${hit} desc`)
+            .orderBy(sql`p2.sort_order nulls last`)
+            .orderBy('p2.id')
+            .limit(1)
+            .as('pp'),
+        (join) => join.onTrue(),
       )
       .where('s.is_active', '=', true)
       .where('p.is_active', '=', true);
+    // この SKU の得意先別商品の行が1つに決まるか
+    const chosen = sql`(pp.n_hits = 1 or (pp.n_hits = 0 and pp.n_rows = 1))`;
 
     if (query.is_set !== undefined) q = q.where('p.is_set', '=', query.is_set);
     if (query.without_set) {
       q = q.where((eb) => eb.not(eb.exists(eb.selectFrom('set_headers as h').select('h.id').whereRef('h.sku_id', '=', 's.id'))));
     }
-    if (query.q) {
-      const like = `%${query.q}%`;
+    if (like) {
       q = q.where((eb) =>
         eb.or([
           eb('s.sku_code', 'ilike', like),
@@ -358,9 +452,8 @@ export class ProductsService {
           eb('p.product_code', 'ilike', like),
           eb('p.product_name', 'ilike', like),
           eb('s.sku_name', 'ilike', like),
-          eb('pp.partner_jan', 'ilike', like),
-          eb('pp.shipping_jan', 'ilike', like),
-          eb('pp.partner_product_code', 'ilike', like),
+          // 得意先別商品の先方JAN・出荷JAN・先方の商品コードで当たった（当たった行を先に並べてある）
+          eb('pp.hit', '=', true),
         ]),
       );
     }
@@ -380,9 +473,11 @@ export class ProductsService {
         'p.tax_rate as tax_rate',
         'c.name as color_name',
         'z.name as size_name',
-        'pp.partner_jan as partner_jan',
-        'pp.shipping_jan as shipping_jan',
-        'pp.partner_product_code as partner_product_code',
+        sql<string | null>`case when ${chosen} then pp.partner_jan end`.as('partner_jan'),
+        sql<string | null>`case when ${chosen} then pp.shipping_jan end`.as('shipping_jan'),
+        sql<string | null>`case when ${chosen} then pp.partner_product_code end`.as('partner_product_code'),
+        sql<number | null>`case when ${chosen} then pp.id end`.as('partner_product_id'),
+        sql<number>`coalesce(pp.n_rows, 0)`.as('partner_product_count'),
       ])
       .orderBy('s.sku_code', 'asc')
       .limit(query.limit)
@@ -430,7 +525,8 @@ export class ProductsService {
       'JANコード',
       'FBA用JANコード',
       'ショップ商品コード',
-      '商品コード',
+      // 品番（画面の呼び方。2026-10-18 受入 W2）。先頭の「SKUコード」は前からの JAN 一覧の見出しのまま（品番と取り違えるおそれは無い）
+      '品番（商品分類コード）',
       '商品名',
       'ブランド',
       'カラー',
@@ -543,7 +639,7 @@ export class ProductsService {
     if (used.length > 0) {
       throw new ConflictException(
         `この商品は次で使われているため削除できません：${describeUsages(used)}。` +
-          `一覧から外したいときは「使わない」をお使いください`,
+          `一覧や選択肢から外したいときは、編集画面で「非表示」にしてください`,
       );
     }
 

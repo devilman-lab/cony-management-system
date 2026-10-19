@@ -139,7 +139,11 @@ export default function RoyaltyPage() {
               </div>
             </Card>
             <div className="text-[11px] text-[var(--color-ink-3)]">
-              計算の基準「{detail.data.calc_base}」。{ymd(detail.data.target_month)} 〜 月末に、出荷は出荷したもの、売上はこの月に締めた請求に載ったもの、入金はこの月の入金（消込）を請求の明細の金額で按分したものが対象です。
+              {/* 計算の基準は請求月に統一（2026-10-16 M3-32）。出荷・入金は以前の規定のための表示 */}
+              計算の基準「{detail.data.calc_base}」。料率は下代（卸単価×数量）にかけます。
+              {detail.data.calc_base.includes('請求月') && ` 請求月は ${ymd(detail.data.target_month)} 〜 月末に締めた請求に載った出荷（返品は差し引き）が対象です。`}
+              {detail.data.calc_base.includes('出荷') && ' 出荷はこの月に出荷したものが対象です。'}
+              {detail.data.calc_base.includes('入金') && ' 入金はこの月の入金（消込）を請求の明細の金額で按分したものが対象です。'}
             </div>
           </div>
         )}

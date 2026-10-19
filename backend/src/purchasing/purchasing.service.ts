@@ -188,12 +188,15 @@ export class PurchasingService {
 
   /**
    * 海外の仕入先の明細に使う税区分（2026-10-09 マスター編②）。
-   * 設定 OVERSEAS_TAX_TREATMENT が免税なら「非課税」、課税対象外なら「不課税」。
+   * 免税（税抜扱い）なら「非課税」、課税対象外なら「不課税」。どちらかは仕入先の消費税免税区分、
+   * 空ならシステム設定 OVERSEAS_TAX_TREATMENT（2026-10-16 マスター編_3 M3-07）。
    * 仕入入力の画面も、仕入先を選んだときの初期値をここから取る（判定を1か所にするため）。
    */
-  async overseasTaxDefault(db: ConyDatabase | Transaction<DB> = this.db): Promise<OverseasTaxDefault> {
-    const value = await this.settings.text('OVERSEAS_TAX_TREATMENT', 'exempt');
-    const treatment = OVERSEAS_TAX_DIVISION[value] ? value : 'exempt';
+  async overseasTaxDefault(
+    db: ConyDatabase | Transaction<DB> = this.db,
+    partnerTreatment?: string | null,
+  ): Promise<OverseasTaxDefault> {
+    const treatment = await this.settings.overseasTaxTreatment(partnerTreatment);
     const { code, label } = OVERSEAS_TAX_DIVISION[treatment];
     const division = await db
       .selectFrom('codes as c')
@@ -215,8 +218,9 @@ export class PurchasingService {
   /**
    * 明細ごとの税区分と税率を決める（1001 ご要望「仕入項目に税区分」）。
    *  - 明細で税区分を指定していればそれを使い、税率は税区分から決める（食い違いは 400）。
-   *  - 指定がなく仕入先が海外なら、設定 OVERSEAS_TAX_TREATMENT の税区分（非課税／不課税）・税率 0%
-   *    （2026-10-09 マスター編②）。仕入項目マスタの税区分は国内向けの値なので、こちらを優先する。
+   *  - 指定がなく仕入先が海外なら、仕入先の消費税免税区分（空なら設定 OVERSEAS_TAX_TREATMENT）の
+   *    税区分（非課税／不課税）・税率 0%（2026-10-09 マスター編②・2026-10-16 マスター編_3）。
+   *    仕入項目マスタの税区分は国内向けの値なので、こちらを優先する。
    *    ただし税率を 0% 以外で明示されたときは、その指定を尊重して触らない。
    *  - 指定がなく仕入項目を選んでいれば、仕入項目マスタの税区分・税率を使う。
    *  - どちらもなければ、明細の税率（省略時は DB の既定 10%）のまま税区分は空。
@@ -236,10 +240,10 @@ export class PurchasingService {
 
     const supplier = await db
       .selectFrom('partners')
-      .select('is_overseas')
+      .select(['is_overseas', 'overseas_tax_treatment'])
       .where('id', '=', supplierPartnerId)
       .executeTakeFirst();
-    const overseas = supplier?.is_overseas ? await this.overseasTaxDefault(db) : null;
+    const overseas = supplier?.is_overseas ? await this.overseasTaxDefault(db, supplier.overseas_tax_treatment) : null;
 
     const itemIds = [...new Set(lines.map((l) => l.purchase_item_id).filter((v): v is number => !!v))];
     const items = itemIds.length

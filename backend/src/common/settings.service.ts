@@ -53,10 +53,30 @@ export class SettingsService {
   }
 
   /**
-   * 海外の得意先の消費税の表記（設定 OVERSEAS_TAX_TREATMENT）。税額はどちらも 0。
-   * 請求書・納品書・受注の画面で同じ言い方にそろえる（2026-10-12 受入テスト M-02）。
+   * 海外の取引先の消費税の扱い（exempt＝免税（税抜扱い）／non_taxable＝課税対象外）。
+   * 取引先の「消費税免税区分」（partners.overseas_tax_treatment）があればそれ、
+   * 無ければシステム設定 OVERSEAS_TAX_TREATMENT（2026-10-16 マスター編_3 M3-07 で取引先ごとに）。
    */
-  async overseasTaxLabel(): Promise<'免税（税抜扱い）' | '課税対象外'> {
-    return (await this.text('OVERSEAS_TAX_TREATMENT', 'exempt')) === 'non_taxable' ? '課税対象外' : '免税（税抜扱い）';
+  async overseasTaxTreatment(partnerTreatment?: string | null): Promise<'exempt' | 'non_taxable'> {
+    const v = partnerTreatment || (await this.text('OVERSEAS_TAX_TREATMENT', 'exempt'));
+    return v === 'non_taxable' ? 'non_taxable' : 'exempt';
+  }
+
+  /**
+   * 海外の取引先の消費税の表記。税額はどちらも 0。
+   * 請求書・納品書・受注の画面で同じ言い方にそろえる（2026-10-12 受入テスト M-02）。
+   * 取引先の消費税免税区分を渡すとそれに従い、渡さない（空）ときはシステム設定に従う。
+   */
+  async overseasTaxLabel(partnerTreatment?: string | null): Promise<'免税（税抜扱い）' | '課税対象外'> {
+    return OVERSEAS_TAX_LABEL[await this.overseasTaxTreatment(partnerTreatment)];
   }
 }
+
+/** 消費税免税区分の呼び名（取引先の画面・一覧・CSV・帳票で同じ言い方にする） */
+export const OVERSEAS_TAX_LABEL = {
+  exempt: '免税（税抜扱い）',
+  non_taxable: '課税対象外',
+} as const;
+
+/** 消費税免税区分の値。空（null）は「なし」（国内の取引先） */
+export const OVERSEAS_TAX_TREATMENTS = ['exempt', 'non_taxable'] as const;

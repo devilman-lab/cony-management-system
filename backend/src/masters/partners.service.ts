@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { sql } from 'kysely';
 
+import { OVERSEAS_TAX_LABEL, SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 
 export interface PartnerListQuery {
@@ -28,8 +29,20 @@ export interface PartnerListItem {
   short_name: string | null;
   is_customer: boolean;
   is_supplier: boolean;
-  /** 海外の取引先（2026-10-09 マスター編②）。一覧のバッジと、仕入入力で税区分の初期値を決めるのに使う。 */
+  /** 海外の取引先（2026-10-09 マスター編②）。仕入入力・受注入力で税の扱いを決めるのに使う。 */
   is_overseas: boolean;
+  /** 取引先の消費税免税区分（exempt／non_taxable）。空ならシステム設定に従う（2026-10-16 マスター編_3 M3-07） */
+  overseas_tax_treatment: string | null;
+  /**
+   * 消費税免税区分の呼び名（一覧の「消費税免税区分」の列と、受注入力の合計の横の表記）。
+   * 海外でなければ null。取引先で選んでいなければシステム設定の呼び名。
+   */
+  overseas_tax_label: string | null;
+  /** 粗利調整販社（区分値 GROSS_MARGIN_ADJUST の名称。対象／対象外）。一覧に出す（M3-04・M3-10） */
+  gross_margin_adjust_name: string | null;
+  /** 支払①（何か月後・何日。99＝末日）。一覧の「支払」の列に出す（M3-04） */
+  payment_month_offset: number | null;
+  payment_day: number | null;
   /** 取引通貨（区分値 CURRENCY のコード）。受注入力で得意先を選んだときに受注の通貨として出す（2026-10-12 No.39）。 */
   currency: string;
   closing_day: number | null;
@@ -48,7 +61,10 @@ export interface Paged<T> {
 
 @Injectable()
 export class PartnersService {
-  constructor(@Inject(KYSELY) private readonly db: ConyDatabase) {}
+  constructor(
+    @Inject(KYSELY) private readonly db: ConyDatabase,
+    private readonly settings: SettingsService,
+  ) {}
 
   async list(query: PartnerListQuery): Promise<Paged<PartnerListItem>> {
     let base = this.db.selectFrom('partners');
@@ -107,8 +123,11 @@ export class PartnersService {
           'is_customer',
           'is_supplier',
           'is_overseas',
+          'overseas_tax_treatment',
           'currency',
           'closing_day',
+          'payment_month_offset',
+          'payment_day',
           'default_trade_type',
           'sales_staff_id',
           'is_royalty_payee',
@@ -116,6 +135,12 @@ export class PartnersService {
           'partner_category_id',
           'is_active',
           (eb) => eb.selectFrom('media').select('media.name').whereRef('media.id', '=', 'partners.media_id').as('media_name'),
+          (eb) =>
+            eb
+              .selectFrom('codes')
+              .select('codes.name')
+              .whereRef('codes.id', '=', 'partners.gross_margin_adjust_code_id')
+              .as('gross_margin_adjust_name'),
           (eb) =>
             eb
               .selectFrom('sales_staff')
@@ -139,8 +164,19 @@ export class PartnersService {
       base.select(sql<number>`count(*)::int`.as('n')).executeTakeFirstOrThrow(),
     ]);
 
+    // 消費税免税区分の呼び名。取引先で選んでいなければシステム設定のもの（M3-07）
+    const defaultLabel = await this.settings.overseasTaxLabel();
+    const items = rows.map((r) => ({
+      ...r,
+      overseas_tax_label: !r.is_overseas
+        ? null
+        : r.overseas_tax_treatment === 'exempt' || r.overseas_tax_treatment === 'non_taxable'
+          ? OVERSEAS_TAX_LABEL[r.overseas_tax_treatment]
+          : defaultLabel,
+    }));
+
     return {
-      items: rows,
+      items,
       total: Number(totalRow.n),
       limit: query.limit,
       offset: query.offset,
@@ -171,7 +207,13 @@ export class PartnersService {
       .orderBy('partner_category_id')
       .execute();
 
-    return { ...partner, category_ids: links.map((l) => l.partner_category_id) };
+    return {
+      ...partner,
+      category_ids: links.map((l) => l.partner_category_id),
+      // 編集画面の「消費税免税区分」に出す値（M3-07）。海外でなければ null（なし）。
+      // 取引先で選ぶ前から海外にしてあった取引先は、今効いているシステム設定の値を出す（保存すると取引先に書く）
+      overseas_tax_class: partner.is_overseas ? await this.settings.overseasTaxTreatment(partner.overseas_tax_treatment) : null,
+    };
   }
 
   /** その取引先にぶら下がる納品先。受注の入力で使う。 */

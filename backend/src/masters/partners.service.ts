@@ -216,15 +216,29 @@ export class PartnersService {
     };
   }
 
-  /** その取引先にぶら下がる納品先。受注の入力で使う。 */
+  /**
+   * その取引先にぶら下がる納品先。受注の入力で使う。
+   * 納品先マスタの作業指示（名称・本文）も返す。受注入力で納品先を選んだら、その下に読むだけで出す
+   * （2026-10-13 受注処理編 O-07）。
+   */
   async deliveryDestinations(partnerId: number) {
     return this.db
-      .selectFrom('delivery_destinations')
-      .select(['id', 'delivery_code', 'name', 'partner_delivery_no', 'default_warehouse_id', 'is_active'])
-      .where('partner_id', '=', partnerId)
-      .where('is_active', '=', true)
-      .orderBy('sort_order', sql`asc nulls last`)
-      .orderBy('delivery_code', 'asc')
+      .selectFrom('delivery_destinations as d')
+      .leftJoin('work_instructions as wi', 'wi.id', 'd.work_instruction_id')
+      .select([
+        'd.id as id',
+        'd.delivery_code as delivery_code',
+        'd.name as name',
+        'd.partner_delivery_no as partner_delivery_no',
+        'd.default_warehouse_id as default_warehouse_id',
+        'd.is_active as is_active',
+        'wi.name as work_instruction_name',
+        'wi.instruction_body as work_instruction_body',
+      ])
+      .where('d.partner_id', '=', partnerId)
+      .where('d.is_active', '=', true)
+      .orderBy('d.sort_order', sql`asc nulls last`)
+      .orderBy('d.delivery_code', 'asc')
       .execute();
   }
 }

@@ -42,7 +42,8 @@ interface PendingRow extends Record<string, unknown> {
 type Kind = 'partner' | 'oms' | 'amazon' | 'postal';
 
 const KINDS: { k: Kind; label: string; desc: string }[] = [
-  { k: 'partner', label: '販社の発注CSV', desc: 'ビックカメラ・ラベルヴィ・白鳩・コネクトなど、販社から届く発注データ。受注として登録し、引当まで行います' },
+  // 受注は登録だけ（引当待ち）。在庫の引当は受注一覧で行う（2026-10-13 受注処理編 O-06）。品名は商品マスタの品名（O-34）
+  { k: 'partner', label: '販社の発注CSV', desc: 'ビックカメラ・ラベルヴィ・白鳩・コネクトなど、販社から届く発注データ。受注として登録します（在庫の引当は受注一覧で行います）' },
   { k: 'oms', label: '通販（OMS）受注CSV', desc: '通販システムから出した63列の受注CSV。出荷済みの受注として登録します（Shift-JIS・UTF-8 のどちらでも読めます）' },
   { k: 'amazon', label: 'Amazon 決済レポート', desc: 'セラーセントラルのトランザクションレポート。手数料・返金を含めて登録します' },
   { k: 'postal', label: '郵便番号データ', desc: '日本郵便の KEN_ALL.CSV。住所の自動入力に使います' },
@@ -191,7 +192,8 @@ export default function ImportsPage() {
             <ol className="p-3.5 pl-7 text-[11.5px] text-[var(--color-ink-2)] leading-relaxed list-decimal">
               <li>販社から届いたCSVをそのまま選びます（Shift-JIS のままで構いません）</li>
               <li>「確認だけ」で列数・商品コードが読めるか確かめます</li>
-              <li>「取り込む」で受注が作られ、引当まで行われます</li>
+              <li>「取り込む」で受注が「引当待ち」で作られます。品名は商品マスタの品名（商品名・カラー・サイズ）で入ります</li>
+              <li>在庫の引当は、受注一覧で受注を選んで「引当」を押して行います</li>
               <li>同じ発注番号は二重に取り込まれません</li>
             </ol>
           </Card>

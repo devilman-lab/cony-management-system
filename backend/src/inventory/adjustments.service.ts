@@ -6,6 +6,7 @@ import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import { decodeAuto, parseCsv } from '../imports/csv';
 import type { Paged } from '../masters/partners.service';
+import { skuItemNameExpr } from '../masters/products.service';
 import { StockLedgerService, type QualityCode } from './stock-ledger.service';
 
 export interface AdjustmentLineInput {
@@ -63,6 +64,8 @@ export interface AdjustmentImportResult {
       row: number;
       sku_code: string;
       product_name: string;
+      /** 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。下見の商品名の欄に出す */
+      item_name: string;
       /** 同じ商品のカラー違い・サイズ違いを下見で見分けるため（2026-10-12 受入テスト） */
       color_name: string | null;
       size_name: string | null;
@@ -412,6 +415,8 @@ export class AdjustmentsService {
         's.jan as jan',
         // SKU ごとの商品名があればそれ（マスター編② M-10）
         sql<string>`coalesce(nullif(s.sku_name, ''), pr.product_name)`.as('product_name'),
+        // 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。一覧の商品名の欄と、編集画面の商品欄に出す
+        skuItemNameExpr('s', 'pr', 'c', 'z').as('item_name'),
         'c.name as color_name',
         'z.name as size_name',
         'l.qty as qty',
@@ -573,6 +578,7 @@ export class AdjustmentsService {
               's.id as id',
               's.sku_code as sku_code',
               sql<string>`coalesce(nullif(s.sku_name, ''), p.product_name)`.as('product_name'),
+              skuItemNameExpr('s', 'p', 'c', 'z').as('item_name'),
               'c.name as color_name',
               'z.name as size_name',
               sql<boolean>`p.is_set or exists (select 1 from set_headers sh where sh.sku_id = s.id)`.as('is_set'),
@@ -646,6 +652,7 @@ export class AdjustmentsService {
         row,
         sku_code: sku.sku_code,
         product_name: sku.product_name,
+        item_name: sku.item_name,
         color_name: sku.color_name,
         size_name: sku.size_name,
         qty,

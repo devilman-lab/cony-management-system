@@ -18,12 +18,19 @@ interface Line extends Record<string, unknown> {
   line_type: string;
   sku_code: string | null;
   item_name: string;
+  /** カラー・サイズ・JAN（JAN は帳票と同じ：得意先別商品の出荷JAN、空ならコニーJAN。O-24） */
+  color_name?: string | null;
+  size_name?: string | null;
+  jan?: string | null;
   qty: string;
   unit_price: string;
   tax_rate: string;
   amount: string;
   allocated_qty: string;
   is_stock_target: boolean;
+  /** 出荷依頼書適用・納品書適用（O-09） */
+  shipping_note?: string | null;
+  delivery_slip_note?: string | null;
 }
 
 interface OrderDetail {
@@ -33,11 +40,12 @@ interface OrderDetail {
   status: string;
   is_cancelled: boolean;
   is_billable: boolean;
-  partner_code: string;
-  partner_name: string;
+  /** サンプル・社内移動は取引先・販売カテゴリーが空のことがある（2026-10-13 受注処理編 O-02・O-14） */
+  partner_code: string | null;
+  partner_name: string | null;
   delivery_name: string | null;
   delivery_code: string | null;
-  sales_category_name: string;
+  sales_category_name: string | null;
   warehouse_name: string | null;
   staff_name: string | null;
   trade_type: string;
@@ -45,7 +53,17 @@ interface OrderDetail {
   order_date: string;
   ship_date: string | null;
   delivery_date: string | null;
+  /** 納品希望日。取込の値が入るだけ。値がある古い受注のときだけ出す（O-03） */
   requested_delivery_date: string | null;
+  /** 納品時間（O-03） */
+  delivery_time_name?: string | null;
+  /** 納品書に送料を記載する（O-10） */
+  print_shipping_fee?: boolean;
+  /** 委託の入庫倉庫（O-12） */
+  consignment_warehouse_name?: string | null;
+  /** 納品先の作業指示（名称と本文。O-23） */
+  work_instruction_name?: string | null;
+  work_instruction_body?: string | null;
   direct_name: string | null;
   direct_postal_code: string | null;
   direct_address1: string | null;
@@ -76,6 +94,28 @@ interface Attachment extends Record<string, unknown> {
   created_by_name: string | null;
 }
 
+/**
+ * 引当の欄の説明（2026-10-13 受注処理編 O-06。受注は登録だけで、受注一覧の「引当」で引き当てる）。
+ * 引当待ちは「まだ引き当てていない」か「一部だけ引き当てている（足りない分を待っている）」のどちらか。
+ */
+function allocationText(o: OrderDetail): string {
+  if (o.order_type === '返品') {
+    return o.status === '引当待ち'
+      ? '返品は在庫を押さえません。「引当」を押すと引当済になり、出荷確定・印刷で確定できます'
+      : o.status === '引当済'
+        ? '引当済（返品のため在庫は動きません）'
+        : o.status;
+  }
+  if (o.status === '引当待ち') {
+    const partly = o.lines.some((l) => l.is_stock_target && Number(l.allocated_qty) > 0);
+    return partly
+      ? '一部だけ引き当てています（足りない分は引当待ち）。在庫が入ったら「引当」を押してください'
+      : 'まだ引き当てていません。「引当」を押すと在庫を引き当てます（受注一覧で選んでまとめて引き当てることもできます）';
+  }
+  if (o.status === '引当済') return '全量を引き当てています';
+  return o.status;
+}
+
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -100,6 +140,8 @@ export default function OrderDetailPage() {
   };
 
   const editable = o && ['未確定', '引当待ち', '引当済'].includes(o.status);
+  const isReturn = o?.order_type === '返品';
+  const partnerText = o ? (o.partner_name ? `${o.partner_code ?? ''} ${o.partner_name}` : `取引先なし${o.direct_name ? `（お届け先 ${o.direct_name}）` : ''}`) : '';
 
   return (
     <div className="page-body">
@@ -111,21 +153,26 @@ export default function OrderDetailPage() {
         <>
           <PageHead
             title={
-              <span className="flex items-center gap-2">
+              <span className="flex items-center gap-2 flex-wrap">
                 受注 <Num>{o.order_no}</Num> <Badge status={o.status} />
-                {!o.is_billable && <span className="bdg bg-[#fbf3e2] text-[#7a5407] border border-[#e8c88a]">サンプル（売上計上なし）</span>}
+                {/* 返品は目立たせる（O-44。数量・金額はマイナスで登録し、請求から差し引く） */}
+                {isReturn && <span className="bdg bg-[var(--color-crit-500)] text-white border border-[var(--color-crit-500)]">返品</span>}
+                {!o.is_billable && <span className="bdg bg-[#fbf3e2] text-[#7a5407] border border-[#e8c88a]">{o.order_type}（売上計上なし）</span>}
               </span>
             }
-            sub={`${o.order_type}　${o.partner_code} ${o.partner_name}${o.channel ? `　取込元：${o.channel}` : ''}　登録 ${ymdhm(o.created_at)}`}
+            sub={`${o.order_type}　${partnerText}${o.channel ? `　取込元：${o.channel}` : ''}　登録 ${ymdhm(o.created_at)}`}
             right={
               <>
                 <Link href="/orders" className="btn btn-ghost btn-sm">一覧へ</Link>
                 {o.status === '引当待ち' && can('D-01', 'create') && (
                   <Button variant="primary" size="sm" loading={busy === 'alloc'} onClick={() => run('alloc', async () => {
                     const r = await api.post<{ status: string; shortages: string[] }>(`/orders/${o.id}/allocate`);
-                    toast(r.status === '引当済' ? '引き当てました' : `まだ足りません：${r.shortages.join('、')}`, r.status === '引当済' ? 'good' : 'info');
+                    toast(
+                      r.status === '引当済' ? '引き当てました' : r.shortages.length > 0 ? `在庫が足りない分は引当待ちのままです：${r.shortages.join('、')}` : `引当待ちのままです（${r.status}）`,
+                      r.status === '引当済' ? 'good' : 'info',
+                    );
                   })}>
-                    引き当て直す
+                    引当
                   </Button>
                 )}
                 {editable && can('O-01', 'update') && (
@@ -160,40 +207,73 @@ export default function OrderDetailPage() {
                   <Button size="sm" icon="print" loading={busy === 'print'} onClick={() => run('print', async () => {
                     await api.download('/reports/shipping-instructions', { query: { shipment_ids: o.shipment_id }, open: true });
                   })}>
-                    出荷指示書
+                    出荷依頼書
                   </Button>
                 )}
               </>
             }
           />
 
+          {/* 返品の受注（O-44・O-45）。良品を在庫に戻すのは在庫調整（理由：返品）で行う */}
+          {isReturn && (
+            <div className="rounded-lg border border-[#e8b4a8] bg-[var(--color-crit-50)] text-[var(--color-crit-500)] px-3.5 py-2.5 text-[12.5px] flex items-center gap-3 flex-wrap">
+              <span className="font-semibold">返品の受注です。数量・金額はマイナスで登録し、請求から差し引きます。在庫に戻すときは在庫調整（理由：返品）で入れてください。</span>
+              {can('S-01') && (
+                <Link href="/adjustments" className="btn btn-ghost btn-sm ml-auto">在庫調整を開く</Link>
+              )}
+            </div>
+          )}
+
           <div className="detail-grid-2">
             <Card>
               <CardHead title="受注内容" />
               <div className="px-3.5">
-                <Row k="納品先" v={o.delivery_name ? `${o.delivery_code ?? ''} ${o.delivery_name}` : '（直送）'} />
-                <Row k="販売カテゴリー" v={o.sales_category_name} />
-                <Row k="取引条件" v={o.trade_type} />
+                <Row k="納品先" v={o.delivery_name ? `${o.delivery_code ?? ''} ${o.delivery_name}` : o.order_type === '直送' || o.order_type === '通販' ? '（直送）' : '—'} />
+                {/* 納品先の作業指示（O-23）。出荷依頼書の「連絡事項」にも印字する */}
+                {(o.work_instruction_name || o.work_instruction_body) && (
+                  <Row
+                    k="作業指示"
+                    v={
+                      <span className="flex flex-col gap-0.5">
+                        {o.work_instruction_name && <b>{o.work_instruction_name}</b>}
+                        {o.work_instruction_body && <span className="whitespace-pre-wrap text-[var(--color-ink-2)]">{o.work_instruction_body}</span>}
+                      </span>
+                    }
+                  />
+                )}
+                <Row k="販売カテゴリー" v={o.sales_category_name ?? '—'} />
+                <Row k="取引条件" v={o.trade_type === '委託' ? '委託（単価なし・請求に載せない）' : o.trade_type} />
+                {o.trade_type === '委託' && <Row k="入庫倉庫" v={o.consignment_warehouse_name ?? '—'} />}
                 <Row k="販売担当" v={o.staff_name ?? '—'} />
                 <Row k="先方発注番号" v={o.po_no ?? '—'} />
                 <Row k="受注日 / 出荷日 / 納品日" v={`${ymd(o.order_date)} / ${ymd(o.ship_date) || '—'} / ${ymd(o.delivery_date) || '—'}`} />
-                <Row k="納品希望日" v={ymd(o.requested_delivery_date) || '—'} />
+                <Row k="納品時間" v={o.delivery_time_name ?? '指定なし'} />
+                {/* 納品希望日は納品時間に替えた（O-03）。取込で値が入っている古い受注のときだけ出す */}
+                {o.requested_delivery_date && <Row k="納品希望日" v={ymd(o.requested_delivery_date)} />}
                 <Row k="出荷倉庫" v={o.warehouse_name ?? '（既定：納品先の既定倉庫、無ければコニー倉庫）'} />
                 {(o.direct_name || o.direct_address1) && (
                   <Row k="お届け先" v={`${o.direct_name ?? ''}　〒${o.direct_postal_code ?? ''} ${o.direct_address1 ?? ''}${o.direct_address2 ?? ''}　${o.direct_tel ?? ''}`} />
                 )}
-                <Row k="出荷備考" v={o.shipping_remarks ?? '—'} />
+                <Row k="出荷依頼書備考" v={o.shipping_remarks ?? '—'} />
                 <Row k="納品書備考" v={o.delivery_note_remarks ?? '—'} />
-                <Row k="送料調整" v={o.shipping_fee_adjustment ? moneyWithCurrency(o.shipping_fee_adjustment, o.currency) : '（自動）'} />
+                {o.trade_type === '委託' ? (
+                  <Row k="送料" v="（委託のため送料なし）" />
+                ) : (
+                  <>
+                    <Row k="送料調整" v={o.shipping_fee_adjustment ? moneyWithCurrency(o.shipping_fee_adjustment, o.currency) : '（自動）'} />
+                    <Row k="納品書の送料" v={o.print_shipping_fee ? '記載する' : '記載しない'} />
+                  </>
+                )}
                 {!isYen(o.currency) && <Row k="通貨" v={`${o.currency}（取引先の通貨）`} />}
               </div>
             </Card>
             <Card>
-              <CardHead title="出荷" sub="出荷確定で実在庫が減ります" />
+              {/* 返品は在庫を動かさない（2026-10-13 受注処理編 O-44。2026-10-20 受入テストで文言を分けた） */}
+              <CardHead title="出荷" sub={o.order_type === '返品' ? '返品は在庫を動かしません。出荷確定すると、締めで請求の返品額に入ります' : '出荷確定で実在庫が減ります'} />
               <div className="px-3.5">
                 <Row k="出荷指示番号" v={o.shipment_no ?? '（引当が完了すると付きます）'} />
                 <Row k="出荷の状態" v={o.shipment_status ? <Badge status={o.shipment_status} /> : '—'} />
-                <Row k="引当" v={o.status === '引当待ち' ? '有効在庫が足りない明細があります。在庫が空いたあとに「引き当て直す」を押してください' : o.status === '引当済' ? '全量を引き当てています' : o.status} />
+                <Row k="引当" v={allocationText(o)} />
               </div>
               {can('D-01') && (
                 <>
@@ -222,12 +302,14 @@ export default function OrderDetailPage() {
                       )
                     }
                   />
+                  {/* 画面幅 1280 では右の枠が 500px ほどなので、列幅を決めて枠に収める（横に流れて「登録」が切れていた） */}
                   <DataTable<Attachment>
+                    fit
                     columns={[
-                      { key: 'file_name', label: 'ファイル', render: (a) => <button type="button" className="text-[var(--color-brand-700)] underline" onClick={() => api.download(`/attachments/${a.id}/content`, { open: true }).catch((err) => toast(err.message, 'bad'))}>{a.file_name}</button> },
-                      { key: 'byte_size', label: 'サイズ', r: true, render: (a) => (a.byte_size ? `${Math.ceil(a.byte_size / 1024)} KB` : '') },
-                      { key: 'is_print_target', label: '印刷', c: true, render: (a) => (a.is_print_target ? '同梱' : '—') },
-                      { key: 'created_by_name', label: '登録', render: (a) => `${a.created_by_name ?? ''} ${ymdhm(a.created_at)}` },
+                      { key: 'file_name', label: 'ファイル', render: (a) => <button type="button" className="text-[var(--color-brand-700)] underline text-left break-all" onClick={() => api.download(`/attachments/${a.id}/content`, { open: true }).catch((err) => toast(err.message, 'bad'))}>{a.file_name}</button> },
+                      { key: 'byte_size', label: 'サイズ', r: true, width: 72, render: (a) => (a.byte_size ? `${Math.ceil(a.byte_size / 1024)} KB` : '') },
+                      { key: 'is_print_target', label: '印刷', c: true, width: 48, render: (a) => (a.is_print_target ? '同梱' : '—') },
+                      { key: 'created_by_name', label: '登録', width: 130, render: (a) => `${a.created_by_name ?? ''} ${ymdhm(a.created_at)}` },
                       { key: '_x', label: '', width: 50, render: (a) => can('D-01', 'delete') && <button type="button" className="btn btn-quiet btn-sm !text-[var(--color-crit-500)]" onClick={async () => { if (!(await confirm('添付を削除しますか', undefined, true))) return; await api.delete(`/attachments/${a.id}`); await attachments.reload(); }}>削除</button> },
                     ]}
                     rows={attachments.data ?? []}
@@ -240,23 +322,30 @@ export default function OrderDetailPage() {
           </div>
 
           <Card>
-            <CardHead title="明細" />
+            <CardHead title="明細" sub={isReturn ? '返品のため数量・金額はマイナスで登録しています' : undefined} />
+            {/* 列が多いので、画面幅 1280 でも横に流れないよう文字の列は折り返す（fit。O-24） */}
             <DataTable<Line>
+              fit
               columns={[
-                { key: 'line_no', label: '行', c: true, width: 40 },
-                { key: 'line_type', label: '種別', width: 80 },
-                { key: 'sku_code', label: 'SKU', width: 150, render: (l) => <Num>{l.sku_code ?? ''}</Num> },
+                { key: 'line_no', label: '行', c: true, width: 28 },
+                { key: 'line_type', label: '種別', width: 76 },
+                { key: 'sku_code', label: '商品コード', width: 116, nowrap: true, render: (l) => <Num>{l.sku_code ?? ''}</Num> },
                 // 長い品名も末尾の (W)・カラー・サイズまで読めるよう折り返す（3回目の全面テスト）
                 { key: 'item_name', label: '品名', render: (l) => <span className="whitespace-normal break-words" title={l.item_name}>{l.item_name}</span> },
-                { key: 'qty', label: '数量', r: true, width: 70, render: (l) => qty(l.qty) },
-                { key: 'allocated_qty', label: '引当', r: true, width: 70, render: (l) => (l.is_stock_target ? qty(l.allocated_qty) : '—') },
-                { key: 'unit_price', label: '単価', r: true, width: 90, render: (l) => moneyIn(l.unit_price, o.currency) },
+                { key: 'color_name', label: 'カラー', width: 60, render: (l) => l.color_name ?? '' },
+                { key: 'size_name', label: 'サイズ', width: 48, render: (l) => l.size_name ?? '' },
+                { key: 'jan', label: 'JAN', width: 108, nowrap: true, render: (l) => <Num>{l.jan ?? ''}</Num> },
+                { key: 'qty', label: '数量', r: true, width: 52, render: (l) => qty(l.qty) },
+                { key: 'allocated_qty', label: '引当', r: true, width: 48, render: (l) => (l.is_stock_target && !isReturn ? qty(l.allocated_qty) : '—') },
+                { key: 'unit_price', label: '単価', r: true, width: 64, render: (l) => moneyIn(l.unit_price, o.currency) },
                 // 海外の得意先は税 0 で請求・納品書を出す。海外にする前に登録した明細（10% など）は、
                 // 実際に使う 0% を出し、登録時の税率を小さく添える（2026-10-13 再テスト N4。下の「税率 0%」と食い違っていた）
-                { key: 'tax_rate', label: '税率', c: true, width: 60, render: (l) => (o.overseas_tax_label && Number(l.tax_rate) !== 0
+                { key: 'tax_rate', label: '税率', c: true, width: 44, render: (l) => (o.overseas_tax_label && Number(l.tax_rate) !== 0
                   ? <span title={`登録時の税率 ${Number(l.tax_rate)}%。消費税免税区分が「${o.overseas_tax_label}」の得意先のため 0% で請求します`}>0%<span className="block text-[10px] text-[var(--color-ink-3)]">（登録 {Number(l.tax_rate)}%）</span></span>
                   : `${Number(l.tax_rate)}%`) },
-                { key: 'amount', label: '金額', r: true, width: 100, render: (l) => moneyIn(l.amount, o.currency) },
+                { key: 'amount', label: '金額', r: true, width: 80, render: (l) => moneyIn(l.amount, o.currency) },
+                { key: 'shipping_note', label: '出荷依頼書適用', width: 80, render: (l) => l.shipping_note ?? '' },
+                { key: 'delivery_slip_note', label: '納品書適用', width: 80, render: (l) => l.delivery_slip_note ?? '' },
               ]}
               rows={o.lines}
               rowKey={(l) => l.id}
@@ -271,7 +360,7 @@ export default function OrderDetailPage() {
               {o.overseas_tax_label && o.lines.some((l) => Number(l.tax_rate) !== 0) && (
                 <span className="mr-5 text-[11px] text-[var(--color-ink-3)]">この受注は取引先に消費税免税区分を付ける前の税率で登録されています。請求書・納品書は税 0 で出します</span>
               )}
-              合計（税抜）　<b className="num text-[14px]">{moneyWithCurrency(o.lines.reduce((a, l) => a + Number(l.amount), 0), o.currency)}</b>
+              {isReturn ? '返品の合計（税抜）' : '合計（税抜）'}　<b className={`num text-[14px] ${isReturn ? 'text-[var(--color-crit-500)]' : ''}`}>{moneyWithCurrency(o.lines.reduce((a, l) => a + Number(l.amount), 0), o.currency)}</b>
             </div>
           </Card>
           <div>

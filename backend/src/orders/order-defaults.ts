@@ -24,8 +24,12 @@ export function orderTradeType(defaultTradeType: string | null | undefined): '�
  */
 export const OVERSEAS_TAX_RATE = '0.00';
 
-/** 取引先が海外か。見つからなければ国内として扱う。 */
-export async function isOverseasPartner(trx: Transaction<DB>, partnerId: number): Promise<boolean> {
+/**
+ * 取引先が海外か。見つからなければ国内として扱う。
+ * 取引先が空の受注（サンプル・社内移動。2026-10-13 受注処理編）も国内として扱う。
+ */
+export async function isOverseasPartner(trx: Transaction<DB>, partnerId: number | null): Promise<boolean> {
+  if (partnerId === null) return false;
   const p = await trx.selectFrom('partners').select('is_overseas').where('id', '=', partnerId).executeTakeFirst();
   return p?.is_overseas === true;
 }

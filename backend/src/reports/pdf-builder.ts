@@ -63,13 +63,18 @@ export class ReportDoc {
   private readonly chunks: Buffer[] = [];
   private readonly done: Promise<Buffer>;
 
-  constructor(title: string) {
+  /**
+   * landscape は貴社の様式どおりに枠を描く帳票（出荷依頼書・ピッキングリスト・納品書。A4 横）。
+   * 座標で置くので余白は 0 にする（pdf-form.ts の FormPainter で描く）。
+   */
+  constructor(title: string, options: { landscape?: boolean } = {}) {
     const font = findJapaneseFont();
     if (!font) throw new ServiceUnavailableException(FONT_MISSING_MESSAGE);
 
     this.doc = new PDFDocument({
       size: 'A4',
-      margin: MARGIN,
+      layout: options.landscape ? 'landscape' : 'portrait',
+      margin: options.landscape ? 0 : MARGIN,
       info: { Title: title },
       autoFirstPage: true,
     });

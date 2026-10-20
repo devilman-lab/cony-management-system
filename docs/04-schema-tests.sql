@@ -64,7 +64,7 @@ BEGIN
   RAISE NOTICE 'T02 OK  ドメイン money_amt / qty_num / tax_rate';
 
   SELECT count(*) INTO n FROM code_categories;
-  IF n <> 27 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 27 件。2026-10-18 に入金方法・請求書送付方法・ロイヤリティ区分を追加）', n USING ERRCODE='TF001'; END IF;
+  IF n <> 28 THEN RAISE EXCEPTION 'T03 失敗: 区分カテゴリー % 件（期待 28 件。2026-10-18 に入金方法・請求書送付方法・ロイヤリティ区分、2026-10-20 に納品時間を追加）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM sales_categories;
   IF n <> 3  THEN RAISE EXCEPTION 'T03 失敗: 販売カテゴリー % 件（期待 3 件）', n USING ERRCODE='TF001'; END IF;
   SELECT count(*) INTO n FROM roles;
@@ -530,8 +530,8 @@ DO $b15$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM system_settings;
-  IF n <> 25 THEN
-    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 25 件）', n USING ERRCODE='TF001';
+  IF n <> 29 THEN
+    RAISE EXCEPTION 'T28 失敗: システム設定が % 件（期待 29 件。2026-10-20 に納品書の差出人欄（郵便番号・住所2行目・FAX・担当）を追加）', n USING ERRCODE='TF001';
   END IF;
 
   -- 貴社にご説明した項目が、いずれもコードではなく設定として存在すること
@@ -941,8 +941,8 @@ END $b23$;
 -- ----------------------------------------------------------------------------
 DO $b24$
 BEGIN
-  IF fn_setting_text('ALLOCATION_TIMING') <> 'order_entry' THEN
-    RAISE EXCEPTION 'T38 失敗: 引当タイミングが %（期待 order_entry。9/15 ご確認）',
+  IF fn_setting_text('ALLOCATION_TIMING') <> 'manual' THEN
+    RAISE EXCEPTION 'T38 失敗: 引当タイミングが %（期待 manual。2026-10-13 受注処理編「登録だけできるように」）',
       fn_setting_text('ALLOCATION_TIMING') USING ERRCODE='TF001';
   END IF;
   IF fn_setting_text('SHIPMENT_NO_SOURCE') <> 'sales_order' THEN
@@ -953,7 +953,7 @@ BEGIN
     RAISE EXCEPTION 'T38 失敗: 通販CSVの取込モードが %', fn_setting_text('OMS_IMPORT_MODE')
       USING ERRCODE='TF001';
   END IF;
-  RAISE NOTICE 'T38 OK  引当は出荷指示時／出荷指示番号は受注番号／通販CSVは出荷済み実績';
+  RAISE NOTICE 'T38 OK  受注は登録だけ（引当は受注一覧から）／出荷指示番号は受注番号／通販CSVは出荷済み実績';
 END $b24$;
 
 -- ----------------------------------------------------------------------------

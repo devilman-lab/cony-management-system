@@ -31,6 +31,7 @@ import {
   describeJanClashes,
   janClashesForProductCode,
   janClashesForSku,
+  skuItemNameExpr,
   skuNameExpr,
 } from './products.service';
 import { assertPurchaseItemTax } from './purchase-item-tax';
@@ -1110,9 +1111,9 @@ export class MastersWriteController {
         's.sku_code as sku_code',
         // SKU の商品名があればそれ（2026-10-09 マスター編②）
         skuNameExpr('s', 'p').as('product_name'),
-        // 一覧の商品名は「商品名　カラー　サイズ」（例 骨盤ショーツ07　2枚組　ブラック　S。2026-10-09 マスター編②）。
-        // 同じ商品のセットが色・サイズ違いで並ぶため、商品名だけでは見分けられなかった
-        sql<string>`concat_ws('　', ${skuNameExpr('s', 'p')}, cl.name, sz.name)`.as('display_name'),
+        // 一覧の商品名は品名（商品名＋カラー＋サイズ。2026-10-09 マスター編②）。同じ商品のセットが色・サイズ違いで並ぶため、
+        // 商品名だけでは見分けられなかった。組数はカラー・サイズのあと（例 骨盤ショーツ07 ブラック S 2枚組。2026-10-13 受注処理編 O-01）
+        skuItemNameExpr('s', 'p', 'cl', 'sz').as('display_name'),
         'cl.name as color_name',
         'sz.name as size_name',
         'pc.name as product_class_name',

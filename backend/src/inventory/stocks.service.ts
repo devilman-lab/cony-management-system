@@ -3,6 +3,7 @@ import { sql } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { Paged } from '../masters/partners.service';
+import { skuItemNameExpr } from '../masters/products.service';
 
 export interface StockListQuery {
   q?: string;
@@ -29,6 +30,10 @@ export interface MovementListQuery {
   sku_id?: number;
   warehouse_id?: number;
   movement_type?: string;
+  /** 種別を複数で絞る（2026-10-13 受注処理編 O-41） */
+  movement_types?: string[];
+  /** キーワード。商品コード・品名・JAN・元伝票の番号・担当（O-42） */
+  q?: string;
   from?: string;
   to?: string;
   limit: number;
@@ -96,7 +101,8 @@ export class StocksService {
           esc(r.product_class_name),
           esc(r.sku_code),
           esc(r.jan),
-          esc(r.product_name),
+          // 商品名の欄は品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01。画面の商品名と同じ）
+          esc(r.item_name),
           esc(r.color_name),
           esc(r.size_name),
           esc(r.quality_name),
@@ -164,6 +170,8 @@ export class StocksService {
           eb('sk.sku_name', 'ilike', like),
           eb('p.product_code', 'ilike', like),
           eb('p.product_name', 'ilike', like),
+          // 品名（「骨盤ショーツ07 ブラック」のようにカラーまで続けて打っても引ける。O-01）
+          eb(skuItemNameExpr('sk', 'p', 'c', 'z'), 'ilike', like),
           eb('pc.code', 'ilike', like),
           eb('pc.name', 'ilike', like),
         ]),
@@ -183,6 +191,8 @@ export class StocksService {
       'p.product_code as product_code',
       // SKU ごとの商品名があればそれ、無ければ商品の商品名（マスター編② M-10）
       sql<string>`coalesce(nullif(sk.sku_name, ''), p.product_name)`.as('product_name'),
+      // 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。画面の商品名の欄・CSV の商品名はこちら
+      skuItemNameExpr('sk', 'p', 'c', 'z').as('item_name'),
       'c.name as color_name',
       'z.name as size_name',
       'w.id as warehouse_id',
@@ -222,23 +232,55 @@ export class StocksService {
    * showQty=false（在庫表で実在庫を隠す人）には、実在庫そのものである「前」「後」を返さない（Z-02）。
    */
   async movements(query: MovementListQuery, showQty = true): Promise<Paged<Record<string, unknown>>> {
+    // 元伝票の番号（在庫調整の調整番号・入荷番号・出荷番号・返品番号・受注番号）。キーワードでも探す（2026-10-13 受注処理編 O-42）
+    const refNo = sql<string | null>`coalesce(sa.adjustment_no, rcp.receipt_no, shp.shipment_no, ret.return_no, so.order_no)`;
     let base = this.db
       .selectFrom('stock_movements as m')
       .innerJoin('stocks as s', 's.id', 'm.stock_id')
       .innerJoin('skus as sk', 'sk.id', 's.sku_id')
       .innerJoin('products as p', 'p.id', 'sk.product_id')
+      // 商品の欄は品名（商品名＋カラー＋サイズ。O-01・O-40「カラー・サイズ表記必要」）
+      .leftJoin('colors as cl', 'cl.id', 'sk.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 'sk.size_id')
       .innerJoin('warehouses as w', 'w.id', 's.warehouse_id')
       .leftJoin('users as u', 'u.id', 'm.created_by')
-      // 在庫調整の行は理由（その他・再生・棚卸差異）と調整番号を添える。種別はどの理由でも「棚卸調整」で記録しているため、
+      // 在庫調整の行は理由（その他・再生・棚卸差異・返品）と調整番号を添える。種別はどの理由でも「棚卸調整」で記録しているため、
       // 理由が「再生」でも「棚卸調整」とだけ出ていた（2026-10-18 受入 W3 Z3-08）
       .leftJoin('stock_adjustments as sa', (j) => j.on('m.ref_table', '=', 'stock_adjustments').onRef('sa.id', '=', 'm.ref_id'))
-      .leftJoin('codes as rc', 'rc.id', 'sa.reason_code_id');
+      .leftJoin('codes as rc', 'rc.id', 'sa.reason_code_id')
+      .leftJoin('receipts as rcp', (j) => j.on('m.ref_table', '=', 'receipts').onRef('rcp.id', '=', 'm.ref_id'))
+      .leftJoin('shipments as shp', (j) => j.on('m.ref_table', '=', 'shipments').onRef('shp.id', '=', 'm.ref_id'))
+      .leftJoin('returns as ret', (j) => j.on('m.ref_table', '=', 'returns').onRef('ret.id', '=', 'm.ref_id'))
+      .leftJoin('sales_order_lines as sol', (j) => j.on('m.ref_table', '=', 'sales_order_lines').onRef('sol.id', '=', 'm.ref_id'))
+      .leftJoin('sales_orders as so', 'so.id', 'sol.sales_order_id');
 
     if (query.sku_id !== undefined) base = base.where('s.sku_id', '=', query.sku_id);
     if (query.warehouse_id !== undefined) base = base.where('s.warehouse_id', '=', query.warehouse_id);
     if (query.movement_type) base = base.where('m.movement_type', '=', query.movement_type);
+    // 種別の複数指定（O-41）
+    if (query.movement_types && query.movement_types.length > 0) base = base.where('m.movement_type', 'in', query.movement_types);
     if (query.from) base = base.where('m.moved_at', '>=', new Date(`${query.from}T00:00:00+09:00`));
     if (query.to) base = base.where('m.moved_at', '<=', new Date(`${query.to}T23:59:59+09:00`));
+    if (query.q) {
+      // キーワード（O-42）: 商品コード・品番・品名（カラー・サイズまで続けて打っても引ける）・JAN・元伝票の番号・担当。
+      // 空白（全角も）で区切ると、すべての語を含む記録を出す（受注一覧と同じ。2026-10-20 受入テスト T5。
+      // 以前は全角空白で区切ると文字列そのままで探し、0件になっていた）
+      for (const word of query.q.split(/[\s　]+/).filter(Boolean)) {
+        const like = `%${word}%`;
+        base = base.where((eb) =>
+          eb.or([
+            eb('sk.sku_code', 'ilike', like),
+            eb('p.product_code', 'ilike', like),
+            eb('sk.sku_name', 'ilike', like),
+            eb('p.product_name', 'ilike', like),
+            eb(skuItemNameExpr('sk', 'p', 'cl', 'sz'), 'ilike', like),
+            eb('sk.jan', 'ilike', like),
+            eb(refNo, 'ilike', like),
+            eb('u.name', 'ilike', like),
+          ]),
+        );
+      }
+    }
 
     const [rows, total] = await Promise.all([
       base
@@ -246,18 +288,23 @@ export class StocksService {
           'm.id as id',
           'm.moved_at as moved_at',
           'm.movement_type as movement_type',
-          // 画面に出す種別。在庫調整の増減は「在庫調整（再生）」の形（不良振替などはそのまま）
+          // 画面に出す種別。在庫調整の増減は「在庫調整（再生）」「在庫調整（返品）」の形（不良振替などはそのまま）
           sql<string>`case when sa.id is not null and m.movement_type = '棚卸調整' then '在庫調整' || coalesce('（' || rc.name || '）', '') else m.movement_type end`.as('movement_label'),
           'm.ref_table as ref_table',
           'm.ref_id as ref_id',
-          // 元伝票の番号（今は在庫調整の調整番号だけ。ほかは画面が「入荷 #12」の形で出す）
-          'sa.adjustment_no as ref_no',
-          'm.qty as qty',
+          // 元伝票の番号。画面は「入荷 RC…」「在庫調整 AD…」の形で出す（番号の無い伝票は「入荷 #12」）
+          refNo.as('ref_no'),
+          // 増減。引当・引当解除の記録は、前・後に有効在庫（実在庫−引当済）、増減に引当の数を入れてあるので、
+          // 「前・増減・後」の並び（O-43）で左から読むと計算が合わなかった（前 21・増減 +1・後 20。2026-10-20 受入テスト T5）。
+          // この2つは有効在庫の増減（後−前）で出す。記録そのもの（追記専用）は変えない
+          sql<string>`case when m.movement_type in ('引当', '引当解除') then m.qty_after - m.qty_before else m.qty end`.as('qty'),
           'm.qty_before as qty_before',
           'm.qty_after as qty_after',
           'sk.sku_code as sku_code',
-          // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
-          sql<string>`coalesce(nullif(btrim(sk.sku_name), ''), p.product_name)`.as('product_name'),
+          // 品名（SKU の名前＋カラー＋サイズ。2026-10-13 受注処理編 O-01・O-40）
+          skuItemNameExpr('sk', 'p', 'cl', 'sz').as('product_name'),
+          'cl.name as color_name',
+          'sz.name as size_name',
           'w.short_name as warehouse_name',
           'u.name as user_name',
         ])

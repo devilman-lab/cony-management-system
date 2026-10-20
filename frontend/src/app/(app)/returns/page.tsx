@@ -6,6 +6,7 @@ import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList, useWarehouses } from '@/lib/hooks';
 import { moneyCell, qty, today, ymd } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { useToast } from '@/components/ui/Toast';
@@ -28,6 +29,10 @@ interface ReturnLine extends Record<string, unknown> {
   line_no: number;
   sku_code: string;
   product_name: string;
+  /** 品名（商品名＋カラー＋サイズ。API が作る。2026-10-13 受注処理編 O-01） */
+  item_name?: string;
+  color_name?: string | null;
+  size_name?: string | null;
   qty: string;
   unit_price: string;
   good_qty: string | null;
@@ -236,7 +241,10 @@ export default function ReturnsPage() {
                 return (
                   <tr key={l.id}>
                     <td><Num>{l.sku_code}</Num></td>
-                    <td className="truncate">{l.product_name}</td>
+                    {/* 品名（商品名＋カラー＋サイズ。O-01）。同じ商品のカラー違い・サイズ違いを見分けて検品する */}
+                    <td className="truncate" title={l.item_name || composeItemName(l.product_name, l.color_name, l.size_name)}>
+                      {l.item_name || composeItemName(l.product_name, l.color_name, l.size_name)}
+                    </td>
                     <td className="r num">{qty(l.qty)}</td>
                     <td className="r"><Input right value={v.good} onChange={(e) => set({ good: e.target.value })} className="!h-[26px] !w-[80px]" /></td>
                     <td className="r"><Input right value={v.defective} onChange={(e) => set({ defective: e.target.value })} className="!h-[26px] !w-[80px]" /></td>

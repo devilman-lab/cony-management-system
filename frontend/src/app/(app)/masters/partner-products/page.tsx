@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { useSimpleMaster } from '@/lib/hooks';
 import { moneyCell, ymd } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Input, Num, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchPartners, fetchSkus, type Option } from '@/components/ui/SearchSelect';
 import { MasterPage, decOrNull, numOrNull, strOrNull } from '@/components/masters/MasterPage';
@@ -77,8 +78,11 @@ interface Form {
 const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 /** 数値を末尾の 0 なしで（3000.0000 → 3000） */
 const dec = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
-/** 商品名は「商品名 カラー サイズ」で出す（2026-10-16 マスター編_3 M3-25「商品名は下記の通りで表記したい」） */
-const skuFullName = (r: Pick<PpRow, 'product_name' | 'color_name' | 'size_name'>) => [r.product_name, r.color_name, r.size_name].filter(Boolean).join(' ');
+/**
+ * 商品名は「商品名 カラー サイズ」で出す（2026-10-16 マスター編_3 M3-25「商品名は下記の通りで表記したい」）。
+ * 品名の決まり（組数はカラー・サイズのあと、名前に入っているカラー・サイズは重ねない。2026-10-13 受注処理編 O-01）
+ */
+const skuFullName = (r: Pick<PpRow, 'product_name' | 'color_name' | 'size_name'>) => composeItemName(r.product_name, r.color_name, r.size_name);
 /** 編集画面の3列の並び（M3-28「横に広く」）。狭い画面では1列 */
 const GRID3 = 'grid grid-cols-1 lg:grid-cols-3 gap-x-6';
 

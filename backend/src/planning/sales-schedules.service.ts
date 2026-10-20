@@ -3,6 +3,7 @@ import { sql } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { Paged } from '../masters/partners.service';
+import { skuItemNameExpr } from '../masters/products.service';
 
 export interface SalesScheduleInput {
   partner_id?: number | null;
@@ -40,6 +41,8 @@ export class SalesSchedulesService {
       .leftJoin('partners as p', 'p.id', 'ss.partner_id')
       .leftJoin('skus as s', 's.id', 'ss.sku_id')
       .leftJoin('products as pr', 'pr.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
       .leftJoin('sales_categories as sc', 'sc.id', 'ss.sales_category_id');
 
     if (query.partner_id !== undefined) base = base.where('ss.partner_id', '=', query.partner_id);
@@ -63,6 +66,8 @@ export class SalesSchedulesService {
           's.sku_code as sku_code',
           // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
           sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
+          // 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。一覧の商品の欄に出す。SKU が空の予定は空
+          sql<string | null>`case when s.id is null then null else ${skuItemNameExpr('s', 'pr', 'cl', 'sz')} end`.as('item_name'),
           'ss.planned_sales_month as planned_sales_month',
           'ss.planned_arrival_month as planned_arrival_month',
           'ss.planned_qty as planned_qty',

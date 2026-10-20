@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebounce, useList } from '@/lib/hooks';
 import { qty } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Button, Card, DataTable, ErrorBox, Input, Modal, Num, PageHead, Pager, Textarea, Toolbar, useConfirm } from '@/components/ui';
 import { SearchSelect, fetchSetSkus, fetchSkusFor, type Option } from '@/components/ui/SearchSelect';
 
@@ -22,7 +23,7 @@ interface SetRow extends Record<string, unknown> {
   sku_code: string;
   /** SKU の商品名があればそれ、無ければ商品名 */
   product_name: string;
-  /** 一覧に出す商品名（商品名　カラー　サイズ） */
+  /** 一覧に出す商品名（品名＝商品名＋カラー＋サイズ。API が作る） */
   display_name: string;
   color_name: string | null;
   size_name: string | null;
@@ -45,9 +46,12 @@ interface Line {
   qty: string;
 }
 
-/** 候補と同じ見え方（SKU　商品名 カラー サイズ）。選び直さなくても何が入っているか分かるように */
+/**
+ * 候補と同じ見え方（SKU　品名）。選び直さなくても何が入っているか分かるように。
+ * 品名は商品名＋カラー＋サイズ（組数はカラー・サイズのあと。2026-10-13 受注処理編 O-01。候補の skuItemName と同じ決まり）
+ */
 const skuLabel = (c: { sku_code: string | null; product_name: string | null; color_name: string | null; size_name: string | null }) =>
-  `${c.sku_code ?? ''}　${c.product_name ?? ''}${c.color_name ? ' ' + c.color_name : ''}${c.size_name ? ' ' + c.size_name : ''}`;
+  `${c.sku_code ?? ''}　${composeItemName(c.product_name, c.color_name, c.size_name)}`;
 /** 一覧の欄は折り返して全部見せる（2026-10-09 マスター編②「見切れているので全部出るように」） */
 const Wrap = ({ children }: { children: ReactNode }) => <span className="whitespace-normal break-words">{children}</span>;
 /**
@@ -220,7 +224,7 @@ export default function SetsPage() {
         <DataTable<SetRow>
           columns={[
             { key: 'sku_code', label: 'セットの商品コード', width: 160, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
-            // 商品名は「商品名（SKU の商品名があればそれ）　カラー　サイズ」（2026-10-09 マスター編②）
+            // 商品名は品名（SKU の商品名があればそれ＋カラー＋サイズ。2026-10-09 マスター編②・2026-10-13 受注処理編 O-01）
             { key: 'display_name', label: '商品名', render: (r) => <Wrap>{r.display_name}</Wrap> },
             { key: 'product_class_name', label: '商品分類', width: 170, render: (r) => <Wrap>{r.product_class_name ?? ''}</Wrap> },
             { key: 'color_name', label: 'カラー', width: 120, render: (r) => <Wrap>{r.color_name ?? ''}</Wrap> },

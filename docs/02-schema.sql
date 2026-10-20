@@ -849,10 +849,11 @@ CREATE TABLE receipt_lines (
 CREATE TABLE sales_orders (
   id                      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   order_no                VARCHAR(30) NOT NULL UNIQUE,
-  order_type              VARCHAR(20) NOT NULL,   -- 卸／直送／通販
-  partner_id              BIGINT      NOT NULL REFERENCES partners(id),
+  order_type              VARCHAR(20) NOT NULL,   -- 卸／直送／通販／サンプル／社内移動／返品
+  -- サンプル・社内移動は取引先・販売カテゴリーが空でよい（2026-10-13 受注処理編「取引先・販売カテゴリー不要」）
+  partner_id              BIGINT      REFERENCES partners(id),
   delivery_destination_id BIGINT REFERENCES delivery_destinations(id),
-  sales_category_id       BIGINT      NOT NULL REFERENCES sales_categories(id),
+  sales_category_id       BIGINT      REFERENCES sales_categories(id),
   trade_type              VARCHAR(10) NOT NULL DEFAULT '買取',
   sales_staff_id          BIGINT REFERENCES sales_staff(id),  -- 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）
   -- 通貨。取引先の通貨で固定（引き金 trg_sales_orders_currency が入れる。2026-10-12 No.39）
@@ -862,8 +863,12 @@ CREATE TABLE sales_orders (
   order_date              DATE        NOT NULL,                -- 受注日（システム内部。締め・実績に使う）
   ship_date               DATE,                               -- 出荷日（受注フォームの「出荷日」欄）
   delivery_date           DATE,                               -- 納品日（受注フォームの「納品日」欄）
-  requested_delivery_date DATE,                               -- 納品希望日
+  requested_delivery_date DATE,                               -- 納品希望日（取込の値を残すだけ。受注入力は納品時間で選ぶ）
+  -- 納品時間（区分値 DELIVERY_TIME。8:00〜12:00 などの時間帯）。納品希望日の代わり（2026-10-13 受注処理編）
+  delivery_time_code_id   BIGINT REFERENCES codes(id),
   ship_from_warehouse_id  BIGINT REFERENCES warehouses(id),
+  -- 委託の入庫倉庫。出荷確定で出荷倉庫からこの倉庫へ在庫が移る（2026-10-13 受注処理編「入庫倉庫 追加」）
+  consignment_warehouse_id BIGINT REFERENCES warehouses(id),
   direct_name             VARCHAR(120),
   direct_kana             VARCHAR(120),
   direct_postal_code      VARCHAR(8),
@@ -873,26 +878,34 @@ CREATE TABLE sales_orders (
   shipping_remarks        TEXT,   -- 出荷備考 → 出荷指示書
   delivery_note_remarks   TEXT,   -- 納品書備考 → 納品書
   shipping_fee_adjustment money_amt,  -- 送料調整。入力すると自動計算した送料を上書きする
-  is_billable             BOOLEAN     NOT NULL DEFAULT true,  -- false＝売上・請求に計上しない（サンプル出荷）
+  print_shipping_fee      BOOLEAN     NOT NULL DEFAULT false, -- 納品書に送料を記載する（2026-10-13 受注処理編）
+  is_billable             BOOLEAN     NOT NULL DEFAULT true,  -- false＝売上・請求に計上しない（サンプル・社内移動）
   channel                 VARCHAR(30),
   external_order_id       BIGINT, -- FK は external_orders 作成後に付与
   status                  VARCHAR(20) NOT NULL DEFAULT '未確定',
   is_cancelled            BOOLEAN     NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
-  CONSTRAINT ck_so_type   CHECK (order_type IN ('卸','直送','通販','サンプル')),
+  -- 返品（2026-10-13 受注処理編）は得意先からの返品。明細はマイナスの数量・金額で持ち、請求から差し引く
+  CONSTRAINT ck_so_type   CHECK (order_type IN ('卸','直送','通販','サンプル','社内移動','返品')),
   CONSTRAINT ck_so_trade  CHECK (trade_type IN ('委託','買取')),
   CONSTRAINT ck_so_status CHECK (status IN ('未確定','引当待ち','引当済','出荷指示済','出荷済','取消')),
   CONSTRAINT ck_so_dest   CHECK (order_type NOT IN ('卸') OR delivery_destination_id IS NOT NULL),
-  -- サンプル出荷は在庫を落とすが売上には計上しない（確認事項④）
-  CONSTRAINT ck_so_sample CHECK (order_type <> 'サンプル' OR is_billable = false)
+  -- サンプル出荷・社内移動は在庫を落とすが売上には計上しない（確認事項④・2026-10-13 受注処理編）
+  CONSTRAINT ck_so_sample CHECK (order_type NOT IN ('サンプル','社内移動') OR is_billable = false),
+  -- 取引先・販売カテゴリーを空にできるのはサンプル・社内移動だけ
+  CONSTRAINT ck_so_partner CHECK (order_type IN ('サンプル','社内移動') OR (partner_id IS NOT NULL AND sales_category_id IS NOT NULL))
 );
 COMMENT ON TABLE sales_orders IS '受注。order_type により適用項目・検証・出力帳票が切り替わる';
 COMMENT ON COLUMN sales_orders.ship_date IS '出荷日。受注フォームでは「出荷日」として表示する（確認事項⑥）';
 COMMENT ON COLUMN sales_orders.delivery_date IS '納品日。受注フォームでは「納品日」として表示する（確認事項⑥）';
-COMMENT ON COLUMN sales_orders.is_billable IS 'サンプル出荷は false。出荷指示書は出て在庫も落ちるが、売上・請求には乗らない';
+COMMENT ON COLUMN sales_orders.is_billable IS 'サンプル・社内移動は false。出荷依頼書は出て在庫も落ちるが、売上・請求には乗らない';
+COMMENT ON COLUMN sales_orders.delivery_time_code_id IS '納品時間（区分値 DELIVERY_TIME）。納品希望日の代わりに受注入力で選ぶ（2026-10-13 受注処理編）';
+COMMENT ON COLUMN sales_orders.print_shipping_fee IS '納品書に送料を記載するか（2026-10-13 受注処理編）';
+COMMENT ON COLUMN sales_orders.consignment_warehouse_id IS '委託の入庫倉庫。出荷確定で出荷倉庫からこの倉庫へ在庫が移る（2026-10-13 受注処理編）';
 CREATE INDEX ix_so_partner_date ON sales_orders (partner_id, order_date DESC);
 CREATE INDEX ix_so_status ON sales_orders (status) WHERE is_cancelled = false;
+CREATE INDEX ix_so_ship_date ON sales_orders (ship_date DESC);
 
 -- (37) sales_order_lines 受注明細
 CREATE TABLE sales_order_lines (
@@ -917,6 +930,9 @@ CREATE TABLE sales_order_lines (
   -- セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。
   is_stock_target    BOOLEAN GENERATED ALWAYS AS
                      (line_type IN ('商品','内訳商品') AND sku_id IS NOT NULL) STORED,
+  -- 出荷依頼書適用・納品書適用（明細ごとに入力。2026-10-13 受注処理編）
+  shipping_note      VARCHAR(200),
+  delivery_slip_note VARCHAR(200),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   UNIQUE (sales_order_id, line_no),
   -- 種別は受領した OMS 受注CSV の実値（商品／セット商品／内訳商品／送料／非商品）を包含する。
@@ -1653,11 +1669,14 @@ CREATE TABLE import_template_columns (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by BIGINT REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by BIGINT REFERENCES users(id),
   UNIQUE (import_template_id, column_index),
-  CONSTRAINT ck_imptplcol_field CHECK (target_field IN (
-    'order_no','partner_code','partner_name','delivery_code','delivery_name',
-    'po_no','po_line_no','line_no','sku_code','jan','partner_product_code',
-    'item_name','color','size','qty','unit_price','retail_price','amount',
-    'ship_date','delivery_date','requested_delivery_date','order_date','remarks','ignore'))
+  -- 1つの列を2つの項目に入れるときは「+」でつなげて書く（例：po_no+shipping_note。2026-10-13 受注処理編）
+  CONSTRAINT ck_imptplcol_field CHECK (
+    string_to_array(target_field, '+') <@ ARRAY[
+      'order_no','partner_code','partner_name','delivery_code','delivery_name',
+      'po_no','po_line_no','line_no','sku_code','jan','partner_product_code',
+      'item_name','color','size','qty','unit_price','retail_price','amount',
+      'ship_date','delivery_date','requested_delivery_date','order_date','remarks',
+      'shipping_note','delivery_slip_note','ignore']::text[])
 );
 COMMENT ON TABLE import_template_columns IS '取込テンプレートの列マッピング。CSVの何列目を何として読むか';
 
@@ -1826,6 +1845,42 @@ BEGIN
   IF p_code IS NULL THEN RETURN NULL; END IF;
   v := regexp_replace(translate(p_code, '０１２３４５６７８９', '0123456789'), '[^0-9]', '', 'g');
   RETURN CASE WHEN v ~ '^[0-9]{7}$' THEN v ELSE NULL END;
+END; $$ LANGUAGE plpgsql IMMUTABLE;
+
+-- 品名（2026-10-13 受注処理編「商品・品名ともに すべて 商品名・カラー・サイズで出す」）。
+-- 名前の末尾に「2枚組」のような組数があれば、カラー・サイズのあとに回す
+-- （「骨盤ショーツ07 2枚組」＋ブラック・S →「骨盤ショーツ07 ブラック S 2枚組」）。
+-- 名前にカラー・サイズがすでに語として入っていれば重ねない。画面側の composeItemName（frontend/src/lib/item-name.ts）と同じ決まり。
+CREATE OR REPLACE FUNCTION fn_item_name(p_base text, p_color text, p_size text) RETURNS text AS $$
+DECLARE
+  -- 空白とみなす文字。画面（JavaScript の \s と trim()）と同じ集まりにする（2026-10-20 受入テスト T5）:
+  -- 半角の空白・タブ・改行など（[[:space:]]）、ノーブレークスペース（chr(160)）、U+1680、U+2000〜U+200A、
+  -- U+2028・U+2029・U+202F・U+205F、全角の空白（chr(12288)）、U+FEFF
+  v_extra  text := chr(160) || chr(5760) || chr(8192) || chr(8193) || chr(8194) || chr(8195) || chr(8196) || chr(8197)
+                   || chr(8198) || chr(8199) || chr(8200) || chr(8201) || chr(8202) || chr(8232) || chr(8233) || chr(8239)
+                   || chr(8287) || chr(12288) || chr(65279);
+  v_ws     text := ' ' || chr(9) || chr(10) || chr(11) || chr(12) || chr(13) || v_extra;
+  v_sp     text := '[[:space:]' || v_extra || ']';
+  v_nsp    text := '[^[:space:]' || v_extra || ']';
+  v_base   text := btrim(coalesce(p_base, ''), v_ws);
+  v_color  text := btrim(coalesce(p_color, ''), v_ws);
+  v_size   text := btrim(coalesce(p_size, ''), v_ws);
+  v_suffix text;
+  v_tokens text[];
+  v_out    text;
+  m        text[];
+BEGIN
+  m := regexp_match(v_base, '^(.*' || v_nsp || ')' || v_sp || '+([0-9０-９]+(枚|個|本|足|点|袋|箱)?(組|セット|入り|入))$');
+  IF m IS NOT NULL THEN
+    v_base := btrim(m[1], v_ws);
+    v_suffix := m[2];
+  END IF;
+  v_tokens := regexp_split_to_array(v_base, v_sp || '+');
+  v_out := v_base;
+  IF v_color <> '' AND NOT (v_color = ANY (v_tokens)) THEN v_out := v_out || ' ' || v_color; END IF;
+  IF v_size  <> '' AND NOT (v_size  = ANY (v_tokens)) THEN v_out := v_out || ' ' || v_size;  END IF;
+  IF v_suffix IS NOT NULL THEN v_out := v_out || ' ' || v_suffix; END IF;
+  RETURN btrim(v_out, v_ws);
 END; $$ LANGUAGE plpgsql IMMUTABLE;
 
 

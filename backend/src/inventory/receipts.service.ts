@@ -5,6 +5,7 @@ import { NumberingService } from '../common/numbering.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
+import { skuItemNameExpr } from '../masters/products.service';
 import { StockLedgerService } from './stock-ledger.service';
 
 export interface ReceiptLineInput {
@@ -397,6 +398,8 @@ export class ReceiptsService {
         's.jan as jan',
         // SKU ごとの商品名があればそれ（マスター編② M-10）
         sql<string>`coalesce(nullif(s.sku_name, ''), pr.product_name)`.as('product_name'),
+        // 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。一覧の商品名の欄と、編集画面の商品欄に出す
+        skuItemNameExpr('s', 'pr', 'c', 'z').as('item_name'),
         'c.name as color_name',
         'z.name as size_name',
         'l.qty as qty',

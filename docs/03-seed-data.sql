@@ -28,6 +28,7 @@ INSERT INTO code_categories (code, name, sort_order) VALUES
   ('DELIVERY_DIVISION',      '納品先区分',          30),
   ('MASTER_SEARCH_DISPLAY',  'マスタ検索表示区分',  31),
   ('SLIP_ISSUE_CLASS',       '伝票発行分類',        32),
+  ('DELIVERY_TIME',          '納品時間',            33),
   ('PRODUCT_DIVISION',       '商品区分',            40),
   ('PRODUCT_DISPLAY',        '商品表示',            41),
   ('ROYALTY_CLASS',          'ロイヤリティ区分',    42),
@@ -204,6 +205,7 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
   ('OTHER',     'その他',     10),
   ('REFURB',    '再生',       20),
   ('STOCKTAKE', '棚卸差異',   30),
+  ('RETURN',    '返品',       35),
   ('DAMAGE',    '破損',       40),
   ('LOSS',      '紛失',       50),
   ('QUALITY',   '品質振替',   60)
@@ -222,6 +224,20 @@ SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
   ('WITH_RETAIL',  '上代あり',  30),
   ('NO_PRICE',     '単価なし',  40)
 ) AS v(code, name, so) WHERE code_categories.code = 'SLIP_ISSUE_CLASS';
+-- 2026-10-13 受注処理編: 「単価あり」は使わない（過去の納品先のために残す）
+UPDATE codes SET is_active = false
+ WHERE code = 'WITH_PRICE'
+   AND code_category_id = (SELECT id FROM code_categories WHERE code = 'SLIP_ISSUE_CLASS');
+
+-- 納品時間（2026-10-13 受注処理編：納品希望日の代わりに5つの時間帯から選ぶ）
+INSERT INTO codes (code_category_id, code, name, sort_order)
+SELECT id, v.code, v.name, v.so FROM code_categories, (VALUES
+  ('0812', '8:00〜12:00',  10),
+  ('1416', '14:00〜16:00', 20),
+  ('1618', '16:00〜18:00', 30),
+  ('1820', '18:00〜20:00', 40),
+  ('1921', '19:00〜21:00', 50)
+) AS v(code, name, so) WHERE code_categories.code = 'DELIVERY_TIME';
 
 -- ※以下は貴社確認後に登録する（Q5）
 --   PARTNER_DIVISION2 / DELIVERY_DIVISION / MASTER_SEARCH_DISPLAY /
@@ -429,25 +445,34 @@ VALUES
   -- 海外の取引先（取引先マスタの「海外」）の消費税の扱い（2026-10-09 マスター編②）
   ('OVERSEAS_TAX_TREATMENT', 'TAX', '海外取引先の消費税（取引先で選ばないとき）', 'exempt', 'text', 'exempt,non_taxable',
    'exempt＝免税（税抜扱い）／non_taxable＝課税対象外。取引先マスタの「消費税免税区分」が空の海外取引先に使う。どちらも消費税は 0 で計算し、帳票の表記だけが変わる。', 40),
-  ('DELIVERY_NOTE_DEFAULT_FORM', 'DOCUMENT', '納品書の既定様式', '単価あり', 'text',
-   '単価あり,単価あり2,上代あり,単価なし',
-   '※ 納品先マスタの伝票発行分類が未設定のときに使う様式。使い分け一覧を頂戴後に見直す。', 30),
+  ('DELIVERY_NOTE_DEFAULT_FORM', 'DOCUMENT', '納品書の既定様式', '単価あり2', 'text',
+   '単価あり2,上代あり,単価なし',
+   '納品先マスタの伝票発行分類が未設定のときに使う様式。「単価あり」は 2026-10-13 のご指示で使わない。', 30),
 
   -- 帳票の差出人。納品書・請求書の上部に印刷する。画面から変更できる。
   ('COMPANY_NAME',       'DOCUMENT', '帳票に印刷する自社名', '株式会社コニー', 'text', NULL,
    '納品書・請求書の差出人。', 40),
-  ('COMPANY_ADDRESS',    'DOCUMENT', '帳票に印刷する自社住所', '', 'text', NULL,
-   '※ 帳票に印刷する住所を頂戴ください。', 50),
-  ('COMPANY_TEL',        'DOCUMENT', '帳票に印刷する電話番号', '', 'text', NULL,
-   '※ 帳票に印刷する電話番号を頂戴ください。', 60),
+  -- 納品書の差出人欄（2026-10-13 にいただいた納品書の様式どおり）。請求書は会社名だけ（9/15 ご回答）
+  ('COMPANY_POSTAL_CODE', 'DOCUMENT', '帳票に印刷する郵便番号', '541-0052', 'text', NULL,
+   '納品書の差出人欄に印刷する。', 45),
+  ('COMPANY_ADDRESS',    'DOCUMENT', '帳票に印刷する自社住所', '大阪府大阪市中央区安土町1丁目8-15', 'text', NULL,
+   '納品書の差出人欄に印刷する住所（1行目）。請求書は会社名だけを印刷する（9/15 ご回答）。', 50),
+  ('COMPANY_ADDRESS2',   'DOCUMENT', '帳票に印刷する住所（2行目）', '野村不動産大阪ビル8階', 'text', NULL,
+   '納品書の差出人欄に印刷する（建物名など）。', 55),
+  ('COMPANY_TEL',        'DOCUMENT', '帳票に印刷する電話番号', '06-6267-0052', 'text', NULL,
+   '納品書の差出人欄に印刷する。', 60),
+  ('COMPANY_FAX',        'DOCUMENT', '帳票に印刷するFAX番号', '06-6267-0053', 'text', NULL,
+   '納品書の差出人欄に印刷する。', 65),
+  ('COMPANY_CONTACT',    'DOCUMENT', '帳票に印刷する担当者', '', 'text', NULL,
+   '納品書の差出人欄の「担当」に印刷する。空なら「担当：」だけを出す。', 66),
   ('COMPANY_INVOICE_NO', 'DOCUMENT', '適格請求書発行事業者番号', '', 'text', NULL,
    '※ T から始まる登録番号。空欄のときは請求書に印刷しない。', 70),
 
   -- 受注・在庫の運用（2026/09/08 確認事項、2026/09/15 に見直し）
-  ('ALLOCATION_TIMING', 'ORDER', '在庫を引き当てるタイミング', 'order_entry', 'text',
-   'order_entry,shipping_instruction',
-   'order_entry＝受注登録時に引き当て、足りない分は引当待ちにする／shipping_instruction＝出荷指示ボタンを押した時。'
-   || '9/15 のご確認により order_entry で確定（実在庫は出荷確定で減る）。', 10),
+  ('ALLOCATION_TIMING', 'ORDER', '在庫を引き当てるタイミング', 'manual', 'text',
+   'manual,order_entry,shipping_instruction',
+   'manual＝受注は登録だけ。受注一覧で選んで「引当」を押したときに引き当てる（2026-10-13 受注処理編「登録だけできるように」）'
+   || '／order_entry＝受注登録時に引き当て、足りない分は引当待ちにする／shipping_instruction＝出荷指示ボタンを押した時。', 10),
   ('SHIPMENT_NO_SOURCE', 'ORDER', '出荷指示番号の採り方', 'sales_order', 'text',
    'sales_order,independent',
    'sales_order＝受注番号をそのまま使う／independent＝独自に採番する。'
@@ -480,11 +505,11 @@ INSERT INTO import_templates
 VALUES
   ('BIC',        'ビックカメラ 発注CSV',  'PARTNER_ORDER', 'CP932', true, 'csv',
    'sku_code', '卸', 10,
-   '得意先ID SD0228。数量・単価は「出荷数量／出荷時単価」を採用する（発注時単価と異なるため）。'
-   || 'JANコードが指数表記に壊れているため商品コードで引き当てる。'),
+   '得意先ID SD0228。数量は「出荷数量」（AA列）、単価は「発注時単価」（Z列）（2026-10-13 ご指示）。'
+   || '発注No（S列）は先方発注番号と明細の出荷依頼書適用に入れる。JANコードが指数表記に壊れているため商品コードで引き当てる。'),
   ('LABELLEVIE', 'ラベルヴィ 発注CSV',    'PARTNER_ORDER', 'CP932', true, 'csv',
    'sku_code', '卸', 20,
-   '得意先ID SD0180。6列目は見出しが空欄で出荷日。単価は「発注金額(税抜)÷発注バラ数」で求める。'),
+   '得意先ID SD0180。6列目は見出しが空欄で出荷日。数量は「発注セット数」（Q列）、単価は「卸値(税抜)」（T列）（2026-10-13 ご指示）。'),
   ('SHIRAHATO',  '白鳩 発注CSV',          'PARTNER_ORDER', 'CP932', true, 'csv',
    'jan',      '卸', 30,
    '得意先ID SD0264。自社商品コードの列がないためJANで引き当てる。'
@@ -517,16 +542,16 @@ SELECT t.id, v.idx, v.hdr, v.fld, v.tr, v.req
   ('BIC', 16,'送信年月日',                 'ignore',        NULL,         false),
   ('BIC', 17,'有効期限年月日',             'ignore',        NULL,         false),
   ('BIC', 18,'取引先コード',               'ignore',        NULL,         false),
-  ('BIC', 19,'発注No',                     'po_no',         'trim',       false),
+  ('BIC', 19,'発注No',                     'po_no+shipping_note','trim',  false),
   ('BIC', 20,'発注行No',                   'po_line_no',    'number',     false),
   ('BIC', 21,'分納No',                     'ignore',        NULL,         false),
   ('BIC', 22,'JANコード',                  'jan',           'jan13',      false),
   ('BIC', 23,'型番/商品名',                'item_name',     NULL,         false),
   ('BIC', 24,'色・規格',                   'color',         NULL,         false),
   ('BIC', 25,'発注数量',                   'ignore',        NULL,         false),
-  ('BIC', 26,'発注時単価',                 'ignore',        NULL,         false),
+  ('BIC', 26,'発注時単価',                 'unit_price',    'number',     true),
   ('BIC', 27,'出荷数量',                   'qty',           'number',     true),
-  ('BIC', 28,'出荷時単価',                 'unit_price',    'number',     true),
+  ('BIC', 28,'出荷時単価',                 'ignore',        NULL,         false),
   ('BIC', 29,'お客様着日',                 'ignore',        NULL,         false),
   ('BIC', 30,'弊社指定納品日',             'ignore',        NULL,         false),
   ('BIC', 31,'法人区分',                   'ignore',        NULL,         false),
@@ -553,13 +578,13 @@ SELECT t.id, v.idx, v.hdr, v.fld, v.tr, v.req
   ('LABELLEVIE', 14,'アイテム',        'item_name',     NULL,        false),
   ('LABELLEVIE', 15,'カラー',          'color',         NULL,        false),
   ('LABELLEVIE', 16,'サイズ',          'size',          NULL,        false),
-  ('LABELLEVIE', 17,'発注セット数',    'ignore',        NULL,        false),
-  ('LABELLEVIE', 18,'発注バラ数',      'qty',           'number',    true),
+  ('LABELLEVIE', 17,'発注セット数',    'qty',           'number',    true),
+  ('LABELLEVIE', 18,'発注バラ数',      'ignore',        NULL,        false),
   ('LABELLEVIE', 19,'掛率',            'ignore',        NULL,        false),
-  ('LABELLEVIE', 20,'卸値(税抜)',      'ignore',        NULL,        false),
+  ('LABELLEVIE', 20,'卸値(税抜)',      'unit_price',    'number',    false),
   ('LABELLEVIE', 21,'セール単価(税抜)','ignore',        NULL,        false),
   ('LABELLEVIE', 22,'GLS単価(税込)',   'retail_price',  'number',    false),
-  ('LABELLEVIE', 23,'発注金額(税抜)',  'amount',        'number',    true),
+  ('LABELLEVIE', 23,'発注金額(税抜)',  'amount',        'number',    false),
   ('LABELLEVIE', 24,'GLSコード',       'ignore',        NULL,        false),
   ('LABELLEVIE', 25,'メーカーコード',  'partner_product_code', 'trim', false),
   ('LABELLEVIE', 26,'備考',            'remarks',       NULL,        false),

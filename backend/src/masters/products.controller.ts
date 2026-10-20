@@ -34,6 +34,11 @@ const SkuSearchSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+  /** true＝partner_id の取引先の得意先別商品（使っている行）がある SKU だけ（受注入力の商品の欄。2026-10-13 受注処理編 O-05） */
+  registered_only: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 type SkuSearchQuery = z.infer<typeof SkuSearchSchema>;

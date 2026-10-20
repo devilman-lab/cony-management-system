@@ -5,6 +5,7 @@ import { NumberingService } from '../common/numbering.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import type { Paged } from '../masters/partners.service';
+import { skuItemNameExpr } from '../masters/products.service';
 
 export interface ReturnLineInput {
   line_no: number;
@@ -308,6 +309,8 @@ export class ReturnsService {
       .selectFrom('return_lines as l')
       .innerJoin('skus as s', 's.id', 'l.sku_id')
       .innerJoin('products as pr', 'pr.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
       .leftJoin('refurbishments as rf', 'rf.return_line_id', 'l.id')
       .select([
         'l.id as id',
@@ -315,6 +318,10 @@ export class ReturnsService {
         's.sku_code as sku_code',
         // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
         sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
+        // 品名（商品名＋カラー＋サイズ。2026-10-13 受注処理編 O-01）。検品の画面の商品の欄に出す
+        skuItemNameExpr('s', 'pr', 'cl', 'sz').as('item_name'),
+        'cl.name as color_name',
+        'sz.name as size_name',
         'l.qty as qty',
         'l.unit_price as unit_price',
         'rf.good_qty as good_qty',

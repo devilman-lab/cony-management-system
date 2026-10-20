@@ -4,6 +4,9 @@ import { KYSELY, type ConyDatabase } from '../db/database.module';
 
 const CACHE_MS = 30_000;
 
+/** 引当のタイミング（システム設定 ALLOCATION_TIMING の値）。 */
+export type AllocationTiming = 'manual' | 'order_entry' | 'shipping_instruction';
+
 /**
  * system_settings の読み出し。
  *
@@ -42,9 +45,16 @@ export class SettingsService {
     return v === null || v === undefined ? fallback : v === 'true';
   }
 
-  /** 引当のタイミング。確認事項⑧により既定は出荷指示時。 */
-  allocationTiming(): Promise<string> {
-    return this.text('ALLOCATION_TIMING', 'shipping_instruction');
+  /**
+   * 引当のタイミング。
+   *   manual               … 受注は登録だけ。受注一覧で選んで「引当」を押したときに引き当てる（2026-10-13 受注処理編 O-06・O-19。既定）
+   *   order_entry          … 受注登録時に引き当て、足りない分は引当待ちにする（9/15 ご確認）
+   *   shipping_instruction … 出荷指示ボタンを押したときに引き当てる（確認事項⑧の3段階）
+   * 設定が無い・知らない値のときは manual（登録で在庫を動かさない側に倒す）。
+   */
+  async allocationTiming(): Promise<AllocationTiming> {
+    const v = await this.text('ALLOCATION_TIMING', 'manual');
+    return v === 'order_entry' || v === 'shipping_instruction' ? v : 'manual';
   }
 
   /** 出荷指示番号の採り方。確認事項⑪により既定は受注番号をそのまま使う。 */

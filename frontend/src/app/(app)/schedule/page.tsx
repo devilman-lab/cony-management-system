@@ -19,6 +19,8 @@ interface ScheduleRow extends Record<string, unknown> {
   sku_id: number | null;
   sku_code: string | null;
   product_name: string | null;
+  /** 品名（商品名＋カラー＋サイズ。API が作る。2026-10-13 受注処理編 O-01） */
+  item_name?: string | null;
   planned_sales_month: string | null;
   planned_arrival_month: string | null;
   planned_qty: string | null;
@@ -55,7 +57,7 @@ export default function SchedulePage() {
     setEditing(r);
     setF({
       partner: r.partner_id ? { id: r.partner_id, label: r.partner_name ?? '' } : null,
-      sku: r.sku_id ? { id: r.sku_id, label: `${r.sku_code}　${r.product_name}` } : null,
+      sku: r.sku_id ? { id: r.sku_id, label: `${r.sku_code}　${r.item_name || r.product_name}` } : null,
       category: r.sales_category_id ? String(r.sales_category_id) : '',
       sales_month: ym(r.planned_sales_month),
       arrival_month: ym(r.planned_arrival_month),
@@ -120,7 +122,8 @@ export default function SchedulePage() {
             { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? <span className="text-[var(--color-ink-3)]">（指定なし）</span> },
             { key: 'sales_category_name', label: '販売カテゴリー', width: 84, render: (r) => r.sales_category_name ?? '' },
             { key: 'sku_code', label: 'SKU', width: 120, render: (r) => <Num>{r.sku_code ?? ''}</Num> },
-            { key: 'product_name', label: '商品', render: (r) => r.product_name ?? '' },
+            // 商品の欄は品名（商品名＋カラー＋サイズ。O-01）
+            { key: 'product_name', label: '商品', render: (r) => r.item_name || r.product_name || '' },
             { key: 'planned_qty', label: '予定数', r: true, width: 64, render: (r) => <b>{qty(r.planned_qty)}</b> },
             { key: 'planned_arrival_month', label: '入荷予定', width: 72, render: (r) => <Num>{ym(r.planned_arrival_month).replace('-', '/')}</Num> },
             { key: 'note', label: '備考', render: (r) => r.note ?? '' },

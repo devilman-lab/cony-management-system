@@ -5,7 +5,9 @@ import { NumberingService } from '../common/numbering.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { skuItemNameExpr } from '../masters/products.service';
 import { OVERSEAS_TAX_RATE } from '../orders/order-defaults';
+import { AllocationService } from '../shipping/allocation.service';
 import { decode, decodeAuto, encodingLabel, parseCsv, type DetectedEncoding } from './csv';
 
 export interface OmsImportInput {
@@ -41,6 +43,12 @@ const LINE_TYPES = new Set(['商品', 'セット商品', '内訳商品', '販促
 /** 在庫を引き当てる対象になる種別（セット商品は内訳商品から引くため除く）。 */
 const STOCK_TYPES = new Set(['商品', '内訳商品']);
 
+/**
+ * 品名をマスタの品名（SKU の名前＋カラー＋サイズ）にする種別（2026-10-13 受注処理編 O-01・O-34）。
+ * 商品コードで SKU が決まった行だけ。送料・値引・非商品の行と、SKU の決まらない行は CSV の商品名のまま。
+ */
+const MASTER_NAME_TYPES = new Set(['商品', 'セット商品', '内訳商品', '販促品']);
+
 /** 自社商品コードそのものが空の明細。件数に出さないと「0件なのに受注にならない」になる。 */
 const NO_CODE = '（自社商品コードなし）';
 
@@ -63,6 +71,7 @@ export class OmsImportService {
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly numbering: NumberingService,
     private readonly settings: SettingsService,
+    private readonly allocation: AllocationService,
   ) {}
 
   async import(input: OmsImportInput, userId: number): Promise<OmsImportResult> {
@@ -343,6 +352,25 @@ export class OmsImportService {
       };
     }
 
+    // 受注の品名はマスタの品名（2026-10-13 受注処理編 O-01・O-34）。通販の商品名（「…(S-3L)（サイズ:L、カラー:ピンク）」の
+    // ようなショップの表記）は取込の元データ（external_order_lines）に残す。セットの親子・送料・値引の行はそのまま
+    const masterIds = [...new Set(resolved.filter((r) => r.sku_id !== null && MASTER_NAME_TYPES.has(r.line_type)).map((r) => r.sku_id as number))];
+    const masterNames = new Map<number, string>();
+    if (masterIds.length > 0) {
+      const rows = await trx
+        .selectFrom('skus as s')
+        .innerJoin('products as p', 'p.id', 's.product_id')
+        .leftJoin('colors as cl', 'cl.id', 's.color_id')
+        .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+        .select(['s.id as id', skuItemNameExpr('s', 'p', 'cl', 'sz').as('name')])
+        .where('s.id', 'in', masterIds)
+        .execute();
+      for (const r of rows) if (r.name?.trim()) masterNames.set(Number(r.id), r.name.trim());
+    }
+    for (const r of resolved) {
+      if (r.sku_id !== null && MASTER_NAME_TYPES.has(r.line_type)) r.item_name = masterNames.get(r.sku_id) ?? r.item_name;
+    }
+
     const orderDate = this.toDate(need(head, '注文日')) ?? sql<string>`current_date`;
     const shipDate = this.toDate(need(head, '処理済日')) ?? this.toDate(need(head, '出荷予定日'));
 
@@ -368,6 +396,7 @@ export class OmsImportService {
         channel,
         external_order_id: external.id,
         // 出荷済みデータとして取り込む。引当はしない（すでに棚から出ている）。
+        // これから出荷する受注として取り込む設定（order）は、下の afterOrderWrite で引当の設定に従った状態にする
         status: mode === 'shipped_result' ? '出荷済' : '未確定',
         created_by: userId,
         updated_by: userId,
@@ -440,6 +469,13 @@ export class OmsImportService {
             .execute();
         }
       }
+    }
+
+    // これから出荷する受注として取り込む設定（order）では、手入力・販社CSVの取込と同じく引当の設定に従う
+    // （manual＝登録だけで「引当待ち」。受注一覧で引き当てる。2026-10-13 受注処理編 O-06）。取込では実在庫を超えていても止めない。
+    // 出荷済みの実績として取り込む設定（shipped_result）は今までどおり「出荷済」（在庫も引当も動かさない）
+    if (mode !== 'shipped_result') {
+      await this.allocation.afterOrderWrite(trx, order.id, userId, { checkOnHand: false });
     }
 
     await trx

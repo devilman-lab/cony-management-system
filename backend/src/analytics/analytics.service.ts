@@ -58,7 +58,19 @@ const IS_GOODS = sql`(sl.line_type in ('商品', 'セット商品')
  * 送料・値引のような商品でない行は原価 0 になる。
  */
 const COST_PER_LINE = sql`(
-  case when sl.line_type = 'セット商品' then (
+  -- 返品の受注（2026-10-13 受注処理編 O-44）は在庫を動かさず引当が無いので、手入力のセット行は
+  -- セット構成から構成品の原価を出す（数量がマイナスなので原価もマイナス＝売った分の原価を戻す。商品の行と同じ扱い）
+  case when sl.line_type = 'セット商品' and o.order_type = '返品'
+            and not exists (select 1 from sales_order_lines ch
+                             where ch.sales_order_id = sl.sales_order_id and ch.parent_line_no = sl.line_no) then (
+    select coalesce(sum(coalesce(cs.cost_price, cpr.cost_price, 0) * sc.qty), 0) * sl.qty
+      from set_components sc
+      join set_headers h on h.id = sc.set_header_id
+      join skus cs on cs.id = sc.component_sku_id
+      join products cpr on cpr.id = cs.product_id
+     where h.sku_id = sl.sku_id
+  )
+  when sl.line_type = 'セット商品' then (
     select coalesce(sum(coalesce(cs.cost_price, cpr.cost_price, 0) * a.qty), 0)
       from allocations a
       join skus cs on cs.id = a.sku_id
@@ -164,8 +176,11 @@ export class AnalyticsService {
       .leftJoin('brands as b', 'b.id', 'pr.brand_id')
       .leftJoin('sales_staff as su', 'su.id', 'o.sales_staff_id')
       .where('sh.status', '=', '出荷済')
-      // サンプル出荷は実績に含めない
+      // サンプル出荷・社内移動は実績に含めない
       .where('o.is_billable', '=', true)
+      // 委託は単価なしで入庫倉庫へ移すだけ（売上ではない。請求にも載せない。2026-10-13 受注処理編 O-12）ので含めない。
+      // 返品の受注（O-44）はマイナスの数量・金額のまま、返品を出荷確定した日の実績として差し引く
+      .where('o.trade_type', '<>', '委託')
       .where('sh.ship_date', '>=', query.from)
       .where('sh.ship_date', '<=', query.to);
 
@@ -184,8 +199,11 @@ export class AnalyticsService {
       // 端数を処理してから、集計の軸ごとに足す（計算表は同じまとまりで1行になり、行ごとに端数を落とすため）。
       // 以前は媒体を見ずに規定を当て、全体をまとめて切り捨てていたので、計算表と合わなかった（T3 No.35）。
       // 当てる日は出荷日。計算の基準が売上・入金の規定も、販売実績では出荷した月の見込みとして数える。
-      // 返品は出荷の実績ではないので、ここには入らない（計算表では返品の月に差し引く）。
+      // 返品の伝票（returns）は出荷の実績ではないので、ここには入らない（計算表では返品の月に差し引く）。
+      // 返品の受注（2026-10-13 受注処理編 O-44）は計算表と同じく、出荷と分けたまとまりで端数を処理し、
+      // 設定 ROYALTY_INCLUDE_RETURNS が false なら数えない。
       const roundingMode = await this.settings.text('ROYALTY_ROUNDING_MODE', 'floor');
+      const includeReturns = await this.settings.bool('ROYALTY_INCLUDE_RETURNS', true);
       const rule = royaltyRuleFor({
         payee: sql`py.payee_partner_id`,
         date: sql`sh.ship_date`,
@@ -201,12 +219,14 @@ export class AnalyticsService {
         .innerJoinLateral(sql<{ id: number }>`${rule}`.as('rule'), (join) => join.onTrue())
         .where(ROYALTY_GOODS_LINE)
         .where(sql<boolean>`not rule.is_excluded`)
+        .$if(!includeReturns, (qb) => qb.where('o.order_type', '<>', '返品'))
         .select([
           ...dims,
           royaltyAmount(sql`rule.rate`, sql`rule.fixed_amount`, sql`sum(sl.amount)`, sql`sum(sl.qty)`, roundingMode).as('amt'),
         ])
         .groupBy([
           ...groupBy,
+          sql`(o.order_type = '返品')`,
           sql`py.payee_partner_id`,
           sql`date_trunc('month', sh.ship_date)`,
           sql`o.partner_id`,

@@ -2,17 +2,34 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { sql } from 'kysely';
 
 import { AttachmentsService } from '../attachments/attachments.service';
+import { orderShippingFeeSql } from '../billing/shipping-fee';
+import { amountIn, amountWithCode, currencyDigits, isYen } from '../common/currency';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
-import { skuNameExpr } from '../masters/products.service';
+import { skuItemNameExpr } from '../masters/products.service';
 import { ShipmentsService } from '../shipping/shipments.service';
-import { CONTENT_WIDTH, ReportDoc, money, qty, ymd, type Column } from './pdf-builder';
-import { amountIn, amountWithCode, currencyDigits, isYen } from '../common/currency';
+import {
+  drawDeliveryNotes,
+  type DeliveryNoteRow,
+  type DeliveryNoteSheet,
+  type DeliverySender,
+  type DeliveryTotalRow,
+} from './form-delivery-note';
+import { drawPickingLists, type PickingSheet } from './form-picking-list';
+import { drawShippingRequests, type ShippingRequestSheet } from './form-shipping-request';
+import { ReportDoc, qty, ymd } from './pdf-builder';
+import { dateTime, shortDate, slashDate } from './pdf-form';
 import { mergeToPdf, type MergeInput } from './pdf-merge';
 
-/** 納品書の様式。設定 DELIVERY_NOTE_DEFAULT_FORM の選択肢と一致させる。 */
-export const DELIVERY_NOTE_FORMS = ['単価あり', '単価あり2', '上代あり', '単価なし'] as const;
+/**
+ * 納品書の様式（2026-10-13 受注処理編 O-31：「単価あり」を削除し、単価あり2・上代あり・単価なし の3つ）。
+ * 設定 DELIVERY_NOTE_DEFAULT_FORM の選択肢と一致させる。
+ */
+export const DELIVERY_NOTE_FORMS = ['単価あり2', '上代あり', '単価なし'] as const;
 export type DeliveryNoteForm = (typeof DELIVERY_NOTE_FORMS)[number];
+/** 受け付ける様式の名前。「単価あり」を渡されたら「単価あり2」として扱う（古い画面・伝票発行分類・設定の値）。 */
+export const DELIVERY_NOTE_FORM_INPUTS = [...DELIVERY_NOTE_FORMS, '単価あり'] as const;
+export type DeliveryNoteFormInput = (typeof DELIVERY_NOTE_FORM_INPUTS)[number];
 
 export interface PrintResult {
   pdf: Buffer;
@@ -21,9 +38,27 @@ export interface PrintResult {
   skipped?: string[];
 }
 
-/** 出荷確定と同時に印刷する帳票の種類。 */
-export const PRINT_DOCUMENTS = ['出荷指示書', 'ピッキングリスト', '納品書'] as const;
-export type PrintDocument = (typeof PRINT_DOCUMENTS)[number];
+/**
+ * 出荷確定と同時に印刷する帳票の種類。「出荷指示書」は「出荷依頼書」に呼び名をそろえた（O-25）。
+ * 古い呼び名で頼まれても出荷依頼書を出す。
+ */
+export const PRINT_DOCUMENTS = ['出荷依頼書', 'ピッキングリスト', '納品書'] as const;
+export const PRINT_DOCUMENT_INPUTS = [...PRINT_DOCUMENTS, '出荷指示書'] as const;
+export type PrintDocument = (typeof PRINT_DOCUMENT_INPUTS)[number];
+
+/** お届け先（受注に入れた住所・お名前）を宛先にする受注の区分（直送・通販・サンプル・社内移動）。 */
+const DIRECT_TYPES = new Set(['直送', '通販', 'サンプル', '社内移動']);
+
+type ShipmentHeader = Awaited<ReturnType<ReportsService['shipmentHeaders']>>[number];
+type OrderLine = Awaited<ReturnType<ReportsService['orderLines']>>[number];
+
+/** 「単価あり」は「単価あり2」として扱う。知らない名前は undefined。 */
+function normalizeForm(name: string | null | undefined): DeliveryNoteForm | undefined {
+  const v = name?.trim();
+  if (!v) return undefined;
+  if (v === '単価あり') return '単価あり2';
+  return DELIVERY_NOTE_FORMS.find((f) => f === v);
+}
 
 @Injectable()
 export class ReportsService {
@@ -47,7 +82,7 @@ export class ReportsService {
     input: {
       shipment_ids: number[];
       documents: PrintDocument[];
-      form?: DeliveryNoteForm;
+      form?: DeliveryNoteFormInput;
       ship_date?: string | null;
       include_attachments: boolean;
     },
@@ -65,11 +100,13 @@ export class ReportsService {
       return done;
     });
 
-    // 帳票は出荷ごとにまとめず、種類ごとに全件分を1本ずつ作って並べる（頂いた運用どおり）
+    // 帳票は出荷ごとにまとめず、種類ごとに全件分を1本ずつ作って並べる（頂いた運用どおり）。
+    // 古い呼び名「出荷指示書」と新しい「出荷依頼書」が両方来ても1回だけ出す
+    const kinds = [...new Set(input.documents.map((k) => (k === '出荷指示書' ? '出荷依頼書' : k)))];
     const parts: MergeInput[] = [];
-    for (const kind of input.documents) {
+    for (const kind of kinds) {
       const r =
-        kind === '出荷指示書'
+        kind === '出荷依頼書'
           ? await this.shippingInstructions(ids, userId)
           : kind === 'ピッキングリスト'
             ? await this.pickingList(ids, userId)
@@ -127,264 +164,326 @@ export class ReportsService {
   }
 
   // ==========================================================================
-  // 出荷指示書
-  // ==========================================================================
-
-  async shippingInstructions(shipmentIds: number[], userId: number): Promise<PrintResult> {
-    const shipments = await this.shipmentHeaders(shipmentIds);
-    const doc = new ReportDoc('出荷指示書');
-
-    for (const [i, sh] of shipments.entries()) {
-      if (i > 0) doc.newPage();
-      const lines = await this.orderLines(sh.sales_order_id);
-
-      doc.title('出 荷 指 示 書');
-      doc.keyValues([
-        ['出荷指示番号', sh.shipment_no],
-        ['受注番号', sh.order_no ?? ''],
-        ['出荷予定日', ymd(sh.planned_ship_date)],
-        ['受注日', ymd(sh.order_date)],
-        ['得意先', this.partnerLabel(sh)],
-        ['納品先', sh.destination_name ?? '（直送）'],
-        ['出荷倉庫', sh.warehouse_name],
-        ['納品希望日', ymd(sh.requested_delivery_date)],
-      ]);
-      const address = this.addressOf(sh);
-      if (address) doc.line(`納品先住所　${address}`);
-      // 作業指示は名称と本文。納品先の画面の案内どおり、本文を折り返して全文印字する
-      // （以前は名称だけで、倉庫に指示の中身が届かなかった。2026-10-12 受入テスト No.12）。
-      if (sh.work_instruction) {
-        const body = (sh.work_instruction_body ?? '').trim();
-        doc.labeled('作業指示', body ? `${sh.work_instruction}\n${body}` : sh.work_instruction);
-      }
-      // 納品ルールは納品先の編集画面から外したが（2026-10-01 のご指摘）、
-      // すでに値が入っている納品先のために印字は残す。設定が無ければ行ごと出ない。
-      if (sh.delivery_rule) doc.line(`納品ルール　${sh.delivery_rule}`);
-      if (sh.shipping_remarks) doc.line(`出荷備考　　${sh.shipping_remarks}`);
-      doc.y += 4;
-
-      // FBA用JANは、設定されている行が1つでもあるときだけ列を出す。
-      // 常に出すと、使っていない取引先の依頼書に空の列が並ぶため（1001 ご要望）。
-      // JAN は得意先別商品の出荷JAN、空なら SKU の JAN（コニーJAN）。出荷依頼書に載せてほしいとの
-      // ご確認（2026-10-09 マスター編② M-18）で常に列を出す。
-      const hasFbaJan = lines.some((l) => (l.fba_jan ?? '').trim() !== '');
-      const columns: Column[] = hasFbaJan
-        ? [
-            { label: '行', width: 26, align: 'right' },
-            { label: '商品コード', width: 95 },
-            { label: 'JAN', width: 80 },
-            { label: 'FBA用JAN', width: 80 },
-            { label: '品名', width: 146 },
-            { label: '区分', width: 46, align: 'center' },
-            { label: '数量', width: 50, align: 'right' },
-          ]
-        : [
-            { label: '行', width: 26, align: 'right' },
-            { label: '商品コード', width: 105 },
-            { label: 'JAN', width: 85 },
-            { label: '品名', width: 201 },
-            { label: '区分', width: 50, align: 'center' },
-            { label: '数量', width: 56, align: 'right' },
-          ];
-      doc.table(
-        columns,
-        lines.map((l) =>
-          hasFbaJan
-            ? [l.line_no, l.sku_code ?? '', l.jan ?? '', l.fba_jan ?? '', l.item_name, l.line_type, qty(l.qty)]
-            : [l.line_no, l.sku_code ?? '', l.jan ?? '', l.item_name, l.line_type, qty(l.qty)],
-        ),
-      );
-      doc.totals([['合計数量', qty(this.goodsQty(lines))]]);
-    }
-
-    await this.recordPrint(shipmentIds, '出荷指示書', userId);
-    return { pdf: await doc.finish(), filename: this.filename('出荷指示書', shipments.length) };
-  }
-
-  // ==========================================================================
-  // ピッキングリスト
+  // 出荷依頼書（2026-10-13 受注処理編 O-26。経路は今までどおり /reports/shipping-instructions）
   // ==========================================================================
 
   /**
-   * ピッキングリスト。
+   * 貴社の様式「出荷依頼書」（A4 横）。1出荷1枚、明細は 11 行の枠で、12 行目からは次の紙に続ける。
+   * 明細はセットをセットのまま1行で出す（内訳商品の行は出さない）。送料・値引の行は品物ではないので出さない。
+   */
+  async shippingInstructions(shipmentIds: number[], userId: number): Promise<PrintResult> {
+    const shipments = await this.shipmentHeaders(shipmentIds);
+    const requestDate = shortDate();
+    const sheets: ShippingRequestSheet[] = [];
+
+    for (const sh of shipments) {
+      const lines = await this.orderLines(sh.sales_order_id);
+      const place = this.placeOf(sh);
+      sheets.push({
+        shipmentNo: sh.shipment_no,
+        requestDate,
+        warehouseName: sh.warehouse_name,
+        isReturn: sh.order_type === '返品',
+        lines: this.goodsRows(lines).map((l) => ({
+          productCode: l.sku_code ?? '',
+          itemName: l.item_name,
+          color: l.color_name ?? '',
+          size: l.size_name ?? '',
+          qty: qty(l.qty),
+          // 出荷依頼書適用（明細ごと。O-09）
+          note: l.shipping_note ?? '',
+          // JAN は得意先別商品の出荷JAN、空ならコニーJAN（2026-10-09 マスター編② M-18）
+          jan: l.jan ?? '',
+        })),
+        // 出庫日は出荷日（確定済みなら確定した日）、無ければ出荷予定日
+        shipDate: slashDate(sh.ship_date ?? sh.planned_ship_date ?? sh.order_ship_date),
+        deliveryDate: slashDate(sh.delivery_date),
+        // 納品時間（O-03）
+        deliveryTime: sh.delivery_time_name ?? '',
+        destinationCode: sh.delivery_code ?? '',
+        partnerName: this.partnerName(sh),
+        postalCode: place.postalCode,
+        address: place.address,
+        recipientName: place.name,
+        tel: place.tel,
+        instructions: this.instructionsOf(sh),
+        remarks: sh.shipping_remarks ?? '',
+      });
+    }
+
+    const doc = new ReportDoc('出荷依頼書', { landscape: true });
+    drawShippingRequests(doc, sheets);
+    // 帳票発行履歴の種類は「出荷指示書」のまま記録する（表の決まり ck_shipdoc_type。画面の呼び名だけ変えた）
+    await this.recordPrint(shipmentIds, '出荷指示書', userId);
+    return { pdf: await doc.finish(), filename: this.filename('出荷依頼書', shipments.length) };
+  }
+
+  // ==========================================================================
+  // ピッキングリスト（O-27）
+  // ==========================================================================
+
+  /**
+   * 貴社の様式「ピッキングリスト」（A4 横）。1出荷1枚（以前は選んだ出荷をまとめて1枚）。
    *
    * PICKING_EXPAND_SET が true のときは引当（allocations）を数える。引当は
    * セットを構成品に展開したあとの姿なので、頂いた帳票サンプルどおり
-   * 「展開したうえで同一商品を合算した」一覧になる。
+   * 「展開したうえで同一商品を合算した」一覧になる。false のときはセットをセットのまま数える。
    */
   async pickingList(shipmentIds: number[], userId: number): Promise<PrintResult> {
     const shipments = await this.shipmentHeaders(shipmentIds);
     const expand = await this.settings.bool('PICKING_EXPAND_SET', true);
-    const orderIds = shipments.map((s) => s.sales_order_id);
+    const requestedAt = dateTime();
+    const sheets: PickingSheet[] = [];
 
-    const rows = expand
-      ? await this.db
-          .selectFrom('allocations as a')
-          .innerJoin('sales_order_lines as l', 'l.id', 'a.sales_order_line_id')
-          .innerJoin('stocks as st', 'st.id', 'a.stock_id')
-          .innerJoin('warehouses as w', 'w.id', 'st.warehouse_id')
-          .innerJoin('skus as s', 's.id', 'a.sku_id')
-          .innerJoin('products as p', 'p.id', 's.product_id')
-          .select([
-            'w.short_name as warehouse_name',
-            's.sku_code as sku_code',
-            's.jan as jan',
-            // 品名は SKU の商品名があればそれ（2026-10-09 マスター編②）
-            skuNameExpr('s', 'p').as('product_name'),
-            'st.lot_no as lot_no',
-            sql<string>`sum(a.qty)`.as('qty'),
-          ])
-          .where('l.sales_order_id', 'in', orderIds)
-          // 出荷確定と同時に印刷すると、この時点では引当が「出荷済」に変わっている。
-          // 「引当中」だけを見ると、出荷確定して印刷したときのピッキングリストが
-          // 必ず白紙になる（確定後の刷り直しも同じ）。
-          .where('a.status', 'in', ['引当中', '出荷済'])
-          .groupBy(['w.short_name', 's.sku_code', 's.jan', 's.sku_name', 'p.product_name', 'st.lot_no'])
-          .orderBy('w.short_name')
-          .orderBy('s.sku_code')
-          .execute()
-      : await this.db
-          .selectFrom('sales_order_lines as l')
-          .innerJoin('skus as s', 's.id', 'l.sku_id')
-          .innerJoin('products as p', 'p.id', 's.product_id')
-          .select([
-            sql<string>`''`.as('warehouse_name'),
-            's.sku_code as sku_code',
-            's.jan as jan',
-            // 品名は SKU の商品名があればそれ（2026-10-09 マスター編②）
-            skuNameExpr('s', 'p').as('product_name'),
-            sql<string>`''`.as('lot_no'),
-            sql<string>`sum(l.qty)`.as('qty'),
-          ])
-          .where('l.sales_order_id', 'in', orderIds)
-          .where('l.line_type', 'in', ['商品', '内訳商品'])
-          .groupBy(['s.sku_code', 's.jan', 's.sku_name', 'p.product_name'])
-          .orderBy('s.sku_code')
-          .execute();
+    for (const sh of shipments) {
+      const rows = expand ? await this.pickedSkus(sh.sales_order_id) : await this.orderedSkus(sh.sales_order_id);
+      const place = this.placeOf(sh);
+      sheets.push({
+        shipmentNo: sh.shipment_no,
+        warehouseName: sh.warehouse_name,
+        deliveryDate: slashDate(sh.delivery_date),
+        deliveryTime: sh.delivery_time_name ?? '',
+        partnerCode: sh.partner_code ?? '',
+        partnerName: this.partnerName(sh),
+        partnerTel: sh.partner_tel ?? '',
+        destinationCode: sh.delivery_code ?? '',
+        destinationName: place.name,
+        address: [place.postalCode ? `〒${place.postalCode}` : '', place.address].filter(Boolean).join(' '),
+        requestedAt,
+        isReturn: sh.order_type === '返品',
+        rows: rows.map((r) => ({
+          itemName: r.item_name,
+          color: r.color_name ?? '',
+          size: r.size_name ?? '',
+          productCode: r.sku_code,
+          qty: qty(r.qty),
+        })),
+        // 別途連絡事項＝出荷依頼書の備考欄と同じ内容
+        remarks: sh.shipping_remarks ?? '',
+      });
+    }
 
-    const doc = new ReportDoc('ピッキングリスト');
-    doc.title('ピッキングリスト');
-    doc.keyValues(
-      [
-        ['出力日', ymd(new Date())],
-        ['対象出荷', `${shipments.length} 件`],
-        ['セット展開', expand ? 'する' : 'しない'],
-        ['出荷指示番号', shipments.map((s) => s.shipment_no).join('、')],
-      ],
-      2,
-    );
-
-    const columns: Column[] = [
-      { label: '倉庫', width: 80 },
-      { label: '商品コード', width: 110 },
-      { label: 'JAN', width: 95 },
-      { label: '品名', width: 152 },
-      { label: 'ロット', width: 50 },
-      { label: '数量', width: 36, align: 'right' },
-    ];
-    doc.table(
-      columns,
-      rows.map((r) => [
-        r.warehouse_name,
-        r.sku_code,
-        r.jan ?? '',
-        r.product_name,
-        r.lot_no ?? '',
-        qty(r.qty),
-      ]),
-    );
-    doc.totals([
-      ['明細行数', `${rows.length} 行`],
-      ['合計数量', qty(this.sum(rows.map((r) => r.qty)))],
-    ]);
-
+    const doc = new ReportDoc('ピッキングリスト', { landscape: true });
+    drawPickingLists(doc, sheets);
     await this.recordPrint(shipmentIds, 'ピッキングリスト', userId);
-    return { pdf: await doc.finish(), filename: this.filename('ピッキングリスト', 1) };
+    return { pdf: await doc.finish(), filename: this.filename('ピッキングリスト', shipments.length) };
+  }
+
+  /** 引き当てた構成品を SKU ごとに合算する。品名は品名の決まり（SKU の名前＋カラー＋サイズ。O-01）。 */
+  private pickedSkus(orderId: number) {
+    return this.db
+      .selectFrom('allocations as a')
+      .innerJoin('sales_order_lines as l', 'l.id', 'a.sales_order_line_id')
+      .innerJoin('skus as s', 's.id', 'a.sku_id')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .select([
+        's.sku_code as sku_code',
+        skuItemNameExpr('s', 'p', 'cl', 'sz').as('item_name'),
+        'cl.name as color_name',
+        'sz.name as size_name',
+        sql<string>`sum(a.qty)`.as('qty'),
+      ])
+      .where('l.sales_order_id', '=', orderId)
+      // 出荷確定と同時に印刷すると、この時点では引当が「出荷済」に変わっている。
+      // 「引当中」だけを見ると、出荷確定して印刷したときのピッキングリストが
+      // 必ず白紙になる（確定後の刷り直しも同じ）。
+      .where('a.status', 'in', ['引当中', '出荷済'])
+      .groupBy(['s.id', 'p.id', 'cl.id', 'sz.id'])
+      .orderBy('s.sku_code')
+      .execute();
+  }
+
+  /** セットを展開しないとき。受注明細の商品・セット商品を SKU ごとに合算する（セットの内訳商品の行は数えない）。 */
+  private orderedSkus(orderId: number) {
+    return this.db
+      .selectFrom('sales_order_lines as l')
+      .innerJoin('skus as s', 's.id', 'l.sku_id')
+      .innerJoin('products as p', 'p.id', 's.product_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
+      .select([
+        's.sku_code as sku_code',
+        skuItemNameExpr('s', 'p', 'cl', 'sz').as('item_name'),
+        'cl.name as color_name',
+        'sz.name as size_name',
+        sql<string>`sum(l.qty)`.as('qty'),
+      ])
+      .where('l.sales_order_id', '=', orderId)
+      .where((eb) =>
+        eb.or([
+          eb('l.line_type', 'in', ['商品', 'セット商品']),
+          eb.and([eb('l.line_type', '=', '内訳商品'), eb('l.parent_line_no', 'is', null)]),
+        ]),
+      )
+      .groupBy(['s.id', 'p.id', 'cl.id', 'sz.id'])
+      .orderBy('s.sku_code')
+      .execute();
   }
 
   // ==========================================================================
-  // 納品書（4様式）
+  // 納品書（3様式。O-28〜O-32）
   // ==========================================================================
 
   async deliveryNotes(
     shipmentIds: number[],
-    form: DeliveryNoteForm | undefined,
+    form: DeliveryNoteFormInput | undefined,
     userId: number,
   ): Promise<PrintResult> {
     const shipments = await this.shipmentHeaders(shipmentIds);
+    const requested = normalizeForm(form);
     const fallback = await this.deliveryNoteDefaultForm();
-    const company = await this.company();
-    const doc = new ReportDoc('納品書');
+    const sender = await this.sender();
+    const createdDate = shortDate();
+    const sheets: DeliveryNoteSheet[] = [];
 
-    for (const [i, sh] of shipments.entries()) {
-      if (i > 0) doc.newPage();
-
-      // 様式の決め方：指定 → 納品先マスタの伝票発行分類 → システム設定の既定。
-      const chosen = form ?? this.formOf(sh.slip_issue_class) ?? fallback;
-      const lines = await this.deliveryLines(sh);
-
-      doc.title('納 品 書');
-      // 宛名と納品先は、納品先マスタの「納品書 印字1／印字2」があればそちらを使う。
-      // 得意先名・納品先名をそのまま出すと先方の呼び方と合わないことがあるため（1001 ご要望）。
-      // 空欄のときは今まで通り取引先名・納品先名を出す。
-      const addressee = sh.delivery_note_print1?.trim()
-        ? sh.delivery_note_print1.trim()
-        : `${this.partnerLabel(sh)} 御中`;
-      const destination = sh.delivery_note_print2?.trim()
-        ? sh.delivery_note_print2.trim()
-        : (sh.destination_name ?? '（直送）');
-
-      doc.keyValues([
-        ['伝票番号', sh.shipment_no],
-        ['納品日', ymd(sh.ship_date ?? sh.delivery_date ?? sh.planned_ship_date)],
-        ['得意先', addressee],
-        ['納品先', destination],
-        ['納品先No', sh.partner_delivery_no ?? ''],
-      ]);
-      const address = this.addressOf(sh);
-      if (address) doc.line(`納品先住所　${address}`);
-      doc.line(company.line);
-      if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
-      doc.y += 4;
-
-      // 外貨の受注（取引先の通貨が円以外。2026-10-12 No.39）は、通貨を書き、金額を小数2桁で出す
-      if (!isYen(sh.currency)) doc.line(`通貨　${sh.currency}`);
-      const columns = this.deliveryColumns(chosen);
-      doc.table(
-        columns,
-        lines.map((l) => this.deliveryRow(chosen, l, (v) => amountIn(v, sh.currency))),
-      );
-
-      // 合計数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
-      // 出荷指示書も同じ数え方にしてあるので、同じ束の中で数が食い違わない。
-      const totalQty = qty(this.goodsQty(lines));
-      if (chosen === '単価なし') {
-        doc.totals([['合計数量', totalQty]]);
-      } else {
-        const subtotal = this.sum(lines.map((l) => l.amount));
-        // 海外の得意先は消費税 0。請求書（締め）と同じく、明細の税率にかかわらず 0 にし、
-        // 扱い（免税（税抜扱い）／課税対象外）を請求書と同じ言い方で書く（2026-10-12 受入テスト M-02）。
-        // 海外の印を付ける前に 10% で登録した受注でも、請求書と金額が食い違わないようにするため。
-        // どちらで書くかは取引先の消費税免税区分、空ならシステム設定（2026-10-16 マスター編_3 M3-07）
-        const overseasLabel = sh.partner_is_overseas ? await this.settings.overseasTaxLabel(sh.partner_overseas_tax_treatment) : null;
-        const tax = overseasLabel ? 0 : await this.taxOf(lines, sh.currency);
-        if (overseasLabel) doc.line(`消費税　${overseasLabel}`);
-        doc.totals([
-          ['合計数量', totalQty],
-          ['小計（税抜）', amountWithCode(subtotal, sh.currency)],
-          ['消費税', amountWithCode(tax, sh.currency)],
-          [overseasLabel ? '合計' : '合計（税込）', amountWithCode(Number(subtotal) + Number(tax), sh.currency)],
-        ]);
-      }
-      if (sh.delivery_note_remarks) {
-        doc.y += 6;
-        doc.line(`備考　${sh.delivery_note_remarks}`);
-      }
-      doc.line(`様式：${chosen}`, 7);
+    for (const sh of shipments) {
+      // 様式の決め方：指定 → 委託の受注は単価なし（O-12。委託は単価を持たない）→ 納品先マスタの伝票発行分類 → システム設定の既定
+      const chosen =
+        requested ?? (sh.trade_type === '委託' ? '単価なし' : undefined) ?? normalizeForm(sh.slip_issue_class) ?? fallback;
+      const lines = await this.orderLines(sh.sales_order_id);
+      sheets.push(await this.deliverySheet(sh, chosen, lines, sender, createdDate));
     }
 
+    const doc = new ReportDoc('納品書', { landscape: true });
+    drawDeliveryNotes(doc, sheets);
     await this.recordPrint(shipmentIds, '納品書', userId);
     return { pdf: await doc.finish(), filename: this.filename('納品書', shipments.length) };
+  }
+
+  private async deliverySheet(
+    sh: ShipmentHeader,
+    form: DeliveryNoteForm,
+    lines: OrderLine[],
+    sender: DeliverySender,
+    createdDate: string,
+  ): Promise<DeliveryNoteSheet> {
+    // 外貨の受注（取引先の通貨が円以外。2026-10-12 No.39）は金額を小数2桁で出し、合計には通貨を添える
+    const cur = sh.currency;
+    const fmt = (v: string | number | null) => amountIn(v, cur);
+    const direct = this.usesDirect(sh);
+    const blank = { poNo: '', jan: '', productCode: '', note: '', unitPrice: '', amount: '', size: '', color: '' };
+
+    let rows: DeliveryNoteRow[];
+    let totals: DeliveryTotalRow[] = [];
+    let inclLabel = '合計金額(税込)';
+    const taxNotes: string[] = [];
+
+    if (form === '単価あり2') {
+      rows = this.pricedRows(lines).map((l) => ({
+        ...blank,
+        // 先方発注番号は受注の先方発注番号
+        poNo: sh.po_no ?? '',
+        jan: l.jan ?? '',
+        productCode: l.sku_code ?? '',
+        itemName: l.item_name,
+        note: l.delivery_slip_note ?? '',
+        qty: qty(l.qty),
+        unitPrice: fmt(l.unit_price),
+        amount: fmt(l.amount),
+      }));
+
+      // 海外の得意先は消費税 0。請求書（締め）と同じく、明細の税率にかかわらず 0 にし、
+      // 扱い（免税（税抜扱い）／課税対象外）を請求書と同じ言い方で書く（2026-10-12 受入テスト M-02）。
+      // どちらで書くかは取引先の消費税免税区分、空ならシステム設定（2026-10-16 マスター編_3 M3-07）
+      const overseas = sh.partner_is_overseas === true;
+      const taxed = lines.map((l) => ({ tax_rate: overseas ? '0' : l.tax_rate, amount: l.amount }));
+
+      // 受注の「納品書に送料を記載する」（O-10）。金額は請求と同じ決まり（送料調整、空なら自動計算。shipping-fee.ts）。
+      // 金額の入った送料の行が明細にあれば、その行がそのまま載るので足さない（請求と同じ）。
+      // 送料は請求と同じく消費税をかけずに合計へ足す（請求書の当月請求額は送料を税の計算に入れていない。billing.service.ts）。
+      // 税をかけると、同じ受注の納品書と請求書で税込の額が食い違うため
+      let fee = 0;
+      if (sh.print_shipping_fee && !lines.some((l) => l.line_type === '送料' && Number(l.amount) !== 0)) {
+        const feeText = sh.shipping_fee ?? '0';
+        rows.push({ ...blank, itemName: '送料', qty: '1', unitPrice: fmt(feeText), amount: fmt(feeText) });
+        fee = Number(feeText);
+      }
+
+      // 税率ごとに合計する。10% と 8% が混ざるときは 10%対象・8%対象・合計 の段に分ける（O-29）。
+      // 金額 0 の行（セットの内訳・無償の非商品など）だけの税率は段にしない
+      const byRate = new Map<number, { tax_rate: string; amount: string }[]>();
+      for (const t of taxed.filter((x) => Number(x.amount) !== 0)) {
+        const rate = Number(t.tax_rate);
+        byRate.set(rate, [...(byRate.get(rate) ?? []), t]);
+      }
+      const digits = currencyDigits(cur);
+      const groups: { rate: number; excl: number; incl: number }[] = [];
+      for (const rate of [...byRate.keys()].sort((a, b) => b - a)) {
+        const items = byRate.get(rate) ?? [];
+        const excl = Number(this.sum(items.map((t) => t.amount)).toFixed(digits));
+        const tax = overseas ? 0 : await this.taxOf(items, cur);
+        groups.push({ rate, excl, incl: Number((excl + tax).toFixed(digits)) });
+      }
+      // 合計には送料（税なし）を税抜・税込の両方にそのまま足す。税率ごとの段には入れない
+      const all = {
+        excl: Number((this.sum(groups.map((g) => g.excl)) + fee).toFixed(digits)),
+        incl: Number((this.sum(groups.map((g) => g.incl)) + fee).toFixed(digits)),
+      };
+      totals =
+        groups.length > 1
+          ? [
+              ...groups.map((g) => ({
+                label: `${g.rate}%対象`,
+                excl: amountWithCode(g.excl, cur),
+                incl: amountWithCode(g.incl, cur),
+              })),
+              { label: '合計', excl: amountWithCode(all.excl, cur), incl: amountWithCode(all.incl, cur) },
+            ]
+          : [{ label: null, excl: amountWithCode(all.excl, cur), incl: amountWithCode(all.incl, cur) }];
+
+      if (overseas) {
+        inclLabel = '合計金額';
+        taxNotes.push(`消費税　${await this.settings.overseasTaxLabel(sh.partner_overseas_tax_treatment)}`);
+      }
+      if (!isYen(cur)) taxNotes.push(`通貨　${cur}`);
+    } else if (form === '上代あり') {
+      // 上代は得意先別商品マスタ。金額（税抜）は上代×数量。未登録なら空欄。合計は出さない（O-30）
+      rows = this.goodsRows(lines).map((l) => ({
+        ...blank,
+        productCode: l.sku_code ?? '',
+        itemName: l.item_name,
+        note: l.delivery_slip_note ?? '',
+        qty: qty(l.qty),
+        unitPrice: fmt(l.retail_price),
+        amount: l.retail_price === null ? '' : fmt(Number(l.retail_price) * Number(l.qty)),
+        size: l.size_name ?? '',
+        color: l.color_name ?? '',
+      }));
+    } else {
+      // 単価なし。「備考」の列は明細の納品書適用、「コード」の列は JAN（O-28）
+      rows = this.goodsRows(lines).map((l) => ({
+        ...blank,
+        jan: l.jan ?? '',
+        productCode: l.sku_code ?? '',
+        itemName: l.item_name,
+        note: l.delivery_slip_note ?? '',
+        qty: qty(l.qty),
+        size: l.size_name ?? '',
+        color: l.color_name ?? '',
+      }));
+    }
+
+    return {
+      form,
+      noteNo: sh.shipment_no,
+      createdDate,
+      addressee: this.addresseeOf(sh, direct),
+      sender,
+      // 納品日は受注の納品日。無ければ出荷日（確定済みなら確定した日）
+      deliveryDate: slashDate(sh.delivery_date ?? sh.ship_date ?? sh.planned_ship_date),
+      // 納品場所は納品先マスタの「納品書 印字2」、空なら納品先名（O-32）。お届け先の受注はお届け先のお名前
+      deliveryPlace: direct
+        ? sh.direct_name?.trim() || sh.delivery_note_print2?.trim() || sh.destination_name || ''
+        : sh.delivery_note_print2?.trim() || sh.destination_name || sh.direct_name?.trim() || '',
+      isReturn: sh.order_type === '返品',
+      rows,
+      totals,
+      inclLabel,
+      taxNotes,
+      remarks: sh.delivery_note_remarks ?? '',
+    };
   }
 
   // ==========================================================================
@@ -475,7 +574,8 @@ export class ReportsService {
         `${iv.partner_address1 ?? ''}${iv.partner_address2 ?? ''}`.trim(),
       ].filter(Boolean).join('　');
       if (billTo) doc.line(billTo);
-      doc.line(company.line);
+      // 差出人は会社名だけ（9/15 ご回答。住所・電話などの設定は納品書の差出人欄だけで使う）。登録番号は設定があれば添える
+      doc.line(company.name);
       if (company.invoiceNo) doc.line(`登録番号　${company.invoiceNo}`);
       doc.y += 4;
 
@@ -562,30 +662,35 @@ export class ReportsService {
 
   // ==========================================================================
 
+  /**
+   * 帳票の見出しに使う出荷・受注・納品先の項目。
+   * 取引先は左結合にする。サンプル・社内移動は取引先が空でよく（2026-10-13 受注処理編 O-14）、
+   * 内部結合だと帳票が「出荷が見つかりません」になってしまうため。
+   */
   private async shipmentHeaders(ids: number[]) {
     if (ids.length === 0) throw new BadRequestException('出荷を選んでください');
 
     const rows = await this.db
       .selectFrom('shipments as sh')
       .innerJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
-      .innerJoin('partners as p', 'p.id', 'o.partner_id')
+      .leftJoin('partners as p', 'p.id', 'o.partner_id')
       .innerJoin('warehouses as w', 'w.id', 'sh.warehouse_id')
       .leftJoin('delivery_destinations as d', 'd.id', 'o.delivery_destination_id')
       .leftJoin('work_instructions as wi', 'wi.id', 'd.work_instruction_id')
       .leftJoin('delivery_rules as dr', 'dr.id', 'd.delivery_rule_id')
       .leftJoin('codes as sc', 'sc.id', 'd.slip_issue_class_code_id')
+      .leftJoin('codes as dt', 'dt.id', 'o.delivery_time_code_id')
       .select([
         'sh.id as id',
         'sh.shipment_no as shipment_no',
         'sh.planned_ship_date as planned_ship_date',
         'sh.ship_date as ship_date',
-        'sh.status as status',
         'o.id as sales_order_id',
-        'o.order_no as order_no',
-        'o.order_date as order_date',
         'o.order_type as order_type',
+        'o.trade_type as trade_type',
+        'o.po_no as po_no',
+        'o.ship_date as order_ship_date',
         'o.delivery_date as delivery_date',
-        'o.requested_delivery_date as requested_delivery_date',
         'o.shipping_remarks as shipping_remarks',
         'o.delivery_note_remarks as delivery_note_remarks',
         'o.direct_name as direct_name',
@@ -593,12 +698,21 @@ export class ReportsService {
         'o.direct_address1 as direct_address1',
         'o.direct_address2 as direct_address2',
         'o.direct_tel as direct_tel',
+        // 受注の通貨（取引先の通貨で固定。2026-10-12 No.39）。納品書の金額に添える
+        'o.currency as currency',
+        // 納品書に送料を記載するか（O-10）と、その額（請求と同じ決まり）
+        'o.print_shipping_fee as print_shipping_fee',
+        orderShippingFeeSql(sql.ref('o.id')).as('shipping_fee'),
         'p.partner_code as partner_code',
         'p.name1 as partner_name1',
         'p.name2 as partner_name2',
+        'p.tel as partner_tel',
+        // 海外の得意先は納品書の消費税を 0 にする（請求書と同じ扱い）
+        'p.is_overseas as partner_is_overseas',
+        'p.overseas_tax_treatment as partner_overseas_tax_treatment',
         'w.short_name as warehouse_name',
+        'd.delivery_code as delivery_code',
         'd.name as destination_name',
-        'd.partner_delivery_no as partner_delivery_no',
         'd.postal_code as dest_postal_code',
         'd.address1 as dest_address1',
         'd.address2 as dest_address2',
@@ -607,13 +721,10 @@ export class ReportsService {
         'd.delivery_note_print2 as delivery_note_print2',
         'wi.name as work_instruction',
         'wi.instruction_body as work_instruction_body',
-        // 海外の得意先は納品書の消費税を 0 にする（請求書と同じ扱い）
-        'p.is_overseas as partner_is_overseas',
-        'p.overseas_tax_treatment as partner_overseas_tax_treatment',
-        // 受注の通貨（取引先の通貨で固定。2026-10-12 No.39）。納品書の金額に添える
-        'o.currency as currency',
         'dr.name as delivery_rule',
         'sc.name as slip_issue_class',
+        // 納品時間（区分値 DELIVERY_TIME。O-03）
+        'dt.name as delivery_time_name',
       ])
       .where('sh.id', 'in', ids)
       .where('sh.status', '<>', '削除')
@@ -657,11 +768,14 @@ export class ReportsService {
       ${sql.ref(`${skuAlias}.jan`)})`;
   }
 
+  /** 受注明細（帳票の明細の元）。カラー・サイズは SKU のもの。 */
   private orderLines(orderId: number) {
     return this.db
       .selectFrom('sales_order_lines as l')
       .innerJoin('sales_orders as o', 'o.id', 'l.sales_order_id')
       .leftJoin('skus as s', 's.id', 'l.sku_id')
+      .leftJoin('colors as cl', 'cl.id', 's.color_id')
+      .leftJoin('sizes as sz', 'sz.id', 's.size_id')
       .select([
         'l.line_no as line_no',
         'l.parent_line_no as parent_line_no',
@@ -671,13 +785,15 @@ export class ReportsService {
         'l.unit_price as unit_price',
         'l.tax_rate as tax_rate',
         'l.amount as amount',
-        'l.is_stock_target as is_stock_target',
+        // 出荷依頼書適用・納品書適用（明細ごとに入力。O-09）
+        'l.shipping_note as shipping_note',
+        'l.delivery_slip_note as delivery_slip_note',
         's.sku_code as sku_code',
-        // 出荷指示書・納品書の JAN 欄は、得意先別商品の出荷JAN、空なら SKU の JAN（コニーJAN）
+        'cl.name as color_name',
+        'sz.name as size_name',
+        // 出荷依頼書・納品書の JAN 欄は、得意先別商品の出荷JAN、空なら SKU の JAN（コニーJAN）
         // （2026-10-09 マスター編② M-18）
         this.shippingJanExpr('l', 'o', 's').as('jan'),
-        // FBA・ショップへの出荷依頼では、コニーのJANではなくこちらを使う（1001 ご要望）
-        's.fba_jan as fba_jan',
         this.retailPriceExpr('l', 'o').as('retail_price'),
       ])
       .where('l.sales_order_id', '=', orderId)
@@ -686,126 +802,89 @@ export class ReportsService {
   }
 
   /**
-   * 納品書に載せる明細。**常に受注明細を使う。**
-   *
-   * 出荷明細（shipment_lines）は倉庫から実際に出たものの記録で、
-   * 在庫を持たない行（送料・値引・販促品・非商品）を持たず、セット商品は
-   * 構成品ごとに並ぶ。これを納品書に使うと、出荷確定の前後で得意先に渡す
-   * 書類の内容と金額が変わってしまう（送料と値引が消え、セットは構成品の数だけ
-   * 金額が重複する）。出荷は全量引き当てできたときだけ作られるので、
-   * 受注明細がそのまま「出荷した内容」になる。
+   * 出荷依頼書・納品書（単価なし・上代あり）に載せる行。
+   * 送料・値引は品物ではないので載せない。セットはセットのまま1行（親のセット商品の行がある内訳商品は出さない）。
+   * 非商品は品名が自由入力で、同梱する販促物のこともあるので載せる。
    */
-  private deliveryLines(sh: { id: number; sales_order_id: number }) {
-    return this.orderLines(sh.sales_order_id);
+  private goodsRows(lines: OrderLine[]): OrderLine[] {
+    const sets = new Set(lines.filter((l) => l.line_type === 'セット商品').map((l) => l.line_no));
+    return lines.filter((l) => {
+      if (l.line_type === '送料' || l.line_type === '値引') return false;
+      return !(l.line_type === '内訳商品' && l.parent_line_no !== null && sets.has(l.parent_line_no));
+    });
   }
 
-  private deliveryColumns(form: DeliveryNoteForm): Column[] {
-    switch (form) {
-      case '単価なし':
-        // 顧客の見本（納品書_単価なし）は JAN の列を「コード」と呼び、商品コードの左に置く。
-        // 値は「単価あり2」と同じ（得意先別商品の出荷JAN、空なら SKU の JAN）。
-        return [
-          { label: '行', width: 26, align: 'right' },
-          { label: 'コード', width: 92 },
-          { label: '商品コード', width: 105 },
-          { label: '品名', width: 240 },
-          { label: '数量', width: 60, align: 'right' },
-        ];
-      case '単価あり2':
-        // 得意先の伝票に合わせ、JAN を並べる様式。
-        return [
-          { label: '行', width: 26, align: 'right' },
-          { label: '商品コード', width: 100 },
-          { label: 'JAN', width: 92 },
-          { label: '品名', width: 125 },
-          { label: '数量', width: 42, align: 'right' },
-          { label: '単価', width: 60, align: 'right' },
-          { label: '金額', width: 78, align: 'right' },
-        ];
-      case '上代あり':
-        return [
-          { label: '行', width: 26, align: 'right' },
-          { label: '商品コード', width: 105 },
-          { label: '品名', width: 190 },
-          { label: '数量', width: 42, align: 'right' },
-          { label: '上代', width: 68, align: 'right' },
-          { label: '金額', width: 92, align: 'right' },
-        ];
-      default:
-        // 単価あり。顧客の見本（納品書_単価あり）どおり、商品コードの左に「JANコード」の列を置く。
-        // 値は「単価あり2」と同じ（得意先別商品の出荷JAN、空なら SKU の JAN）。
-        return [
-          { label: '行', width: 26, align: 'right' },
-          { label: 'JANコード', width: 92 },
-          { label: '商品コード', width: 100 },
-          { label: '品名', width: 125 },
-          { label: '数量', width: 42, align: 'right' },
-          { label: '単価', width: 60, align: 'right' },
-          { label: '金額', width: 78, align: 'right' },
-        ];
+  /**
+   * 納品書「単価あり2」に載せる行。金額のある行はすべて載せる（送料・値引も）。
+   * セットはセットのまま1行。ただし内訳商品の行に金額が入っていれば、合計と合うようにその行も載せる。
+   */
+  private pricedRows(lines: OrderLine[]): OrderLine[] {
+    const sets = new Set(lines.filter((l) => l.line_type === 'セット商品').map((l) => l.line_no));
+    return lines.filter(
+      (l) =>
+        !(l.line_type === '内訳商品' && l.parent_line_no !== null && sets.has(l.parent_line_no) && Number(l.amount) === 0),
+    );
+  }
+
+  /** お届け先を宛先にする受注か（直送・通販・サンプル・社内移動で、お届け先のお名前か住所が入っている）。 */
+  private usesDirect(sh: ShipmentHeader): boolean {
+    if (!DIRECT_TYPES.has(sh.order_type)) return false;
+    return [sh.direct_name, sh.direct_postal_code, sh.direct_address1, sh.direct_address2].some(
+      (v) => (v ?? '').trim() !== '',
+    );
+  }
+
+  /** 届け先の〒・住所・お名前・電話。お届け先の受注はお届け先、それ以外は納品先マスタ。 */
+  private placeOf(sh: ShipmentHeader): { postalCode: string; address: string; name: string; tel: string } {
+    const join = (a: string | null, b: string | null) => [a?.trim(), b?.trim()].filter(Boolean).join(' ');
+    if (this.usesDirect(sh)) {
+      return {
+        postalCode: sh.direct_postal_code?.trim() ?? '',
+        address: join(sh.direct_address1, sh.direct_address2),
+        name: sh.direct_name?.trim() ?? '',
+        tel: sh.direct_tel?.trim() ?? '',
+      };
     }
+    return {
+      postalCode: sh.dest_postal_code?.trim() ?? '',
+      address: join(sh.dest_address1, sh.dest_address2),
+      name: sh.destination_name ?? '',
+      tel: sh.dest_tel?.trim() ?? '',
+    };
   }
 
-  private deliveryRow(
-    form: DeliveryNoteForm,
-    l: {
-      line_no: number;
-      item_name: string;
-      qty: string;
-      unit_price: string;
-      amount: string;
-      sku_code: string | null;
-      jan: string | null;
-      retail_price: string | null;
-    },
-    // 金額の見せ方。外貨の受注は小数2桁（2026-10-12 No.39）。指定が無ければ今までどおり円
-    fmt: (v: string | number | null) => string = money,
-  ) {
-    switch (form) {
-      case '単価なし':
-        return [l.line_no, l.jan ?? '', l.sku_code ?? '', l.item_name, qty(l.qty)];
-      case '単価あり2':
-        return [
-          l.line_no,
-          l.sku_code ?? '',
-          l.jan ?? '',
-          l.item_name,
-          qty(l.qty),
-          fmt(l.unit_price),
-          fmt(l.amount),
-        ];
-      case '上代あり':
-        // 上代は得意先別商品マスタ。未登録なら空欄にし、金額欄も上代×数量で出す。
-        return [
-          l.line_no,
-          l.sku_code ?? '',
-          l.item_name,
-          qty(l.qty),
-          fmt(l.retail_price),
-          l.retail_price === null ? '' : fmt(Number(l.retail_price) * Number(l.qty)),
-        ];
-      default:
-        return [
-          l.line_no,
-          l.jan ?? '',
-          l.sku_code ?? '',
-          l.item_name,
-          qty(l.qty),
-          fmt(l.unit_price),
-          fmt(l.amount),
-        ];
-    }
+  /**
+   * 納品書の宛名（O-32）。お届け先の受注はお届け先のお名前＋「様」。
+   * それ以外は納品先マスタの「納品書 印字1」、空なら取引先名に「御中」を付ける。
+   */
+  private addresseeOf(sh: ShipmentHeader, direct: boolean): string {
+    if (direct && sh.direct_name?.trim()) return `${sh.direct_name.trim()}　様`;
+    const base =
+      sh.delivery_note_print1?.trim() || this.partnerName(sh) || sh.destination_name?.trim() || sh.direct_name?.trim() || '';
+    if (!base) return '';
+    // 印字1 に敬称まで入れてある納品先は、重ねて付けない
+    return /(御中|様|殿)$/.test(base) ? base : `${base}　御中`;
   }
 
-  /** 伝票発行分類の名称が4様式のどれかなら、それを使う。 */
-  private formOf(name: string | null): DeliveryNoteForm | undefined {
-    if (!name) return undefined;
-    return DELIVERY_NOTE_FORMS.find((f) => f === name);
+  /**
+   * 出荷依頼書の「連絡事項」（各社納品ルール）。納品先マスタの作業指示の名称と本文（全文）。
+   * 納品ルール（2026-10-01 に納品先の編集画面から外した項目）が入っている納品先は、それも添える。
+   */
+  private instructionsOf(sh: ShipmentHeader): string {
+    const name = sh.work_instruction?.trim() ?? '';
+    const body = sh.work_instruction_body?.trim() ?? '';
+    const parts = [name && body ? `${name}\n${body}` : name || body];
+    if (sh.delivery_rule?.trim()) parts.push(`納品ルール：${sh.delivery_rule.trim()}`);
+    return parts.filter(Boolean).join('\n');
+  }
+
+  /** 取引先名（名称1＋名称2）。取引先の無い受注（サンプル・社内移動）は空。 */
+  private partnerName(sh: { partner_name1: string | null; partner_name2: string | null }): string {
+    return [sh.partner_name1?.trim(), sh.partner_name2?.trim()].filter(Boolean).join(' ');
   }
 
   private async deliveryNoteDefaultForm(): Promise<DeliveryNoteForm> {
-    const v = await this.settings.text('DELIVERY_NOTE_DEFAULT_FORM', '単価あり');
-    return this.formOf(v) ?? '単価あり';
+    return normalizeForm(await this.settings.text('DELIVERY_NOTE_DEFAULT_FORM', '単価あり2')) ?? '単価あり2';
   }
 
   /**
@@ -824,79 +903,36 @@ export class ReportsService {
     for (const [rate, base] of byRate) {
       // 小数の誤差（552.4999… など）で1単位ずれないよう、桁を上げた値をいったん整えてから丸める
       const raw = Number((((base * rate) / 100) * scale).toFixed(6));
-      total += (mode === 'ceil' ? Math.ceil(raw) : mode === 'round' ? Math.round(raw) : Math.floor(raw)) / scale;
+      // 端数は絶対値で処理して符号を戻す（請求の締めの fn_round_amount と同じ）。返品のマイナスの税で、
+      // Math.floor のままだと -12.5 が -13 になり、請求書（-12）と1円ずれていた（2026-10-20 受入テスト T4）
+      const abs = Math.abs(raw);
+      const rounded = mode === 'ceil' ? Math.ceil(abs) : mode === 'round' ? Math.round(abs) : Math.floor(abs);
+      total += (Math.sign(raw) * rounded) / scale;
     }
     return Number(total.toFixed(currencyDigits(currency)));
   }
 
-  /** 差出人。9/15 ご回答では会社名のみ印刷。住所・電話が空なら「TEL」の見出しごと出さない。 */
-  private async company(): Promise<{ name: string; line: string; invoiceNo: string }> {
-    const name = await this.settings.text('COMPANY_NAME', '株式会社コニー');
-    const address = (await this.settings.text('COMPANY_ADDRESS', '')).trim();
-    const tel = (await this.settings.text('COMPANY_TEL', '')).trim();
-    const parts = [name, address, tel ? `TEL ` : ''].filter((p) => p !== '');
+  /** 請求書の差出人。9/15 ご回答で会社名だけを印刷する（登録番号は設定があれば）。 */
+  private async company(): Promise<{ name: string; invoiceNo: string }> {
     return {
-      name,
-      line: parts.join('　'),
+      name: (await this.settings.text('COMPANY_NAME', '株式会社コニー')).trim(),
       invoiceNo: (await this.settings.text('COMPANY_INVOICE_NO', '')).trim(),
     };
   }
 
-  private partnerLabel(sh: {
-    partner_code: string;
-    partner_name1: string;
-    partner_name2: string | null;
-  }): string {
-    return `${sh.partner_code} ${sh.partner_name1}${sh.partner_name2 ? ' ' + sh.partner_name2 : ''}`;
-  }
-
-  /** 直送は受注に入れた住所、それ以外は納品先マスタの住所。 */
-  private addressOf(sh: {
-    order_type: string;
-    direct_name: string | null;
-    direct_postal_code: string | null;
-    direct_address1: string | null;
-    direct_address2: string | null;
-    direct_tel: string | null;
-    dest_postal_code: string | null;
-    dest_address1: string | null;
-    dest_address2: string | null;
-    dest_tel: string | null;
-  }): string {
-    const direct = sh.order_type === '直送' || sh.order_type === '通販';
-    const zip = direct ? sh.direct_postal_code : sh.dest_postal_code;
-    const a1 = direct ? sh.direct_address1 : sh.dest_address1;
-    const a2 = direct ? sh.direct_address2 : sh.dest_address2;
-    const tel = direct ? sh.direct_tel : sh.dest_tel;
-    // 空の項目は出さない。住所も郵便番号も無いときに「〒」だけが残ると、
-    // 印字漏れのように見えてしまうため。
-    const parts: string[] = [];
-    if (direct && sh.direct_name) parts.push(`${sh.direct_name} 様`);
-    if (zip) parts.push(`〒${zip}`);
-    const street = `${a1 ?? ''}${a2 ?? ''}`.trim();
-    if (street) parts.push(street);
-    if (tel) parts.push(`TEL ${tel}`);
-    return parts.join('　');
-  }
-
-  /**
-   * 帳票の「合計数量」。品物の行だけ数える。
-   * ・送料・値引・非商品は個数ではないので数えない
-   * ・セット商品は1行＝そのセット数として数える
-   * ・内訳商品は、親のセット行があるときは二重になるので数えない
-   * 出荷指示書と納品書で同じ規則を使う（同じ束の中で数が食い違わないように）。
-   */
-  private goodsQty(lines: { line_type: string; qty: string | number; parent_line_no?: number | null }[]): number {
-    return this.sum(
-      lines
-        .filter(
-          (l) =>
-            l.line_type === '商品' ||
-            l.line_type === 'セット商品' ||
-            (l.line_type === '内訳商品' && !l.parent_line_no),
-        )
-        .map((l) => l.qty),
-    );
+  /** 納品書の差出人欄（貴社の様式どおり。システム設定の COMPANY_*）。空の項目は見出しだけ、または出さない。 */
+  private async sender(): Promise<DeliverySender> {
+    const text = async (key: string, fallback = '') => (await this.settings.text(key, fallback)).trim();
+    return {
+      name: await text('COMPANY_NAME', '株式会社コニー'),
+      postalCode: await text('COMPANY_POSTAL_CODE'),
+      address1: await text('COMPANY_ADDRESS'),
+      address2: await text('COMPANY_ADDRESS2'),
+      contact: await text('COMPANY_CONTACT'),
+      tel: await text('COMPANY_TEL'),
+      fax: await text('COMPANY_FAX'),
+      invoiceNo: await text('COMPANY_INVOICE_NO'),
+    };
   }
 
   private sum(values: (string | number)[]): number {
@@ -928,6 +964,3 @@ export class ReportsService {
     return `${kind}_${today}_${count}件.pdf`;
   }
 }
-
-/** 表の幅の合計が用紙に収まっているかを、起動時ではなく作った時点で気づけるように。 */
-export const MAX_TABLE_WIDTH = CONTENT_WIDTH;

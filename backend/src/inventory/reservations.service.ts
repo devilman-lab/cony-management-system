@@ -3,6 +3,7 @@ import { sql, type Transaction } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { skuItemNameExpr } from '../masters/products.service';
 
 /**
  * 確保数（貴社の呼び方では「引当在庫」）。
@@ -33,7 +34,8 @@ interface OrderScope {
   partner_id: number;
   /** 受注の取引先の媒体（取引先マスタ） */
   media_id: number | null;
-  sales_category_id: number;
+  /** 社内移動は販売カテゴリーが空のことがある（2026-10-13 受注処理編）。空なら販売カテゴリーが空の確保だけに当たる */
+  sales_category_id: number | null;
   order_date: string;
 }
 
@@ -130,6 +132,8 @@ export class ReservationsService {
    */
   async consume(trx: Transaction<DB>, orderId: number, opts: { strict: boolean }): Promise<string[]> {
     const scope = await this.orderScope(trx, orderId);
+    // 取引先が空の受注（サンプル・社内移動）は当たる確保が決まらないので減らさない（2026-10-13 受注処理編 O-14）
+    if (!scope) return [];
 
     const lines = await trx
       .selectFrom('sales_order_lines as l')
@@ -290,14 +294,17 @@ export class ReservationsService {
     return lines.length;
   }
 
-  private async orderScope(trx: Transaction<DB>, orderId: number): Promise<OrderScope> {
+  /** 受注の当て方の材料。取引先が空の受注（サンプル・社内移動。2026-10-13 受注処理編）は null。 */
+  private async orderScope(trx: Transaction<DB>, orderId: number): Promise<OrderScope | null> {
     const o = await trx
       .selectFrom('sales_orders as o')
-      .innerJoin('partners as p', 'p.id', 'o.partner_id')
+      .leftJoin('partners as p', 'p.id', 'o.partner_id')
       .select(['o.partner_id as partner_id', 'p.media_id as media_id', 'o.sales_category_id as sales_category_id', 'o.order_date as order_date'])
       .where('o.id', '=', orderId)
       .executeTakeFirstOrThrow();
-    return o;
+    const partnerId = o.partner_id;
+    if (partnerId === null) return null;
+    return { ...o, partner_id: partnerId };
   }
 
   /** 受注が当たる枠の条件（Z-25）。r は reservations。 */
@@ -388,11 +395,13 @@ export class ReservationsService {
   /** 構成品の枠を戻す先。結んだ枠と同じ確保を優先し、無ければ当て方で引き直す。 */
   private async findTakenFrame(
     trx: Transaction<DB>,
-    scope: OrderScope,
+    scope: OrderScope | null,
     skuId: number,
     need: string,
     groupId: number | null,
   ): Promise<number | null> {
+    // 取引先が空の受注（scope が null）は当て方で引き直せないので、結んだ枠と同じ確保だけを見る
+    if (scope === null && groupId === null) return null;
     const row = await trx
       .selectFrom('reservations as r')
       .select('r.id as id')
@@ -400,7 +409,11 @@ export class ReservationsService {
       // 減らした分以上が使われている枠だけ（減らしていない枠に戻してしまわないため）
       .where(sql<boolean>`r.consumed_qty >= ${need}::numeric`)
       .where((eb) =>
-        groupId === null ? this.scopeSql(scope) : eb.or([eb('r.group_id', '=', groupId), this.scopeSql(scope)]),
+        scope === null
+          ? eb('r.group_id', '=', groupId)
+          : groupId === null
+            ? this.scopeSql(scope)
+            : eb.or([eb('r.group_id', '=', groupId), this.scopeSql(scope)]),
       )
       .orderBy(sql`(r.group_id is not distinct from ${groupId}::bigint) desc`)
       .orderBy(this.tierSql)
@@ -885,7 +898,10 @@ export class ReservationsService {
     ] as const;
   }
 
-  /** 明細。商品名は SKU の商品名があればそれ、無ければ商品名＋カラー・サイズ（M-10 と同じ決まり）。 */
+  /**
+   * 明細。商品名は品名（SKU の商品名があればそれ、無ければ商品名。＋カラー＋サイズ。2026-10-13 受注処理編 O-01 の決まり）。
+   * SKU の商品名にカラー・サイズが語として入っていれば重ねない（fn_item_name）。
+   */
   private async linesOf(groupIds: number[]): Promise<LineRow[]> {
     if (groupIds.length === 0) return [];
     return this.db
@@ -899,7 +915,7 @@ export class ReservationsService {
         sql<number>`r.group_id`.as('group_id'),
         'r.sku_id as sku_id',
         's.sku_code as sku_code',
-        sql<string>`coalesce(nullif(btrim(s.sku_name), ''), concat_ws(' ', pr.product_name, c.name, z.name))`.as('item_name'),
+        skuItemNameExpr('s', 'pr', 'c', 'z').as('item_name'),
         'c.name as color_name',
         'z.name as size_name',
         'r.reserved_qty as reserved_qty',
@@ -1034,6 +1050,8 @@ export class ReservationsService {
         's.id as sku_id',
         's.sku_code as sku_code',
         sql<string>`coalesce(nullif(btrim(s.sku_name), ''), p.product_name)`.as('product_name'),
+        // 品名（商品名＋カラー＋サイズ。O-01）。候補の表示と、選んだ明細の商品名に使う
+        skuItemNameExpr('s', 'p', 'c', 'z').as('item_name'),
         'c.name as color_name',
         'z.name as size_name',
         'p.is_set as is_set',

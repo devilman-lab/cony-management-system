@@ -44,6 +44,8 @@ import { PartnersController } from './masters/partners.controller';
 import { PartnersService } from './masters/partners.service';
 import { ProductsController } from './masters/products.controller';
 import { ProductsService } from './masters/products.service';
+import { OrderListController } from './orders/order-list.controller';
+import { OrderListService } from './orders/order-list.service';
 import { OrdersController } from './orders/orders.controller';
 import { OrdersService } from './orders/orders.service';
 import { PurchasingController } from './purchasing/purchasing.controller';
@@ -71,6 +73,8 @@ import { ShipmentsService } from './shipping/shipments.service';
     StockOperationsController,
     ReturnsController,
     OrdersController,
+    // 受注一覧（2026-10-13 受注処理編 O-15〜O-22。経路 /order-list）
+    OrderListController,
     ShipmentsController,
     BillingController,
     PurchasingController,
@@ -107,6 +111,7 @@ import { ShipmentsService } from './shipping/shipments.service';
     AdjustmentsService,
     ReturnsService,
     OrdersService,
+    OrderListService,
     AllocationService,
     ShipmentsService,
     NumberingService,

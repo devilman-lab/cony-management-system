@@ -10,7 +10,9 @@ import { sql, type Transaction } from 'kysely';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { StockLedgerService } from '../inventory/stock-ledger.service';
 import type { Paged } from '../masters/partners.service';
+import { AllocationService } from './allocation.service';
 
 export interface ShipmentListQuery {
   status?: string;
@@ -26,13 +28,18 @@ export class ShipmentsService {
   constructor(
     @Inject(KYSELY) private readonly db: ConyDatabase,
     private readonly settings: SettingsService,
+    private readonly allocation: AllocationService,
+    private readonly ledger: StockLedgerService,
   ) {}
 
   async list(query: ShipmentListQuery): Promise<Paged<Record<string, unknown>>> {
     let base = this.db
       .selectFrom('shipments as sh')
       .leftJoin('sales_orders as o', 'o.id', 'sh.sales_order_id')
+      // 取引先はサンプル・社内移動では空のことがある（2026-10-13 受注処理編 O-14。外部結合のまま）
       .leftJoin('partners as p', 'p.id', 'o.partner_id')
+      .leftJoin('delivery_destinations as d', 'd.id', 'o.delivery_destination_id')
+      .leftJoin('codes as dt', 'dt.id', 'o.delivery_time_code_id')
       .innerJoin('warehouses as w', 'w.id', 'sh.warehouse_id')
       .where('sh.status', '<>', '削除');
 
@@ -56,6 +63,12 @@ export class ShipmentsService {
           'o.is_billable as is_billable',
           'p.name1 as partner_name',
           'w.short_name as warehouse_name',
+          // 出荷確定・印刷の列（2026-10-13 受注処理編 O-25）: 納品日・納品先No.（納品先コード）・納品先名・納品時間。
+          // 納品先名は、納品先の無い受注（直送・サンプルなど）ではお届け先のお名前
+          'o.delivery_date as delivery_date',
+          'd.delivery_code as delivery_code',
+          sql<string | null>`coalesce(d.name, o.direct_name)`.as('destination_name'),
+          'dt.name as delivery_time_name',
         ])
         .orderBy('sh.planned_ship_date', sql`asc nulls last`)
         .orderBy('sh.shipment_no', 'asc')
@@ -74,6 +87,11 @@ export class ShipmentsService {
    * 引当済も同じ数だけ減らす。有効在庫（＝実在庫−引当済）は生成列なので、
    * 両方を同じ数だけ減らせば有効在庫は変わらない。押さえていた分が
    * そのまま棚から出ていく、という動きになる。
+   *
+   * 2026-10-13 受注処理編:
+   *   在庫の要らない受注（明細が非商品・送料・値引だけの受注、返品）は、引当なしで確定する（在庫は動かさない。O-11・O-44）。
+   *   委託（取引条件が委託で入庫倉庫がある受注）は、出荷倉庫から減らしたうえで、入庫倉庫に同じ SKU・ロット・数を
+   *   良品で入れる（在庫移動「倉庫間移動」、元伝票はこの出荷、日付は出荷日。O-12）。
    */
   async confirm(shipmentId: number, shipDate: string | null, userId: number) {
     return this.db.transaction().execute((trx) => this.confirmInTrx(trx, shipmentId, shipDate, userId));
@@ -97,11 +115,14 @@ export class ShipmentsService {
       const allocations = await trx
         .selectFrom('allocations as a')
         .innerJoin('sales_order_lines as l', 'l.id', 'a.sales_order_line_id')
+        .innerJoin('stocks as st', 'st.id', 'a.stock_id')
         .select([
           'a.id as id',
           'a.stock_id as stock_id',
           'a.qty as qty',
           'a.sku_id as sku_id',
+          'st.lot_no as lot_no',
+          'st.expiry_date as expiry_date',
           'l.id as line_id',
           'l.line_no as line_no',
           'l.item_name as item_name',
@@ -112,8 +133,26 @@ export class ShipmentsService {
         .where('a.status', '=', '引当中')
         .execute();
 
-      if (allocations.length === 0) {
+      // 引き当てる明細があるのに引当が無い出荷は確定できない。在庫の要らない受注（明細が非商品・送料・値引だけ、返品）は
+      // 引当なしで確定する（2026-10-13 受注処理編 O-11・O-44）
+      if (allocations.length === 0 && (await this.allocation.needsStock(trx, shipment.sales_order_id))) {
         throw new ConflictException('引当がありません。先に出荷指示を出してください');
+      }
+
+      // 委託の入庫倉庫（O-12）。取引条件が委託で入庫倉庫がある受注だけ、出荷した分を入庫倉庫へ移す
+      const order = await trx
+        .selectFrom('sales_orders as o')
+        .leftJoin('warehouses as cw', 'cw.id', 'o.consignment_warehouse_id')
+        .select(['o.trade_type as trade_type', 'o.consignment_warehouse_id as consignment_warehouse_id', 'cw.short_name as consignment_warehouse_name'])
+        .where('o.id', '=', shipment.sales_order_id)
+        .executeTakeFirstOrThrow();
+      const consignmentWarehouseId =
+        order.trade_type === '委託' && order.consignment_warehouse_id !== null ? Number(order.consignment_warehouse_id) : null;
+      if (consignmentWarehouseId !== null && allocations.length > 0 && consignmentWarehouseId === Number(shipment.warehouse_id)) {
+        // 受注の登録・修正でも断っているが、納品先の既定倉庫を後から変えたときなどに出荷倉庫と重なることがある
+        throw new ConflictException(
+          `入庫倉庫（${order.consignment_warehouse_name ?? ''}）が出荷倉庫と同じです。受注の入庫倉庫か出荷倉庫を選び直してください`,
+        );
       }
 
       let lineNo = 0;
@@ -155,6 +194,24 @@ export class ShipmentsService {
             created_by: userId,
           })
           .execute();
+
+        // 委託: 出荷した分を入庫倉庫に良品で入れる（同じ SKU・ロット。期限も写す）
+        if (consignmentWarehouseId !== null) {
+          const toStockId = await this.ledger.findOrCreate(
+            trx,
+            { sku_id: alloc.sku_id, warehouse_id: consignmentWarehouseId, lot_no: alloc.lot_no, quality: 'GOOD' },
+            userId,
+          );
+          if (alloc.expiry_date) {
+            await trx
+              .updateTable('stocks')
+              .set({ expiry_date: alloc.expiry_date })
+              .where('id', '=', toStockId)
+              .where('expiry_date', 'is', null)
+              .execute();
+          }
+          await this.ledger.apply(trx, toStockId, alloc.qty, '倉庫間移動', { table: 'shipments', id: shipmentId }, userId, shipDate);
+        }
 
         // 出荷明細は「倉庫から実際に出たもの」の記録。セット商品は構成品の SKU で並ぶ。
         // 在庫・原価・ロイヤリティはこの記録を見る。
@@ -213,6 +270,9 @@ export class ShipmentsService {
    * 受注を修正できる状態にする。在庫移動履歴には「出荷取消」として残るので、
    * 取消と再確定の両方があとから追える。
    * 締め処理で請求に含めたあとは取り消せない（締めを取り直すか返品で扱う）。
+   * 引当の無い出荷（非商品だけの受注・返品）も取り消せる（在庫は動かない）。
+   * 委託（2026-10-13 受注処理編 O-12）は、確定で入庫倉庫に入れた分を先に入庫倉庫から減らしてから戻す。
+   * 委託先で売れたなどで入庫倉庫の在庫が足りなければ取り消せない。
    */
   async unconfirm(shipmentId: number, userId: number) {
     return this.db.transaction().execute(async (trx) => {
@@ -242,6 +302,35 @@ export class ShipmentsService {
         throw new ConflictException(
           'この出荷はすでに請求に含まれています。締めを取り直すか、返品として処理してください',
         );
+      }
+
+      // 委託: 確定で入庫倉庫に入れた分（この出荷を元伝票にした「倉庫間移動」の差し引き）を、先に入庫倉庫から減らす
+      const moved = await trx
+        .selectFrom('stock_movements as m')
+        .select(['m.stock_id as stock_id', sql<string>`sum(m.qty)`.as('qty')])
+        .where('m.ref_table', '=', 'shipments')
+        .where('m.ref_id', '=', shipmentId)
+        .where('m.movement_type', '=', '倉庫間移動')
+        .groupBy('m.stock_id')
+        .having(sql<boolean>`sum(m.qty) > 0`)
+        .orderBy('m.stock_id')
+        .execute();
+      for (const mv of moved) {
+        const st = await trx
+          .selectFrom('stocks as st')
+          .innerJoin('skus as sk', 'sk.id', 'st.sku_id')
+          .innerJoin('warehouses as w', 'w.id', 'st.warehouse_id')
+          .select(['st.qty_available as qty_available', 'sk.sku_code as sku_code', 'w.short_name as warehouse_name'])
+          .where('st.id', '=', mv.stock_id)
+          .forUpdate('st')
+          .executeTakeFirstOrThrow();
+        if (Number(st.qty_available ?? 0) < Number(mv.qty)) {
+          throw new ConflictException(
+            `入庫倉庫（${st.warehouse_name}）の在庫が足りないため取り消せません（${st.sku_code}：戻す数 ${Number(mv.qty)} / 入庫倉庫の有効在庫 ${Number(st.qty_available ?? 0)}）。` +
+              '委託先で売れた分などを先に取り消して入庫倉庫の在庫を戻してから、もう一度お試しください',
+          );
+        }
+        await this.ledger.apply(trx, mv.stock_id, `-${mv.qty}`, '倉庫間移動', { table: 'shipments', id: shipmentId }, userId);
       }
 
       const allocations = await trx
@@ -300,8 +389,9 @@ export class ShipmentsService {
         .where('id', '=', shipmentId)
         .execute();
 
+      // 確定前の状態に戻す。3段階（shipping_instruction）は出荷指示済、登録だけ（manual）・受注登録時（order_entry）は引当済
       const timing = await this.settings.allocationTiming();
-      const orderStatus = timing === 'order_entry' ? '引当済' : '出荷指示済';
+      const orderStatus = timing === 'shipping_instruction' ? '出荷指示済' : '引当済';
       await trx
         .updateTable('sales_orders')
         .set({ status: orderStatus, updated_by: userId, updated_at: new Date() })

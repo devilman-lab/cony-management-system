@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 
 import { api, type Paged } from '@/lib/api';
 import { useDebounce } from '@/lib/hooks';
+import { composeItemName } from '@/lib/item-name';
 
 export interface Option {
   id: number;
@@ -582,21 +583,25 @@ export interface SkuRow {
 /**
  * SKU の品名（「SKU の商品名があればそれ、無ければ商品名」＋カラー＋サイズ）。
  * 候補の表示と、受注入力で SKU を選んだときの品名に使う（2026-10-09 マスター編②）。
+ * 「2枚組」のような組数はカラー・サイズのあとに回す（2026-10-13 受注処理編。composeItemName）。
  */
 export const skuItemName = (s: Pick<SkuRow, 'product_name' | 'sku_name' | 'item_name' | 'color_name' | 'size_name'>): string =>
-  `${s.item_name || s.sku_name?.trim() || s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`;
+  composeItemName(s.item_name || s.sku_name?.trim() || s.product_name, s.color_name, s.size_name);
 
 /**
  * SKU を探す。取引先を渡すと、その取引先の先方JAN・出荷JAN・専用コードでも引け、
  * 候補に出荷JAN（無ければ先方JAN）を出す（1001 ご要望）。
  * isSet を渡すと、セット商品（商品マスタで「セット商品」にしたもの）の SKU だけ／以外だけに絞る。
+ * registeredOnly を付けると、取引先の得意先別商品（使っている行）に登録した SKU だけを出す
+ * （受注入力の商品の欄。2026-10-13 受注処理編 O-05）。取引先を渡さないときは絞らない。
  */
 export const fetchSkusFor =
-  (partnerId?: number | null, opts?: { isSet?: boolean; withoutSet?: boolean }) =>
+  (partnerId?: number | null, opts?: { isSet?: boolean; withoutSet?: boolean; registeredOnly?: boolean }) =>
   async (q: string): Promise<Option[]> => {
     const rows = await api.get<SkuRow[]>('/masters/skus', {
       q: q || undefined,
       partner_id: partnerId ?? undefined,
+      registered_only: opts?.registeredOnly && partnerId ? 'true' : undefined,
       is_set: opts?.isSet === undefined ? undefined : String(opts.isSet),
       without_set: opts?.withoutSet ? 'true' : undefined,
       limit: 20,
@@ -686,6 +691,9 @@ export interface DestinationRow {
   name: string;
   partner_delivery_no: string | null;
   default_warehouse_id: number | null;
+  /** 納品先の作業指示（名称と本文）。受注入力で納品先の下に出す（2026-10-13 受注処理編 O-07） */
+  work_instruction_name?: string | null;
+  work_instruction_body?: string | null;
 }
 
 export async function fetchDestinations(partnerId: number): Promise<DestinationRow[]> {

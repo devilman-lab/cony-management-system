@@ -239,10 +239,12 @@ export function SearchSelect({
           disabled={disabled}
           onClick={startEdit}
           className="inp text-left flex items-center gap-2 !h-[30px]"
-          title={value.label}
+          title={value.sub ? `${value.label}（${value.sub}）` : value.label}
         >
           <span className="truncate flex-1">{value.label}</span>
-          {value.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] truncate max-w-[45%]">{value.sub}</span>}
+          {/* 補足（取引先コード・出荷JAN など）は幅の 3 割までにし、名前・商品コードを先に見せる。
+              45% まで取ると、幅 1280 で取引先名や商品コードが数文字しか見えなかった（2026-10-20 受入テスト T1） */}
+          {value.sub && <span className="text-[10.5px] text-[var(--color-ink-3)] truncate max-w-[30%]">{value.sub}</span>}
           {!disabled && (
             <span
               role="button"

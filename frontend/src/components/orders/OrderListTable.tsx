@@ -105,19 +105,21 @@ export function OrderListTable({
 }: Props) {
   // 編集モードでは日付・納品時間の欄が入るので広げる
   // 操作の欄は幅 1280 では 100（引当・修正／取消 の2段）、広い画面では 124（1段）
+  // 区分・販売担当の見出しが ▼ と並んで2行に折れていたので広げ、金額の列を少し詰めた（2026-10-20 受入テスト T2）
   const W = {
     sel: 28,
     no: 104,
-    type: 56,
-    category: 72,
-    staff: 64,
-    amount: 78,
+    type: 62,
+    category: 86,
+    staff: 80,
+    amount: 74,
     date: editMode ? 122 : 82,
     time: editMode ? 112 : 68,
     status: 74,
     act: 100,
   };
-  const autoMin = 96;
+  // 取引先・納品先（幅の決まっていない2列）の最低幅。区分・販売担当を広げた分だけ詰め、表の最低幅は前と同じ 1000px に保つ
+  const autoMin = 80;
   const fixed =
     (selectable ? W.sel : 0) + W.no + W.type + W.category + W.staff + W.amount + W.date * 2 + W.time + W.status + W.act;
   const minWidth = Math.max(fixed + autoMin * 2, withLines ? LINE_MIN + INDENT + 8 : 0);

@@ -314,19 +314,24 @@ function CodesTab({ fixed }: { fixed?: FixedCodeTab }) {
             { key: 'sort_order', label: '表示順', r: true, width: 70, render: (r) => r.sort_order ?? '' },
             { key: 'note', label: '備考', render: (r) => <span className="truncate block max-w-[260px]">{r.note ?? ''}</span> },
             { key: 'is_active', label: '', width: 60, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
-            {
-              // 操作は MasterPage と同じ「編集」「コピー」「削除」（M3-02・M3-39）
-              key: '_act',
-              label: '',
-              width: 122,
-              render: (r) => (
-                <span className="tbl-acts justify-end">
-                  {can('M-16', 'update') && <Button size="sm" onClick={() => openForm(r, 'edit')}>編集</Button>}
-                  {can('M-16', 'create') && <Button size="sm" onClick={() => openForm(r, 'copy')}>コピー</Button>}
-                  {can('M-16', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
-                </span>
-              ),
-            },
+            // 操作は MasterPage と同じ「編集」「コピー」「削除」（M3-02・M3-39）。
+            // ボタンが1つも無い人（閲覧者）には列ごと出さない（MasterPage と同じ。2026-10-19 受入 X2）
+            ...(can('M-16', 'update') || can('M-16', 'create') || can('M-16', 'delete')
+              ? [
+                  {
+                    key: '_act',
+                    label: '',
+                    width: 122,
+                    render: (r: CodeRow) => (
+                      <span className="tbl-acts justify-end">
+                        {can('M-16', 'update') && <Button size="sm" onClick={() => openForm(r, 'edit')}>編集</Button>}
+                        {can('M-16', 'create') && <Button size="sm" onClick={() => openForm(r, 'copy')}>コピー</Button>}
+                        {can('M-16', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
+                      </span>
+                    ),
+                  },
+                ]
+              : []),
           ]}
           rows={rows}
           rowKey={(r) => r.id}

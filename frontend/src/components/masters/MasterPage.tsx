@@ -89,8 +89,9 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
   /**
    * 一覧の表を画面の側で組むとき（商品の一覧のように、1件の下に子の行を rowSpan で並べる表。2026-10-18 M3-15）。
    * actions(r) は操作の列の中身（編集・コピー・削除）、actionWidth はその列の幅。省略時は columns で表を出す。
+   * canAct が false（閲覧者など、操作のボタンが1つも無い人）のときは、操作の列を出さない（2026-10-19 受入 X2）。
    */
-  renderTable?: (t: { rows: T[]; loading: boolean; actions: (r: T) => ReactNode; actionWidth?: number | string; isActive: (r: T) => boolean }) => ReactNode;
+  renderTable?: (t: { rows: T[]; loading: boolean; actions: (r: T) => ReactNode; actionWidth?: number | string; canAct: boolean; isActive: (r: T) => boolean }) => ReactNode;
   /**
    * 1440 より狭い画面（1280 など）では、操作のボタン（編集・コピー・削除）を右端の列ではなく、指定した列（key）の
    * 中身の下に入れる（引当在庫・商品の一覧と同じ。2026-10-18 受入 W1 N1・W2 M3-30）。true なら最初の列。
@@ -103,6 +104,11 @@ export interface MasterPageProps<T extends Record<string, unknown>, F> {
    * 指定すると、フォームの最後には出さず、renderForm の4番目の引数（ActiveSlot）を使ってページが置く。
    */
   placeActiveToggle?: boolean;
+  /**
+   * コピーで開いた登録画面の上に出す説明。省略時は「コードなどを直して…」。
+   * コードの欄が無いマスタ（ロイヤリティ規定）は、そのマスタに合った説明を渡す（2026-10-19 受入 X1）。
+   */
+  copyNote?: ReactNode;
 }
 
 /**
@@ -279,7 +285,8 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
     ),
   };
 
-  // 狭い画面で操作のボタンを指定の列の下に入れる（narrowActions）。閲覧者などボタンが1つも無い人には何も足さない
+  // 狭い画面で操作のボタンを指定の列の下に入れる（narrowActions）。閲覧者などボタンが1つも無い人には何も足さない。
+  // 右端の操作の列も、ボタンが1つも無い人には出さない（空の列が残っていた。2026-10-19 受入 X2）
   const canAct = can(p.functionId, 'update') || (p.toCopyForm !== null && can(p.functionId, 'create')) || (p.deletePath !== null && can(p.functionId, 'delete'));
   const host = typeof p.narrowActions === 'string' ? p.columns.find((c) => c.key === p.narrowActions) : p.columns[0];
   const tableColumns: Column<T>[] =
@@ -297,7 +304,9 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
                 ),
               },
         )
-      : [...p.columns, actionCol];
+      : canAct
+        ? [...p.columns, actionCol]
+        : p.columns;
   const slot: ActiveSlot = { show: !!(editing && showToggle), value: active, onChange: setActive };
 
   return (
@@ -345,7 +354,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
         {list.error ? <div className="p-3"><ErrorBox error={list.error} /></div> : null}
         {/* 文字の列は「…」で切らずに折り返して全文を出す */}
         {p.renderTable ? (
-          p.renderTable({ rows: list.items, loading: list.loading, actions: (r) => actionCol.render?.(r, 0), actionWidth: actionCol.width, isActive })
+          p.renderTable({ rows: list.items, loading: list.loading, actions: (r) => actionCol.render?.(r, 0), actionWidth: actionCol.width, canAct, isActive })
         ) : (
         <DataTable<T>
           fit
@@ -364,7 +373,7 @@ export function MasterPage<T extends Record<string, unknown>, F>(p: MasterPagePr
       <Modal open={open} title={editing ? `${p.title}の編集` : copying ? `${p.title}の登録（コピー）` : `${p.title}の登録`} onClose={() => setOpen(false)} width={p.modalWidth ?? 640} footer={<><Button onClick={() => setOpen(false)}>やめる</Button><Button variant="primary" loading={busy} disabled={!form} onClick={save}>{editing ? '更新する' : '登録する'}</Button></>}>
         {error ? <div className="mb-3"><ErrorBox error={error} onClose={() => setError(null)} /></div> : null}
         {copying && !editing && (
-          <div className="mb-2 text-[11.5px] text-[var(--color-ink-2)]">選んだ行の内容を写しました。コードなどを直して「登録する」を押すと、新しく登録します（元のデータはそのままです）。</div>
+          <div className="mb-2 text-[11.5px] text-[var(--color-ink-2)]">{p.copyNote ?? '選んだ行の内容を写しました。コードなどを直して「登録する」を押すと、新しく登録します（元のデータはそのままです）。'}</div>
         )}
         {form ? p.renderForm(form, setFormPatch, editing, slot) :<div className="py-6 text-center text-[12px] text-[var(--color-ink-3)]">読み込み中…</div>}
         {/* 表示／非表示（M3-02）。編集のときだけフォームの最後に出す */}

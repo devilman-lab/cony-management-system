@@ -239,7 +239,8 @@ await check('M3-25 一覧を略称で探せる', async () => {
 await check('M3-28 CSV の列に原価・メモが無い（先方の商品コードは鍵）', async () => {
   const c = ok(await call('GET', '/masters/csv/partner-products/columns', A), 'columns');
   const labels = c.columns.map((x) => x.label);
-  return (!labels.includes('原価') && !labels.includes('メモ') && c.key_labels.join() === '取引先コード,SKUコード,先方の商品コード') || c;
+  // SKU の見出しは 2026-10-19 受入 X2 から「商品コード」（前の「SKUコード」も取込で読む）
+  return (!labels.includes('原価') && !labels.includes('メモ') && c.key_labels.join() === '取引先コード,商品コード,先方の商品コード') || c;
 });
 await check('M3-26 CSV 書き出しに同じ SKU の2行がそれぞれ出る', async () => {
   const r = await text('/masters/csv/partner-products/export', A);

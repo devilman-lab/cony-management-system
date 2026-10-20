@@ -96,6 +96,11 @@ export interface CsvColumn {
    * 取り込みは言葉も値も受ける。options にはデータベースの値を書く（2026-10-18 マスター編_3 M3-07）。
    */
   valueLabels?: Readonly<Record<string, string>>;
+  /**
+   * 取り込みだけで読む欄。書き出し・一覧で編集・取込の欄の説明には出さない
+   * （画面から外した欄を、前に書き出した CSV に列が残っていても読めるように。SKU の入数区分。2026-10-19 受入 X2）。
+   */
+  importOnly?: boolean;
 }
 
 /** 行ごとの決まりを確かめるときに渡すもの。 */
@@ -388,7 +393,8 @@ const PRODUCTS: MasterCsvDef = {
     { field: 'set_product_name', label: 'セット商品名' },
     { field: 'brand_id', label: 'ブランドコード', ref: ref('brands', 'ブランド') },
     { field: 'category_id', label: 'カテゴリーコード', ref: ref('categories', 'カテゴリー') },
-    { field: 'product_class_id', label: '商品分類コード', ref: ref('product_classes', '商品分類') },
+    // 「品番（商品分類コード）」と並んで取り違えやすいので「商品分類（コード）」と呼ぶ。前の見出し「商品分類コード」でも読む（2026-10-19 受入 X2）
+    { field: 'product_class_id', label: '商品分類（コード）', ref: ref('product_classes', '商品分類'), aliases: ['商品分類コード'] },
     { field: 'carton_qty', label: '入数', kind: 'number', min: 0 },
     // 原価・旧原価は SKU ごとに持つ（2026-10-18 マスター編_3 M3-19）。商品の原価は SKU の CSV で直す。
     // 今までの CSV に「原価」「旧原価」「原価未定」の列があっても、知らない見出しとして読み飛ばす
@@ -425,7 +431,8 @@ const SKUS: MasterCsvDef = {
     { field: 'sku_name', label: 'SKUの商品名' },
     { field: 'color_id', label: 'カラーコード', ref: ref('colors', 'カラー') },
     { field: 'size_id', label: 'サイズコード', ref: ref('sizes', 'サイズ') },
-    textCode('pack_division', '入数区分'),
+    // 入数区分は画面の SKU 表から外した（M3-20）。書き出しには出さず、前に書き出した CSV の列は読む（2026-10-19 受入 X2）
+    textCode('pack_division', '入数区分', { importOnly: true }),
     // JAN は画面・API と同じく 8桁か13桁
     { field: 'jan', label: 'JANコード', kind: 'digits', digitsLength: [8, 13] },
     { field: 'fba_jan', label: 'FBA用JANコード', kind: 'digits', digitsLength: [8, 13] },
@@ -452,7 +459,8 @@ const PARTNER_PRODUCTS: MasterCsvDef = {
   optionalKeyFields: ['partner_product_code'],
   columns: [
     { field: 'partner_id', label: '取引先コード', ref: ref('partners', '取引先', 'partner_code'), readOnly: true },
-    { field: 'sku_id', label: 'SKUコード', ref: ref('skus', 'SKU', 'sku_code'), readOnly: true },
+    // 見出しは画面の呼び方「商品コード」（SKU のコード。M3-16）。前の見出し「SKUコード」でも読む（2026-10-19 受入 X2）
+    { field: 'sku_id', label: '商品コード', ref: ref('skus', 'SKU', 'sku_code'), readOnly: true, aliases: ['SKUコード'] },
     // 行を見分ける鍵なので、CSV・一覧で編集では書き換えない（変えるときは編集画面で）
     textCode('partner_product_code', '先方の商品コード', { readOnly: true }),
     { field: 'partner_jan', label: '先方JAN', kind: 'digits' },

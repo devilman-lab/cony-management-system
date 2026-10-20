@@ -177,7 +177,7 @@ export default function AnalyticsPage() {
               {(saved.data ?? []).map((q) => (
                 <button key={q.id} type="button" className="text-left px-2.5 py-2 rounded-md hover:bg-[#f4f7f8] text-[12.5px]" onClick={() => load(q)}>
                   <div className="font-semibold">{q.name}</div>
-                  <div className="text-[10.5px] text-[var(--color-ink-3)]">{q.share_scope === 'shared' ? '全体' : '本人のみ'}　{(q.conditions?.dimensions ?? []).join('×')}</div>
+                  <div className="text-[10.5px] text-[var(--color-ink-3)]">{q.share_scope === 'shared' ? '全体' : '本人のみ'}　{/* 前の名前で保存した軸も今の名前で出す（2026-10-19 受入 X2） */}{(q.conditions?.dimensions ?? []).map((d) => LEGACY_DIMENSIONS[d] ?? d).join('×')}</div>
                 </button>
               ))}
             </div>

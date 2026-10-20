@@ -178,7 +178,7 @@ export default function OrderDetailPage() {
                 <Row k="先方発注番号" v={o.po_no ?? '—'} />
                 <Row k="受注日 / 出荷日 / 納品日" v={`${ymd(o.order_date)} / ${ymd(o.ship_date) || '—'} / ${ymd(o.delivery_date) || '—'}`} />
                 <Row k="納品希望日" v={ymd(o.requested_delivery_date) || '—'} />
-                <Row k="出荷倉庫" v={o.warehouse_name ?? '（納品先の既定）'} />
+                <Row k="出荷倉庫" v={o.warehouse_name ?? '（既定：納品先の既定倉庫、無ければコニー倉庫）'} />
                 {(o.direct_name || o.direct_address1) && (
                   <Row k="お届け先" v={`${o.direct_name ?? ''}　〒${o.direct_postal_code ?? ''} ${o.direct_address1 ?? ''}${o.direct_address2 ?? ''}　${o.direct_tel ?? ''}`} />
                 )}

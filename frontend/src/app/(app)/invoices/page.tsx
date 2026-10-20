@@ -40,6 +40,8 @@ interface InvoiceDetail extends InvoiceRow {
   po_no: string | null;
   lines: { line_no: number; item_name: string; qty: string; tax_rate: string; amount: string }[];
   tax_summaries: { tax_rate: string; taxable_base: string; tax_amount: string }[];
+  /** 消費税免税区分のある取引先の税の表記（「免税（税抜扱い）」／「課税対象外」）。国内は null */
+  overseas_tax_label?: string | null;
 }
 
 const MANUAL: { k: keyof InvoiceRow; label: string }[] = [
@@ -267,7 +269,8 @@ export default function InvoicesPage() {
                 <table className="tbl">
                   <thead><tr><th>税率</th><th className="r">対象額（税抜）</th><th className="r">消費税</th></tr></thead>
                   <tbody>
-                    {d.tax_summaries.map((t) => <tr key={t.tax_rate}><td>{Number(t.tax_rate)}%</td><td className="r num">{moneyIn(t.taxable_base, d.currency)}</td><td className="r num">{moneyIn(t.tax_amount, d.currency)}</td></tr>)}
+                    {/* 免税の取引先は税率の欄に「免税（税抜扱い）」などと書く（請求書 PDF と同じ。2026-10-19 受入 X3） */}
+                    {d.tax_summaries.map((t) => <tr key={t.tax_rate}><td>{d.overseas_tax_label ?? `${Number(t.tax_rate)}%`}</td><td className="r num">{moneyIn(t.taxable_base, d.currency)}</td><td className="r num">{moneyIn(t.tax_amount, d.currency)}</td></tr>)}
                   </tbody>
                 </table>
                 <CardHead title="明細" />

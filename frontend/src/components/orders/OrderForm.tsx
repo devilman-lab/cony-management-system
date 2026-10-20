@@ -471,7 +471,8 @@ export function OrderForm({ initial, orderId }: { initial?: OrderDraft; orderId?
               <FormRow label="納品希望日">
                 <Input type="date" value={d.requested_delivery_date} onChange={(e) => set('requested_delivery_date', e.target.value)} className="!w-[150px]" />
               </FormRow>
-              <FormRow label="出荷倉庫" hint="空なら納品先の既定倉庫">
+              {/* 空のときの当て先はサーバー（allocation.service の resolveWarehouse）と同じ順（2026-10-19 受入 X1-1） */}
+              <FormRow label="出荷倉庫" hint="空なら納品先の既定倉庫。納品先に既定が無ければコニー倉庫">
                 <Select value={d.ship_from_warehouse_id} onChange={(e) => set('ship_from_warehouse_id', e.target.value)} className="!w-[180px]">
                   <option value="">（既定）</option>
                   {(warehouses.data ?? []).map((w) => (

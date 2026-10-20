@@ -109,7 +109,7 @@ export default function PartnerProductsPage() {
       csvSlug="partner-products"
       csvHint={
         <>
-          行は「取引先コード・SKUコード・先方の商品コード」で突き合わせます。同じ取引先・同じ SKU に2行目を足すときは、先方の商品コードを入れてください（先方の商品コードが空の行は、取引先・SKU ごとに1つまでです）。
+          行は「取引先コード・商品コード・先方の商品コード」で突き合わせます（前に書き出した CSV の「SKUコード」の列も商品コードとして読みます）。同じ取引先・同じ商品コードに2行目を足すときは、先方の商品コードを入れてください（先方の商品コードが空の行は、取引先・商品コードごとに1つまでです）。
           先方の商品コードを書き換えるときは、編集画面で直してください。
         </>
       }
@@ -134,7 +134,8 @@ export default function PartnerProductsPage() {
         { key: 'partner_code', label: '取引先コード', width: 74, nowrap: true, render: (r) => <Num className="text-[var(--color-ink-2)]">{r.partner_code}</Num> },
         { key: 'partner_short_name', label: '略称', width: 110, render: (r) => r.partner_short_name || r.partner_name },
         { key: 'media_name', label: '媒体', width: 80, render: (r) => r.media_name ?? '' },
-        { key: 'sku_code', label: 'SKU', width: 120, nowrap: true, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
+        // 見出しは商品の画面と同じ「商品コード」（SKU のコード。2026-10-19 受入 X2）
+        { key: 'sku_code', label: '商品コード', width: 120, nowrap: true, render: (r) => <Num className="font-semibold">{r.sku_code}</Num> },
         { key: 'product_name', label: '商品名', width: 210, render: (r) => skuFullName(r) },
         { key: 'sales_name', label: '販売名', width: 130, render: (r) => r.sales_name ?? '' },
         // 商品分類は1行。全角10字ほどの分類名が収まる幅にし、収まらない分は「…」でマウスを載せると全文（2026-10-18 受入 W2 M3-25。

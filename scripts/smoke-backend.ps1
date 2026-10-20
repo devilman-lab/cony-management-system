@@ -1792,6 +1792,8 @@ Write-Host '--- 在庫表・在庫調整・引当在庫（販売カテゴリー�
 RunVerify 'verify-fb1016-f.mjs'
 Write-Host '--- 画面確認（W1〜W3）で見つかった点（狭い画面の操作・取込の要確認・呼び方・商品のコピー・請求書の免税）' -ForegroundColor DarkCyan
 RunVerify 'verify-fb1016-g.mjs'
+Write-Host '--- 全面テスト（X1〜X4）で見つかった点（検索欄の入れ替え・出荷倉庫の既定・呼び方・免税の請求詳細）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1016-h.mjs'
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

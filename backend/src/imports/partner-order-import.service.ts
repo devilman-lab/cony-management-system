@@ -355,19 +355,38 @@ export class PartnerOrderImportService {
 
     const unresolved = resolved.filter((r) => r.sku_id === null).length;
     if (unresolved > 0) {
+      // 引けなかった行のうち、非表示にした得意先別商品に当たる行は、その理由を出す（2026-10-19 受入 X1-4。
+      // 以前はどれも「商品マスタにありません」で、行を非表示にしたことが原因だと分からなかった）
+      const hidden: string[] = [];
+      for (let i = 0; i < resolved.length; i += 1) {
+        if (resolved[i].sku_id !== null) continue;
+        const why = await this.hiddenPartnerProduct(trx, template.sku_match_key, resolved[i].values, partner.id);
+        if (why) hidden.push(`${rows[i].row_no}行目：${why}は得意先別商品が非表示のため使いません`);
+      }
+      const missing = unresolved - hidden.length;
+      const messages = [
+        ...(missing > 0 ? [`${missing} 行の商品が商品マスタにありません`] : []),
+        ...(hidden.length > 0 ? [`${hidden.join('。')}。使うときは得意先別商品を「表示」に戻してから取り込み直してください`] : []),
+      ];
       await trx
         .updateTable('external_orders')
         .set({
           status: '取込済',
-          error_message: `${unresolved} 行の商品が商品マスタにありません`,
+          error_message: messages.join('。'),
         })
         .where('id', '=', external.id)
         .execute();
+      const counts = [
+        ...(missing > 0 ? [`商品未登録 ${missing} 行`] : []),
+        ...(hidden.length > 0 ? [`得意先別商品が非表示 ${hidden.length} 行`] : []),
+      ];
       return {
         order_no: '',
         external_order_no: externalOrderNo,
         lines: rows.length,
-        status: `要確認（商品未登録 ${unresolved} 行）`,
+        status: `要確認（${counts.join('・')}）`,
+        // 非表示の行に当たった理由は、取込結果の「注意」にも出す（単価が決まらないときと同じ）
+        ...(hidden.length > 0 ? { reasons: hidden } : {}),
       };
     }
 
@@ -553,6 +572,35 @@ export class PartnerOrderImportService {
     if (!code) return null;
     const row = await trx.selectFrom('skus').select('id').where('sku_code', '=', code).executeTakeFirst();
     return row?.id ?? null;
+  }
+
+  /**
+   * 引けなかった行が、非表示にした得意先別商品に当たるか（resolveSku と同じ照合のしかた。2026-10-19 受入 X1-4）。
+   * 当たれば「先方の JAN 〇〇」のような説明を、当たらなければ null を返す。
+   * JAN で照合する取込先は、コニーの JAN（SKU の JAN）でも引けなかった行だけがここに来る。
+   */
+  private async hiddenPartnerProduct(
+    trx: Transaction<DB>,
+    matchKey: string,
+    values: Record<string, string | null>,
+    partnerId: number,
+  ): Promise<string | null> {
+    const hidden = trx
+      .selectFrom('partner_products')
+      .select('id')
+      .where('partner_id', '=', partnerId)
+      .where('is_active', '=', false);
+    if (matchKey === 'jan') {
+      const jan = values['jan'];
+      if (!jan) return null;
+      return (await hidden.where('partner_jan', '=', jan).executeTakeFirst()) ? `先方の JAN ${jan} ` : null;
+    }
+    if (matchKey === 'partner_code') {
+      const code = values['partner_product_code'];
+      if (!code) return null;
+      return (await hidden.where('partner_product_code', '=', code).executeTakeFirst()) ? `先方の商品コード ${code} ` : null;
+    }
+    return null;
   }
 
   /**

@@ -38,7 +38,8 @@ export default function RoyaltyPage() {
   const detail = useFetch<CalcDetail>(detailId ? `/billing/royalties/${detailId}` : null);
 
   const calculate = async () => {
-    if (!(await confirm(`${month} のロイヤリティを計算しますか`, '規定の「計算の基準」に合わせて、この月の出荷・締めた請求・入金に規定を当て、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
+    // 計算の基準は請求月に統一した（M3-32）ので、選べなくなった「計算の基準」の説明は出さない（2026-10-19 受入 X3）
+    if (!(await confirm(`${month} のロイヤリティを計算しますか`, 'この月に締めた請求（請求月）に載った出荷（返品は差し引き）に規定を当て、支払先ごとに計算表を作ります。確定前の計算表は作り直されます。'))) return;
     setBusy(true);
     try {
       const r = await api.post<
@@ -85,7 +86,7 @@ export default function RoyaltyPage() {
       {element}
       <PageHead
         title="ロイヤリティ計算"
-        sub="販売先への卸金額に規定の料率をかけて、支払先ごとに月次の計算表を作ります。どの月に数えるかは規定の「計算の基準」で決まります（出荷＝出荷した月、売上＝締めて請求した月、入金＝入金（消込）された月に入金の割合で）。返品はマイナスで反映、端数は切り捨てです"
+        sub="販売先への卸金額（下代）に規定の料率をかけて、支払先ごとに月次の計算表を作ります。数える月は請求月（締めた請求の月）です。返品はマイナスで反映、端数は切り捨てです"
         right={
           <>
             <Link href="/masters/royalty-rules" className="btn btn-ghost">規定を確認する</Link>

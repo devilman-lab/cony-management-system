@@ -8,6 +8,7 @@ import { AllocationService, type AllocationOutcome } from '../shipping/allocatio
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
+import { skuNameExpr } from '../masters/products.service';
 import { OVERSEAS_TAX_RATE, isOverseasPartner, orderTradeType } from './order-defaults';
 
 export type OrderType = '卸' | '直送' | '通販' | 'サンプル';
@@ -393,6 +394,9 @@ export class OrdersService {
       .leftJoin('skus as s', 's.id', 'l.sku_id')
       // 明細が使った得意先別商品の行。修正画面で同じ行を選んだまま開くため（2026-10-16 マスター編_3 M3-26）
       .leftJoin('partner_products as pp', 'pp.id', 'l.partner_product_id')
+      .leftJoin('products as sp', 'sp.id', 's.product_id')
+      .leftJoin('colors as scl', 'scl.id', 's.color_id')
+      .leftJoin('sizes as ssz', 'ssz.id', 's.size_id')
       .select([
         'l.id as id',
         'l.line_no as line_no',
@@ -400,6 +404,9 @@ export class OrdersService {
         'l.line_type as line_type',
         'l.sku_id as sku_id',
         's.sku_code as sku_code',
+        // SKU の品名（SKU の商品名か商品名＋カラー・サイズ）。修正画面の商品の欄は、受注入力と同じくこの名前で出す
+        // （明細の品名＝販売名で出すと、得意先別商品の行を選び直しても古い販売名のまま残っていた。2026-10-19 受入 X2）
+        sql<string | null>`case when s.id is null then null else concat_ws(' ', ${skuNameExpr('s', 'sp')}, scl.name, ssz.name) end`.as('sku_item_name'),
         'l.partner_product_id as partner_product_id',
         'pp.partner_product_code as partner_product_code',
         'pp.partner_jan as partner_jan',

@@ -257,7 +257,8 @@ await check('W1 N8 先方の JAN の照合：非表示にした行は使わな�
   ok(await call('PATCH', `/masters/partner-products/${pp2.id}`, A, { is_active: false }), 'hide pp2');
   const r = ok(await importJan('N2', PJ2, ''), 'import');
   ok(await call('PATCH', `/masters/partner-products/${pp2.id}`, A, { is_active: true }), 'show pp2');
-  return (r.created_orders === 0 && r.pending_orders === 1 && r.orders[0].status.includes('商品未登録')) || r;
+  // 2026-10-19 受入 X1-4 から、非表示の行に当たったときの要確認は「得意先別商品が非表示」と出る（以前は「商品未登録」）
+  return (r.created_orders === 0 && r.pending_orders === 1 && r.orders[0].status.includes('得意先別商品が非表示')) || r;
 });
 await check('W1 N8 受注入力の候補（lookup）にも非表示の行は出ない', async () => {
   ok(await call('PATCH', `/masters/partner-products/${pp2.id}`, A, { is_active: false }), 'hide pp2');

@@ -7,6 +7,7 @@ import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
 import type { Paged } from '../masters/partners.service';
+import { orderShippingFeeSql } from './shipping-fee';
 
 export interface ClosingInput {
   /** 対象年月。YYYY-MM */
@@ -245,6 +246,8 @@ export class BillingService {
       .where('sh.status', '=', '出荷済')
       .where('o.partner_id', '=', partnerId)
       .where('o.is_billable', '=', true)
+      // 委託は請求に載せない（下の明細と同じ。2026-10-13 受注処理編 O-12）ので、通貨の食い違いも見ない
+      .where('o.trade_type', '<>', '委託')
       .where('o.currency', '<>', partnerCurrency)
       .where('sh.ship_date', '>=', period.from)
       .where('sh.ship_date', '<=', period.to)
@@ -309,7 +312,9 @@ export class BillingService {
         .execute();
     }
 
-    // 出荷（サンプルは除く）を、出荷×税率でまとめて明細にする
+    // 出荷（サンプル・社内移動は除く）を、出荷×税率でまとめて明細にする。
+    // 委託（単価なし）は請求に載せない（2026-10-13 受注処理編 O-12）。
+    // 返品の受注（O-44）の出荷は、明細名を「返品 ＋出荷番号」にしてマイナスのまま載せる（請求書の返品額に入る）。
     await trx
       .insertInto('invoice_lines')
       .columns(['invoice_id', 'line_no', 'shipment_id', 'item_name', 'qty', 'unit_price', 'tax_rate', 'amount', 'created_by'])
@@ -325,7 +330,7 @@ export class BillingService {
             sql<number>`${invoice.id}`.as('invoice_id'),
             sql<number>`row_number() over (order by sh.shipment_no${overseas ? sql.raw('') : sql.raw(', sl.tax_rate')})`.as('line_no'),
             'sh.id as shipment_id',
-            sql<string>`'出荷 ' || sh.shipment_no`.as('item_name'),
+            sql<string>`case when o.order_type = '返品' then '返品 ' else '出荷 ' end || sh.shipment_no`.as('item_name'),
             // 数量は品物の行だけ数える（送料・値引の「1」を個数に混ぜない）。
             // 納品書・出荷指示書の goodsQty() と同じ数え方にそろえてある。
             sql<string>`coalesce(sum(sl.qty) filter (where sl.line_type in ('商品','セット商品')
@@ -338,9 +343,10 @@ export class BillingService {
           .where('sh.status', '=', '出荷済')
           .where('o.partner_id', '=', partnerId)
           .where('o.is_billable', '=', true)
+          .where('o.trade_type', '<>', '委託')
           .where('sh.ship_date', '>=', period.from)
           .where('sh.ship_date', '<=', period.to)
-          .groupBy(['sh.id', 'sh.shipment_no'])
+          .groupBy(['sh.id', 'sh.shipment_no', 'o.order_type'])
           // 海外は税率を 0 にそろえるので、税率で行を分けない（1出荷1行）
           .$if(!overseas, (qb) => qb.groupBy('sl.tax_rate')),
       )
@@ -401,38 +407,35 @@ export class BillingService {
 
     // 集計値をヘッダへ書き戻す。
     // 送料は出荷ごとに判定する（9/15 ご回答：1回の出荷が 30,000 円未満なら一律 750 円）。
-    //   受注に送料調整欄があればその額（直送はここに直接入力）。
-    //   取引先マスタの送料区分が「請求しない」「直送のみ」なら 0。
-    //   受注明細に金額の入った「送料」の行があるときは、その行が請求明細に乗るので
-    //   自動計算も送料調整欄も使わない（同じ送料を二重に請求しないため）。
-    //   0 円の送料行は「送料なし」の意思表示ではないので、自動計算をそのまま行う。
-    //   判定の元になる金額は送料の行を除いた受注金額（送料で閾値を超えるのを避ける）。
-    //   それ以外は fn_shipping_fee（閾値・金額は取引先マスタ → 設定の順）。
+    // 1受注の送料の決まりは shipping-fee.ts の orderShippingFeeSql に1つだけ置き、納品書の「送料」の行（O-10）と同じ額にする
+    // （送料調整欄・送料の行・直送・返品・委託・外貨・取引先の送料区分の扱いは、そちらの説明のとおり）。
+    // 委託の受注は請求に載せないので送料も数えない（O-12）。
+    //
+    // 出荷と返品額: 返品の受注の出荷（明細名「返品 …」、マイナス）は返品額に入れ、出荷には入れない（O-44）。
+    // 当月請求額は明細の合計（返品のマイナスを含む）＋税＋送料…で数えるので、返品は1回だけ差し引かれる。
+    // 出荷・返品額は請求書の内訳の表示（当月請求額の計算には使わない）。
     await trx
       .updateTable('invoices')
       .set({
         shipping_fee_amount: sql<string>`(
-          select coalesce(sum(
-            case when t.fee_amount <> 0 then 0
-                 else coalesce(o.shipping_fee_adjustment,
-                        case when o.order_type = '直送' then 0
-                             -- 自動の送料（3万円未満で 750 円）は円の決まり。外貨の受注には付けず、要るときは送料調整欄に入れる
-                             when o.currency <> 'JPY' then 0
-                             when fr.code in ('NO_CHARGE', 'DIRECT_ONLY') then 0
-                             else fn_shipping_fee(o.partner_id, t.total) end) end), 0)
+          select coalesce(sum(${orderShippingFeeSql(sql.ref('o.id'))}), 0)
             from shipments sh
             join sales_orders o on o.id = sh.sales_order_id
-            join partners pa on pa.id = o.partner_id
-            left join codes fr on fr.id = pa.shipping_fee_rule_code_id
-            join lateral (
-              select coalesce(sum(sl.amount) filter (where sl.line_type <> '送料'), 0) as total,
-                     coalesce(sum(sl.amount) filter (where sl.line_type = '送料'), 0) as fee_amount
-                from sales_order_lines sl
-               where sl.sales_order_id = sh.sales_order_id) t on true
            where sh.status = '出荷済' and o.is_billable and o.partner_id = ${partnerId}
+             and o.trade_type <> '委託'
              and sh.ship_date >= ${period.from} and sh.ship_date <= ${period.to})`,
-        shipment_amount: sql<string>`(select coalesce(sum(amount),0) from invoice_lines where invoice_id = ${invoice.id} and shipment_id is not null)`,
-        return_amount: sql<string>`(select coalesce(-sum(amount),0) from invoice_lines where invoice_id = ${invoice.id} and return_id is not null)`,
+        shipment_amount: sql<string>`(
+          select coalesce(sum(il.amount), 0)
+            from invoice_lines il
+            join shipments ish on ish.id = il.shipment_id
+            left join sales_orders iso on iso.id = ish.sales_order_id
+           where il.invoice_id = ${invoice.id} and iso.order_type is distinct from '返品')`,
+        return_amount: sql<string>`(
+          select coalesce(-sum(il.amount), 0)
+            from invoice_lines il
+            left join shipments ish on ish.id = il.shipment_id
+            left join sales_orders iso on iso.id = ish.sales_order_id
+           where il.invoice_id = ${invoice.id} and (il.return_id is not null or iso.order_type = '返品'))`,
         current_receipt_amount: sql<string>`(select coalesce(sum(amount),0) from cash_receipts where partner_id = ${partnerId} and currency = ${currency} and receipt_date >= ${period.from} and receipt_date <= ${period.to})`,
       })
       .where('id', '=', invoice.id)

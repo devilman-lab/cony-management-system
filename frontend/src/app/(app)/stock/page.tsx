@@ -6,6 +6,7 @@ import { api, type Paged } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useWarehouses, useDebounce } from '@/lib/hooks';
 import { money, qty, ymd } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Button, Card, DataTable, ErrorBox, Input, Num, PageHead, Pager, Select, Toolbar, type Column } from '@/components/ui';
 import { InlineText } from '@/components/inventory/InlineEdit';
 import { useToast } from '@/components/ui/Toast';
@@ -19,6 +20,8 @@ interface StockRow extends Record<string, unknown> {
   product_code: string;
   /** SKU ごとの商品名があればそれ（API 側で決めて返す） */
   product_name: string;
+  /** 品名（商品名＋カラー＋サイズ。API 側で決めて返す。2026-10-13 受注処理編 O-01） */
+  item_name?: string;
   color_name: string | null;
   size_name: string | null;
   warehouse_name: string;
@@ -113,7 +116,8 @@ export default function StockPage() {
       label: '商品名',
       render: (r) => (
         <span>
-          {`${r.product_name}${r.color_name ? ' ' + r.color_name : ''}${r.size_name ? ' ' + r.size_name : ''}`}
+          {/* 品名（商品名＋カラー＋サイズ。組数はカラー・サイズのあと。2026-10-13 受注処理編 O-01）。API の品名、無ければ同じ決まりで組み立てる */}
+          {r.item_name || composeItemName(r.product_name, r.color_name, r.size_name)}
           {/* 品質の列は外したが、良品以外の行は同じ商品が2行並んで見えるので印を付ける */}
           {r.quality_code !== 'GOOD' && <Badge status="引当待ち" className="ml-1">{r.quality_name}</Badge>}
         </span>

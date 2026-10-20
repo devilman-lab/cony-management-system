@@ -6,6 +6,7 @@ import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCodes, useList, useWarehouses } from '@/lib/hooks';
 import { qty as fmtQty, today, ymd } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Textarea, useConfirm } from '@/components/ui';
 import { InlineText } from '@/components/inventory/InlineEdit';
 import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
@@ -19,6 +20,8 @@ interface AdjLine {
   sku_code: string;
   jan: string | null;
   product_name: string;
+  /** 品名（商品名＋カラー＋サイズ。API が作る。2026-10-13 受注処理編 O-01） */
+  item_name?: string;
   color_name: string | null;
   size_name: string | null;
   qty: string;
@@ -66,12 +69,15 @@ interface LineDraft {
   note: string;
 }
 let seq = 1;
+/** 明細の品名（O-01）。API の品名、無ければ同じ決まり（composeItemName）で組み立てる */
+const lineItemName = (l: { product_name: string; item_name?: string; color_name?: string | null; size_name?: string | null }) =>
+  l.item_name || composeItemName(l.product_name, l.color_name, l.size_name);
 const newLine = (): LineDraft => ({ key: seq++, sku: null, qty: '', from_quality: '', to_quality: '', quality_label: '', note: '' });
 const toDraft = (l: AdjLine): LineDraft => ({
   key: seq++,
   sku: {
     id: l.sku_id,
-    label: `${l.sku_code}　${l.product_name}${l.color_name ? ' ' + l.color_name : ''}${l.size_name ? ' ' + l.size_name : ''}`,
+    label: `${l.sku_code}　${lineItemName(l)}`,
     sub: l.jan ?? '',
   },
   qty: String(Number(l.qty)),
@@ -81,7 +87,10 @@ const toDraft = (l: AdjLine): LineDraft => ({
   note: l.note ?? '',
 });
 
-/** 理由の既定は「その他」（2026-10-16 在庫編_2 Z3-08。選択肢は その他・再生・棚卸差異） */
+/**
+ * 理由の既定は「その他」（2026-10-16 在庫編_2 Z3-08）。選択肢は区分値「在庫調整理由」の使うもの
+ * （その他・再生・棚卸差異・返品。返品の良品を在庫に戻すときは「返品」。2026-10-13 受注処理編 O-45）
+ */
 const DEFAULT_REASON = 'OTHER';
 
 interface ImportResult {
@@ -94,14 +103,15 @@ interface ImportResult {
     warehouse_name: string;
     reason_name: string;
     note: string | null;
-    lines: { row: number; sku_code: string; product_name: string; color_name?: string | null; size_name?: string | null; qty: string; from_quality: string | null; to_quality: string | null; note: string | null }[];
+    lines: { row: number; sku_code: string; product_name: string; item_name?: string; color_name?: string | null; size_name?: string | null; qty: string; from_quality: string | null; to_quality: string | null; note: string | null }[];
   }[];
   errors: { row: number; message: string }[];
 }
 
 /**
- * 在庫数の調整（ご要望⑫）。棚卸差異・再生などで在庫数を直す。
- * 理由の選択肢は区分値「在庫調整理由」の使うものだけ（その他・再生・棚卸差異。Z3-08）。
+ * 在庫数の調整（ご要望⑫）。棚卸差異・再生・返品などで在庫数を直す。
+ * 理由の選択肢は区分値「在庫調整理由」の使うものだけ（その他・再生・棚卸差異・返品。Z3-08・O-45）。
+ * 返品の受注（受注区分「返品」）は在庫を動かさないので、戻ってきた良品はここで理由「返品」で増やす（O-45）。
  *
  * 2026-10-09 在庫編 Z-20・Z-21: 登録しただけでは在庫は動かない（状態「登録」）。
  * 一覧の「調整」を押したときに在庫へ反映する（状態「確定」）。確定後の「取消」は在庫を元に戻す。
@@ -313,7 +323,7 @@ export default function AdjustmentsPage() {
       {element}
       <PageHead
         title="在庫調整"
-        sub="棚卸差異・再生などで在庫数を直します。登録しただけでは在庫は動きません。一覧の「調整」で在庫に反映します"
+        sub="棚卸差異・再生・返品（良品を在庫に戻す）などで在庫数を直します。登録しただけでは在庫は動きません。一覧の「調整」で在庫に反映します"
         right={
           canUpdate && (
             <span className="flex gap-2">
@@ -377,8 +387,8 @@ export default function AdjustmentsPage() {
               key: 'product_name',
               label: '商品名',
               width: 150,
-              render: (r) =>
-                r.line ? `${r.line.product_name}${r.line.color_name ? ' ' + r.line.color_name : ''}${r.line.size_name ? ' ' + r.line.size_name : ''}` : '',
+              // 品名（商品名＋カラー＋サイズ。組数はカラー・サイズのあと。2026-10-13 受注処理編 O-01）
+              render: (r) => (r.line ? lineItemName(r.line) : ''),
             },
             {
               key: 'qty',
@@ -536,8 +546,10 @@ export default function AdjustmentsPage() {
                   </table>
                 </div>
               )}
+              {/* 商品名の列に幅を残す。ほかの列の幅の合計がダイアログの幅とほぼ同じで、商品名が 9px につぶれて読めなかった
+                  （2026-10-20 受入テスト T5）。入りきらないときは表の中だけ横に流す */}
               <div className="tbl-wrap max-h-[340px] overflow-auto">
-                <table className="tbl">
+                <table className="tbl" style={{ minWidth: 1100 }}>
                   <thead>
                     <tr>
                       <th style={{ width: 96 }}>調整日</th>
@@ -545,7 +557,7 @@ export default function AdjustmentsPage() {
                       <th style={{ width: 90 }}>理由</th>
                       <th style={{ width: 120 }}>備考</th>
                       <th style={{ width: 140 }}>商品コード</th>
-                      <th>商品名</th>
+                      <th style={{ minWidth: 240 }}>商品名</th>
                       <th className="r" style={{ width: 70 }}>増減</th>
                       <th style={{ width: 110 }}>品質</th>
                       <th style={{ width: 110 }}>メモ</th>
@@ -561,7 +573,7 @@ export default function AdjustmentsPage() {
                           <td>{li === 0 ? (a.note ?? '') : ''}</td>
                           <td className="num">{l.sku_code}</td>
                           {/* カラー・サイズも出す（同じ商品の M と L を下見で見分けるため。2026-10-12 受入テスト） */}
-                          <td className="whitespace-normal">{`${l.product_name}${l.color_name ? ' ' + l.color_name : ''}${l.size_name ? ' ' + l.size_name : ''}`}</td>
+                          <td className="whitespace-normal">{lineItemName(l)}</td>
                           <td className="r num">{fmtQty(l.qty)}</td>
                           <td>{l.from_quality || l.to_quality ? `${l.from_quality ?? ''}→${l.to_quality ?? ''}` : ''}</td>
                           <td>{l.note ?? ''}</td>

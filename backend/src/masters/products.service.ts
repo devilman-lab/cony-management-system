@@ -1,5 +1,5 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { sql } from 'kysely';
+import { sql, type RawBuilder } from 'kysely';
 
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { Paged } from './partners.service';
@@ -13,6 +13,20 @@ import type { Paged } from './partners.service';
  */
 export const skuNameExpr = (skuAlias = 's', productAlias = 'p') =>
   sql<string>`coalesce(nullif(btrim(${sql.ref(`${skuAlias}.sku_name`)}), ''), ${sql.ref(`${productAlias}.product_name`)})`;
+
+/**
+ * 品名（2026-10-13 受注処理編「商品・品名ともに すべて 商品名・カラー・サイズで出す」）。
+ * 名前＋カラー＋サイズ。名前の末尾の「2枚組」のような組数はカラー・サイズのあとに回す
+ * （「骨盤ショーツ07 2枚組」→「骨盤ショーツ07 ブラック S 2枚組」）。名前にカラー・サイズが語として入っていれば重ねない。
+ * 決まりはデータベースの関数 fn_item_name に1つだけ置く（画面の composeItemName も同じ決まり）。
+ * base には SKU の名前（skuNameExpr）か、得意先別商品の販売名を渡す。
+ */
+export const itemNameExpr = (base: unknown, color: unknown, size: unknown): RawBuilder<string> =>
+  sql<string>`fn_item_name(${base}, ${color}, ${size})`;
+
+/** SKU の品名（SKU の名前＋カラー＋サイズ）。colorAlias・sizeAlias は colors・sizes を左結合した別名。 */
+export const skuItemNameExpr = (skuAlias = 's', productAlias = 'p', colorAlias = 'cl', sizeAlias = 'sz') =>
+  itemNameExpr(skuNameExpr(skuAlias, productAlias), sql.ref(`${colorAlias}.name`), sql.ref(`${sizeAlias}.name`));
 
 /**
  * 参照元の表の呼び名。削除を断るときに「どこで使われているか」を出すのに使う
@@ -196,6 +210,11 @@ export interface SkuSearchQuery {
    * （登録済みのセットを選ぶと構成を上書きしてしまっていたため。M-14）。
    */
   without_set?: boolean;
+  /**
+   * true なら、partner_id の取引先の得意先別商品（使っている行）がある SKU だけ。受注入力の商品の欄で使う
+   * （2026-10-13 受注処理編 O-05「得意先単価マスタに登録している商品だけ選べる」）。取引先を渡さないときは絞らない。
+   */
+  registered_only?: boolean;
 }
 
 @Injectable()
@@ -282,8 +301,8 @@ export class ProductsService {
         's.id as id',
         's.product_id as product_id',
         's.sku_code as sku_code',
-        // 商品名（SKU の商品名か商品名）にカラー・サイズを付けたもの（引当在庫の一覧と同じ見せ方）
-        sql<string>`concat_ws(' ', ${skuNameExpr('s', 'p')}, cl.name, sz.name)`.as('item_name'),
+        // 品名（SKU の商品名か商品名に、カラー・サイズを付けたもの。2026-10-13 受注処理編 O-01 の決まり）
+        skuItemNameExpr('s', 'p', 'cl', 'sz').as('item_name'),
         's.jan as jan',
         's.cost_price as cost_price',
         's.old_cost_price as old_cost_price',
@@ -444,6 +463,8 @@ export class ProductsService {
     if (query.without_set) {
       q = q.where((eb) => eb.not(eb.exists(eb.selectFrom('set_headers as h').select('h.id').whereRef('h.sku_id', '=', 's.id'))));
     }
+    // 得意先別商品に登録した SKU だけ（O-05）。pp はその取引先の使っている行を1つ結んだもの（無ければ空）
+    if (query.registered_only && query.partner_id) q = q.where('pp.id', 'is not', null);
     if (like) {
       q = q.where((eb) =>
         eb.or([

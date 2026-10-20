@@ -6,7 +6,7 @@ import { ReservationsService } from '../inventory/reservations.service';
 import { AllocationService } from '../shipping/allocation.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
-import { skuNameExpr } from '../masters/products.service';
+import { itemNameExpr, skuNameExpr } from '../masters/products.service';
 import { OVERSEAS_TAX_RATE, orderTradeType } from '../orders/order-defaults';
 import { applyTransform, decode, parseCsv } from './csv';
 
@@ -168,6 +168,10 @@ export class PartnerOrderImportService {
         // 要確認にした理由（単価が決まらない明細など）は、取込結果の「注意」にも出す
         const { reasons, ...shown } = outcome;
         if (reasons) result.warnings.push(...reasons.map((x) => `発注番号 ${externalOrderNo}：${x}（受注にせず要確認に回しました）`));
+        // 引当在庫（確保数）を超えた明細は、受注にしたうえで知らせる（取込は止めない。2026-10-13 受注処理編 O-06）
+        if (outcome.shortages?.length) {
+          result.warnings.push(...outcome.shortages.map((x) => `受注 ${outcome.order_no}（発注番号 ${externalOrderNo}）：${x}`));
+        }
         result.orders.push(shown);
       }
 
@@ -201,7 +205,13 @@ export class PartnerOrderImportService {
     for (const col of columns) {
       const cell = cells[col.column_index - 1] ?? '';
       raw[col.source_header ?? `col${col.column_index}`] = cell;
-      if (col.target_field === 'ignore') continue;
+      // 取込先の項目は「+」でつなげて2つ以上書ける（例 'po_no+shipping_note'）。同じ値をそれぞれの項目に入れる
+      // （2026-10-13 受注処理編 O-38。ビックカメラの発注No を先方発注番号と明細の出荷依頼書適用の両方に入れる）
+      const fields = col.target_field
+        .split('+')
+        .map((f) => f.trim())
+        .filter((f) => f !== '' && f !== 'ignore');
+      if (fields.length === 0) continue;
 
       try {
         const v = applyTransform(cell, col.transform, col.source_header ?? col.target_field);
@@ -214,7 +224,7 @@ export class PartnerOrderImportService {
             error: `${col.source_header ?? col.target_field} が空です`,
           };
         }
-        values[col.target_field] = v;
+        for (const f of fields) values[f] = v;
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         // 必須の列が読めなければ行ごと止める。そうでなければ空にして進める。
@@ -223,7 +233,7 @@ export class PartnerOrderImportService {
         if (col.is_required) {
           return { row_no: rowNo, values, raw, warnings, error: reason };
         }
-        values[col.target_field] = null;
+        for (const f of fields) values[f] = null;
         warnings.push(`${rowNo}行目：${reason}`);
       }
     }
@@ -458,28 +468,32 @@ export class PartnerOrderImportService {
       .returning(['id', 'order_no'])
       .executeTakeFirstOrThrow();
 
-    // CSV に品名が無いときの品名。受注入力と同じく、得意先別商品の販売名があればそれ（下の pp）、無ければ
-    // SKU の商品名＋カラー＋サイズ（3回目の全面テスト。コネクトの CSV は品名の列が無く「（品名なし）」が納品書に出ていた）
-    const nameOf = async (skuId: number): Promise<string> => {
+    // 品名はマスタの品名（2026-10-13 受注処理編 O-34「商品コードで引き当てたら、商品名・カラー・サイズもマスタから」）。
+    // 得意先別商品の販売名があれば販売名、無ければ SKU の名前に、カラー・サイズを付ける（O-01 の決まり。fn_item_name）。
+    // CSV の品名の列（白鳩のメーカー品番・ビックカメラの型番など）は使わない。CSV の値は取込の元データ（external_order_lines）に残す
+    const nameOf = async (skuId: number, salesName: string | null | undefined): Promise<string> => {
+      const sales = salesName?.trim() || null;
       const r = await trx
         .selectFrom('skus as s')
         .innerJoin('products as p', 'p.id', 's.product_id')
         .leftJoin('colors as cl', 'cl.id', 's.color_id')
         .leftJoin('sizes as sz', 'sz.id', 's.size_id')
-        .select([skuNameExpr('s', 'p').as('name'), 'cl.name as color_name', 'sz.name as size_name'])
+        .select(
+          itemNameExpr(sales !== null ? sql`${sales}::text` : skuNameExpr('s', 'p'), sql.ref('cl.name'), sql.ref('sz.name')).as('name'),
+        )
         .where('s.id', '=', skuId)
         .executeTakeFirst();
-      if (!r) return '（品名なし）';
-      return [r.name, r.color_name, r.size_name].filter((x) => x).join(' ');
+      return r?.name?.trim() || '（品名なし）';
     };
+    // 出荷依頼書適用・納品書適用（明細ごと。各 200 字まで）。取込先に列があるときだけ入る（ビックカメラは発注No）
+    const note = (v: string | null | undefined): string | null => (v?.trim() ? v.trim().slice(0, 200) : null);
 
     let n = 0;
     for (const line of resolved) {
       n += 1;
       // この明細の得意先別商品の行（同じ SKU に複数あるときは、先方の商品コード・先方の JAN で当たった行。M3-26）
       const pp = picks[n - 1];
-      const itemName =
-        line.values['item_name']?.trim() || pp?.sales_name?.trim() || (line.sku_id !== null ? await nameOf(line.sku_id) : '（品名なし）');
+      const itemName = line.sku_id !== null ? await nameOf(line.sku_id, pp?.sales_name) : '（品名なし）';
       // 単価は CSV の値（先方の発注単価）。CSV に無いときだけ、その行の卸単価
       const unitPrice = line.values['unit_price']?.trim() || (pp ? String(pp.unit_price) : '0');
       await trx
@@ -497,6 +511,8 @@ export class PartnerOrderImportService {
           amount: sql<string>`${line.values['qty'] ?? '0'}::numeric * ${unitPrice}::numeric`,
           // 海外の得意先は受注入力と同じく 0%（請求・納品書と合わせる。2026-10-12 M-02）。国内は列の既定（10%）
           tax_rate: partner.is_overseas ? OVERSEAS_TAX_RATE : undefined,
+          shipping_note: note(line.values['shipping_note']),
+          delivery_slip_note: note(line.values['delivery_slip_note']),
           created_by: userId,
         })
         .execute();
@@ -508,16 +524,21 @@ export class PartnerOrderImportService {
       .where('id', '=', external.id)
       .execute();
 
-    // 手入力の受注と同じく、登録した時点で引当在庫の枠から減らし、在庫を引き当てる。
-    // 取込では止めずに進める（枠超え・実在庫超えは引当待ちで残し、あとで対処できる）。
+    // 手入力の受注と同じく、登録した時点で引当在庫の枠から減らす。在庫の引当は設定（ALLOCATION_TIMING）に従う
+    // （manual＝登録だけで「引当待ち」。受注一覧で引き当てる。2026-10-13 受注処理編 O-06）。
+    // 取込では止めずに進める（枠超え・実在庫超えは知らせるだけ。あとで対処できる）。
     const frameWarnings = await this.reservations.consume(trx, order.id, { strict: false });
     const allocation = await this.allocation.afterOrderWrite(trx, order.id, userId, { checkOnHand: false });
+    // 引当をしない設定では結果が返らないので、受注の今の状態を読む（「未確定」と決め打ちしない）
+    const status =
+      allocation?.status ??
+      (await trx.selectFrom('sales_orders').select('status').where('id', '=', order.id).executeTakeFirstOrThrow()).status;
 
     return {
       order_no: order.order_no,
       external_order_no: externalOrderNo,
       lines: n,
-      status: allocation?.status ?? '未確定',
+      status,
       shortages: [...frameWarnings, ...(allocation?.shortages ?? [])],
     };
   }

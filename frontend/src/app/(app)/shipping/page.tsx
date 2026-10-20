@@ -22,12 +22,20 @@ interface ShipmentRow extends Record<string, unknown> {
   order_no: string | null;
   order_type: string | null;
   is_billable: boolean | null;
+  /** サンプル・社内移動は取引先が空のことがある（2026-10-13 受注処理編 O-14） */
   partner_name: string | null;
   warehouse_name: string;
+  /** 納品日・納品先No.（納品先コード）・納品先名（直送などはお届け先のお名前）・納品時間（O-25） */
+  delivery_date?: string | null;
+  delivery_code?: string | null;
+  destination_name?: string | null;
+  delivery_time_name?: string | null;
 }
 
-const DOCS = ['出荷指示書', 'ピッキングリスト', '納品書'] as const;
-const FORMS = ['（納品先の設定どおり）', '単価あり', '単価あり2', '上代あり', '単価なし'] as const;
+// 「出荷指示書」は「出荷依頼書」に呼び名をそろえた（O-25）
+const DOCS = ['出荷依頼書', 'ピッキングリスト', '納品書'] as const;
+// 納品書の様式から「単価あり」を外した（O-31）
+const FORMS = ['（納品先の設定どおり）', '単価あり2', '上代あり', '単価なし'] as const;
 
 function ShippingList() {
   const params = useSearchParams();
@@ -42,7 +50,7 @@ function ShippingList() {
   const [to, setTo] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [printOpen, setPrintOpen] = useState(false);
-  const [docs, setDocs] = useState<Set<string>>(new Set(['出荷指示書', '納品書']));
+  const [docs, setDocs] = useState<Set<string>>(new Set(['出荷依頼書', '納品書']));
   const [form, setForm] = useState<string>(FORMS[0]);
   const [shipDate, setShipDate] = useState(today());
   const [withAttachments, setWithAttachments] = useState(true);
@@ -147,12 +155,12 @@ function ShippingList() {
       {element}
       <PageHead
         title="出荷確定・印刷"
-        sub="対象を選んで「出荷確定して印刷」を押すと、実在庫が減り、出荷指示書・納品書・添付が1つのPDFで開きます"
+        sub="対象を選んで「出荷確定して印刷」を押すと、実在庫が減り、出荷依頼書・納品書・添付が1つのPDFで開きます"
         right={
           <>
             {can('D-03', 'print') && (
               <>
-                <Button size="sm" disabled={ids.length === 0 || busy} onClick={() => printOnly('shipping-instructions')}>出荷指示書</Button>
+                <Button size="sm" disabled={ids.length === 0 || busy} onClick={() => printOnly('shipping-instructions')}>出荷依頼書</Button>
                 <Button size="sm" disabled={ids.length === 0 || busy} onClick={() => printOnly('picking-list')}>ピッキングリスト</Button>
                 <Button size="sm" disabled={ids.length === 0 || busy} onClick={() => printOnly('delivery-notes')}>納品書</Button>
               </>
@@ -197,18 +205,34 @@ function ShippingList() {
               width: 36,
               render: (r) => <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} onClick={(e) => e.stopPropagation()} aria-label="選択" />,
             },
-            { key: 'shipment_no', label: '出荷指示番号', width: 112, nowrap: true, render: (r) => <Num className="font-semibold text-[var(--color-brand-700)]">{r.shipment_no}</Num> },
-            { key: 'planned_ship_date', label: '出荷予定日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.planned_ship_date)}</Num> },
-            { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? '' },
-            { key: 'order_type', label: '区分', width: 52, render: (r) => r.order_type ?? '' },
-            { key: 'warehouse_name', label: '倉庫', width: 72 },
-            { key: 'consolidated_to_shipment_id', label: '同梱', width: 52, render: (r) => (r.consolidated_to_shipment_id ? <span className="bdg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">同梱</span> : '') },
-            { key: 'ship_date', label: '出荷日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
-            { key: 'status', label: '状態', width: 76, render: (r) => <Badge status={r.status}>{r.status === '確定済' ? '出荷待ち' : r.status}</Badge> },
+            { key: 'shipment_no', label: '出荷指示番号', width: 104, nowrap: true, render: (r) => <Num className="font-semibold text-[var(--color-brand-700)]">{r.shipment_no}</Num> },
+            { key: 'planned_ship_date', label: '出荷予定日', width: 80, nowrap: true, render: (r) => <Num>{ymd(r.planned_ship_date)}</Num> },
+            // 納品日・納品先No.・納品先名（2026-10-13 受注処理編 O-25）。納品時間があれば納品日の下に添える
+            {
+              key: 'delivery_date',
+              label: '納品日',
+              width: 80,
+              nowrap: true,
+              render: (r) => (
+                <>
+                  <Num>{ymd(r.delivery_date)}</Num>
+                  {r.delivery_time_name && <div className="text-[10.5px] text-[var(--color-ink-3)]">{r.delivery_time_name}</div>}
+                </>
+              ),
+            },
+            // 取引先の無い受注（サンプル・社内移動）は、納品先名（お届け先のお名前）を出す
+            { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? r.destination_name ?? '' },
+            { key: 'delivery_code', label: '納品先No.', width: 64, render: (r) => r.delivery_code ?? '' },
+            { key: 'destination_name', label: '納品先名', render: (r) => r.destination_name ?? '' },
+            { key: 'order_type', label: '区分', width: 48, render: (r) => r.order_type ?? '' },
+            { key: 'warehouse_name', label: '倉庫', width: 64 },
+            { key: 'consolidated_to_shipment_id', label: '同梱', width: 40, render: (r) => (r.consolidated_to_shipment_id ? <span className="bdg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">同梱</span> : '') },
+            { key: 'ship_date', label: '出荷日', width: 80, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },
+            { key: 'status', label: '状態', width: 72, render: (r) => <Badge status={r.status}>{r.status === '確定済' ? '出荷待ち' : r.status}</Badge> },
             {
               key: '_act',
               label: '',
-              width: 110,
+              width: 104,
               render: (r) => (
                 <div className="tbl-acts">
                   {r.sales_order_id && <Link href={`/orders/${r.sales_order_id}`} className="btn btn-quiet btn-sm">受注</Link>}
@@ -270,7 +294,7 @@ function ShippingList() {
           </div>
           <ul className="text-[11.5px] text-[var(--color-ink-2)] list-disc pl-4">
             {selectedRows.map((r) => (
-              <li key={r.id}><Num>{r.shipment_no}</Num>　{r.partner_name}</li>
+              <li key={r.id}><Num>{r.shipment_no}</Num>　{r.partner_name ?? r.destination_name ?? ''}</li>
             ))}
           </ul>
         </div>

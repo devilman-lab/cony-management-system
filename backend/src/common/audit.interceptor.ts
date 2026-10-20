@@ -153,6 +153,9 @@ const RULES: Record<string, Rule> = {
   'POST orders/:id/allocate': { table: 'sales_orders', action: 'update', idFrom: 'param' },
   'POST orders/:id/shipping-instruction': { table: 'sales_orders', action: 'update', idFrom: 'param' },
   'DELETE orders/:id/shipping-instruction': { table: 'sales_orders', action: 'update', idFrom: 'param' },
+  // 受注一覧（2026-10-13 受注処理編）: 一覧のまま直す（O-22）・まとめて引当（O-19。どの受注をどうしたかを結果ごと残す）
+  'PATCH order-list/:id': { table: 'sales_orders', action: 'update', idFrom: 'param' },
+  'POST order-list/allocate': { table: 'sales_orders', action: 'update', idFrom: 'none' },
   'POST shipments/:id/confirm': { table: 'shipments', action: 'update', idFrom: 'param' },
   'POST shipments/:id/unconfirm': { table: 'shipments', action: 'update', idFrom: 'param' },
   'POST shipments/consolidate': { table: 'shipments', action: 'update', idFrom: 'none' },

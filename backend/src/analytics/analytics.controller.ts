@@ -22,7 +22,8 @@ const SalesSchema = z.object({
   measures: z.array(measure).min(1),
   partner_id: z.number().int().positive().optional(),
   brand_id: z.number().int().positive().optional(),
-  order_type: z.enum(['卸', '直送', '通販', 'サンプル']).optional(),
+  // 社内移動・返品は 2026-10-13 受注処理編（O-02・O-44）で追加した受注区分（社内移動は売上に計上しないので0件）
+  order_type: z.enum(['卸', '直送', '通販', '社内移動', 'サンプル', '返品']).optional(),
   limit: z.number().int().min(1).max(5000).default(500),
 });
 type SalesBody = z.infer<typeof SalesSchema>;

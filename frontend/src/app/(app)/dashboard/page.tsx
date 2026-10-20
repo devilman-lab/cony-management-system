@@ -14,7 +14,7 @@ interface OrderRow extends Record<string, unknown> {
   order_type: string;
   status: string;
   order_date: string;
-  partner_name: string;
+  partner_name: string | null;
   delivery_name: string | null;
   staff_name: string | null;
   shipment_status: string | null;
@@ -36,7 +36,8 @@ export default function DashboardPage() {
 
       <div className="grid-kpi">
         <Link href="/orders?status=引当待ち">
-          <KpiTile label="引当待ちの受注" value={<Num>{waiting.data?.total ?? '–'}</Num>} sub="在庫が空いたら引き当て直す" tone={(waiting.data?.total ?? 0) > 0 ? 'warn' : undefined} />
+          {/* 受注は登録だけ。受注一覧で選んで「引当」を押すと引き当てる（2026-10-13 受注処理編 O-06） */}
+          <KpiTile label="引当待ちの受注" value={<Num>{waiting.data?.total ?? '–'}</Num>} sub="まだ引き当てていない受注（一部だけを含む）。受注一覧で選んで「引当」を押します" tone={(waiting.data?.total ?? 0) > 0 ? 'warn' : undefined} />
         </Link>
         <Link href="/shipping">
           <KpiTile label="出荷待ち（引当済）" value={<Num>{ready.data?.total ?? '–'}</Num>} sub="出荷確定・印刷へ" />
@@ -56,8 +57,9 @@ export default function DashboardPage() {
               { key: 'order_no', label: '受注番号', width: 112, nowrap: true, render: (r) => <Link href={`/orders/${r.id}`} className="num font-semibold text-[var(--color-brand-700)]">{r.order_no}</Link> },
               { key: 'order_date', label: '受注日', width: 84, nowrap: true, render: (r) => <Num>{ymd(r.order_date)}</Num> },
               { key: 'order_type', label: '区分', width: 52 },
-              { key: 'partner_name', label: '取引先' },
-              { key: 'delivery_name', label: '納品先', render: (r) => r.delivery_name ?? '（直送）' },
+              // サンプル・社内移動は取引先が空のことがある（2026-10-13 受注処理編 O-14）
+              { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? '（取引先なし）' },
+              { key: 'delivery_name', label: '納品先', render: (r) => r.delivery_name ?? (r.order_type === '直送' || r.order_type === '通販' ? '（直送）' : '—') },
               { key: 'staff_name', label: '販売担当', width: 80, render: (r) => r.staff_name ?? '' },
               { key: 'status', label: '状態', width: 82, render: (r) => <Badge status={r.status} /> },
             ]}

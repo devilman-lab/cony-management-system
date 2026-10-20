@@ -178,11 +178,11 @@ $H = @{ Authorization = "Bearer $($login.access_token)" }
 Check '管理者は権限151件（機能30×操作5＋機微項目1）' { @($login.user.permissions).Count -eq 151 }
 Check '接続先の照合（テーブル72）'      { $h = Invoke-RestMethod "$B/health/db" -Headers $H; $h.status -eq 'ok' -and $h.tables -eq 72 }
 
-Check '既定の引当タイミングは受注登録時（9/15 ご確認）' {
-  ((GetList "$B/masters/settings") | Where-Object { $_.setting_key -eq 'ALLOCATION_TIMING' }).value_text -eq 'order_entry'
+Check '既定の引当タイミングは「登録だけ・引当は受注一覧から」（2026-10-13 受注処理編）' {
+  ((GetList "$B/masters/settings") | Where-Object { $_.setting_key -eq 'ALLOCATION_TIMING' }).value_text -eq 'manual'
 }
 # 5〜27章は従来の3段階（出荷指示で引当）のまま確かめる。設定を切り替えれば同じ経路で動くことの確認でもある。
-# 9/15 に確定した2段階（受注登録時に引当）は 28章で確かめる。
+# 9/15 に確定した2段階（受注登録時に引当）は 28〜34章で、2026-10-13 の「登録だけ」（manual）は 35章で確かめる。
 PatchJson "$B/masters/settings/ALLOCATION_TIMING" @{ value_text='shipping_instruction' } | Out-Null
 
 Invoke-Psql -Command "insert into cony.users (login_id, name, password_hash, is_active) values ('norole','no-role user','x',true) on conflict (login_id) do nothing" | Out-Null
@@ -1794,6 +1794,18 @@ Write-Host '--- 画面確認（W1〜W3）で見つかった点（狭い画面の
 RunVerify 'verify-fb1016-g.mjs'
 Write-Host '--- 全面テスト（X1〜X4）で見つかった点（検索欄の入れ替え・出荷倉庫の既定・呼び方・免税の請求詳細）' -ForegroundColor DarkCyan
 RunVerify 'verify-fb1016-h.mjs'
+
+Write-Host '=== 35. 受注処理編（2026-10-13）のご要望 ===' -ForegroundColor Cyan
+# 受注は登録だけ（引当は受注一覧から）が既定（ALLOCATION_TIMING=manual）。28章で order_entry にしたのを戻す
+PatchJson "$B/masters/settings/ALLOCATION_TIMING" @{ value_text='manual' } | Out-Null
+Write-Host '--- 受注の登録と流れ（登録だけ・引当・サンプル・社内移動・返品・委託・非商品・納品時間・適用）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1013-b.mjs'
+Write-Host '--- 帳票（出荷依頼書・ピッキングリスト・納品書3様式）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1013-d.mjs'
+Write-Host '--- 受注一覧（絞り込み・並び・まとめて引当・明細・一覧のままの修正）' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1013-e.mjs'
+Write-Host '--- 取込・入出荷履歴・品名' -ForegroundColor DarkCyan
+RunVerify 'verify-fb1013-f.mjs'
 Write-Host ''
 if ($script:ng -eq 0) {
   Write-Host ("すべて合格  {0} 項目" -f $script:ok) -ForegroundColor Green

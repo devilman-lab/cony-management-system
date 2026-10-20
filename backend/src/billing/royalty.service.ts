@@ -4,6 +4,7 @@ import { sql, type RawBuilder, type Transaction } from 'kysely';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { skuItemNameExpr } from '../masters/products.service';
 import { ROYALTY_GOODS_LINE, royaltyAmount, royaltyRuleFor } from './royalty-rule.sql';
 
 /**
@@ -112,6 +113,7 @@ export class RoyaltyService {
         join sales_orders o on o.id = sl.sales_order_id
        where o.currency <> 'JPY'
          and o.is_billable
+         and o.trade_type <> '委託'
          and sl.sku_id is not null
          and exists (select 1 from shipments sh where sh.sales_order_id = o.id and sh.status = '出荷済'
                       and date_trunc('month', sh.ship_date) = ${monthStart}::date)
@@ -228,10 +230,17 @@ export class RoyaltyService {
       having sum(x.ratio) > 0
     )`;
 
+    // 受注の返品（2026-10-13 受注処理編 O-44。明細はマイナスの数量・金額で、締めで請求の返品額に入る）は、
+    // 返品の伝票（returns）と同じく「返品」の行として出荷と分けて端数を処理し、設定 ROYALTY_INCLUDE_RETURNS が false なら数えない。
+    // 委託（単価なし。O-12）は売上ではなく入庫倉庫への移動なので数えない（請求にも載せない。定額の規定で、
+    // 0 円の出荷にロイヤリティが付かないように）。
+    const saleKind = sql`(case when o.order_type = '返品' then 'return' else 'sale' end)`;
+    const saleOrder = sql`(o.trade_type <> '委託' and (o.order_type <> '返品' or ${includeReturns}::boolean))`;
+
     const sources: RawBuilder<unknown>[] = [
       // 出荷基準の出荷
       sql`
-        select 'sale' as kind, o.partner_id as customer_id, p.brand_id, sl.sku_id, rule.id as rule_id,
+        select ${saleKind} as kind, o.partner_id as customer_id, p.brand_id, sl.sku_id, rule.id as rule_id,
                rule.rate, rule.fixed_amount, sl.qty, sl.amount
           from sales_order_lines sl
           ${firstShipment}
@@ -241,13 +250,14 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and ${saleOrder}
            and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '出荷'
            and ${inMonth(sql`sh.ship_date`)}`,
       // 売上基準の出荷（この月に締めた請求に載ったもの）
       sql`
-        select 'sale', o.partner_id, p.brand_id, sl.sku_id, rule.id, rule.rate, rule.fixed_amount, sl.qty, sl.amount
+        select ${saleKind}, o.partner_id, p.brand_id, sl.sku_id, rule.id, rule.rate, rule.fixed_amount, sl.qty, sl.amount
           from sales_order_lines sl
           ${firstShipment}
           join sales_orders o on o.id = sl.sales_order_id
@@ -256,6 +266,7 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and ${saleOrder}
            and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '売上'
@@ -269,7 +280,7 @@ export class RoyaltyService {
                 and ${inMonth(sql`i.closing_date`)})`,
       // 入金基準の出荷（この月の入金で按分）
       sql`
-        select 'sale', o.partner_id, p.brand_id, sl.sku_id, rule.id, rule.rate, rule.fixed_amount,
+        select ${saleKind}, o.partner_id, p.brand_id, sl.sku_id, rule.id, rule.rate, rule.fixed_amount,
                sl.qty * pr.ratio, sl.amount * pr.ratio
           from ${paidRatio} pr
           join lateral (
@@ -284,6 +295,7 @@ export class RoyaltyService {
           join lateral ${saleRule} rule on true
          where ${ROYALTY_GOODS_LINE}
            and o.is_billable
+           and ${saleOrder}
            and o.currency = 'JPY'
            and not rule.is_excluded
            and rule.calc_base = '入金'`,
@@ -445,6 +457,8 @@ export class RoyaltyService {
       .leftJoin('brands as b', 'b.id', 'l.brand_id')
       .innerJoin('skus as s', 's.id', 'l.sku_id')
       .innerJoin('products as pr', 'pr.id', 's.product_id')
+      .leftJoin('colors as rcl', 'rcl.id', 's.color_id')
+      .leftJoin('sizes as rsz', 'rsz.id', 's.size_id')
       .leftJoin('royalty_rules as rr', 'rr.id', 'l.royalty_rule_id')
       .select([
         // 当てた規定の計算の基準（請求月／出荷／入金）
@@ -452,8 +466,8 @@ export class RoyaltyService {
         'cp.name1 as customer_name',
         'b.name as brand_name',
         's.sku_code as sku_code',
-        // SKU ごとの商品名があればそれ、無ければ商品名（2026-10-09 マスター編②）
-        sql<string>`coalesce(nullif(btrim(s.sku_name), ''), pr.product_name)`.as('product_name'),
+        // 品名（SKU の名前＋カラー＋サイズ。「2枚組」はカラー・サイズのあと。2026-10-13 受注処理編 O-01。2026-10-20 受入テスト T5）
+        skuItemNameExpr('s', 'pr', 'rcl', 'rsz').as('product_name'),
         'l.qty as qty',
         'l.base_amount as base_amount',
         'l.rate as rate',

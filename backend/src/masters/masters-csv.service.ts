@@ -12,7 +12,7 @@ import {
   type MasterCsvDef,
   type MasterCsvExportOnly,
 } from './masters-csv';
-import { skuJanChecker } from './products.service';
+import { skuItemNameExpr, skuJanChecker } from './products.service';
 import { IS_ROYALTY_HISTORY } from './royalty-rule-history';
 import { readRuleGroup } from './royalty-rule-group';
 
@@ -372,15 +372,22 @@ export class MastersCsvService {
         set_sku: string; set_name: string; comp_sku: string | null; comp_name: string | null; qty: string | null;
         sort_order: number | null; note: string | null; is_active: boolean;
       }>`
-        select s.sku_code as set_sku, coalesce(nullif(btrim(s.sku_name), ''), p.product_name) as set_name,
-               cs.sku_code as comp_sku, coalesce(nullif(btrim(cs.sku_name), ''), cp.product_name) as comp_name,
+        -- 商品名は品名（商品名＋カラー＋サイズ。組数はカラー・サイズのあと。2026-10-13 受注処理編 O-01。セット登録の一覧と同じ）。
+        -- 同じ商品のセット・構成品が色・サイズ違いで並ぶため、商品名だけでは見分けられない
+        select s.sku_code as set_sku, ${skuItemNameExpr('s', 'p', 'scl', 'ssz')} as set_name,
+               cs.sku_code as comp_sku,
+               case when cs.id is null then null else ${skuItemNameExpr('cs', 'cp', 'ccl', 'csz')} end as comp_name,
                c.qty, c.sort_order, h.note, h.is_active
           from set_headers h
           join skus s on s.id = h.sku_id
           join products p on p.id = s.product_id
+          left join colors scl on scl.id = s.color_id
+          left join sizes ssz on ssz.id = s.size_id
           left join set_components c on c.set_header_id = h.id
           left join skus cs on cs.id = c.component_sku_id
           left join products cp on cp.id = cs.product_id
+          left join colors ccl on ccl.id = cs.color_id
+          left join sizes csz on csz.id = cs.size_id
          where (${includeInactive} or h.is_active)
          order by s.sku_code, c.sort_order nulls last, c.id
       `.execute(this.db);

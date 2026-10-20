@@ -1232,14 +1232,14 @@ export interface SalesOrdersTable {
   id: Generated<number>;
   /** [VARCHAR(30)] */
   order_no: string;
-  /** 卸／直送／通販  [VARCHAR(20)] */
+  /** 卸／直送／通販／サンプル／社内移動／返品  [VARCHAR(20)] */
   order_type: string;
-  /** [-> partners / BIGINT] */
-  partner_id: number;
+  /** サンプル・社内移動は取引先・販売カテゴリーが空でよい（2026-10-13 受注処理編「取引先・販売カテゴリー不要」）  [-> partners / BIGINT] */
+  partner_id: number | null;
   /** [-> delivery_destinations / BIGINT] */
   delivery_destination_id: number | null;
   /** [-> sales_categories / BIGINT] */
-  sales_category_id: number;
+  sales_category_id: number | null;
   /** [VARCHAR(10)] */
   trade_type: Generated<string>;
   /** 販売担当。取引先マスタの既定担当を初期値に受注ごとに変更可（v1.7）  [-> sales_staff / BIGINT] */
@@ -1256,10 +1256,14 @@ export interface SalesOrdersTable {
   ship_date: string | null;
   /** 納品日。受注フォームでは「納品日」として表示する（確認事項⑥）  [DATE] */
   delivery_date: string | null;
-  /** 納品希望日  [DATE] */
+  /** 納品希望日（取込の値を残すだけ。受注入力は納品時間で選ぶ）  [DATE] */
   requested_delivery_date: string | null;
+  /** 納品時間（区分値 DELIVERY_TIME）。納品希望日の代わりに受注入力で選ぶ（2026-10-13 受注処理編）  [-> codes / BIGINT] */
+  delivery_time_code_id: number | null;
   /** [-> warehouses / BIGINT] */
   ship_from_warehouse_id: number | null;
+  /** 委託の入庫倉庫。出荷確定で出荷倉庫からこの倉庫へ在庫が移る（2026-10-13 受注処理編）  [-> warehouses / BIGINT] */
+  consignment_warehouse_id: number | null;
   /** [VARCHAR(120)] */
   direct_name: string | null;
   /** [VARCHAR(120)] */
@@ -1278,7 +1282,9 @@ export interface SalesOrdersTable {
   delivery_note_remarks: string | null;
   /** 送料調整。入力すると自動計算した送料を上書きする  [money_amt] */
   shipping_fee_adjustment: string | null;
-  /** サンプル出荷は false。出荷指示書は出て在庫も落ちるが、売上・請求には乗らない  [BOOLEAN] */
+  /** 納品書に送料を記載するか（2026-10-13 受注処理編）  [BOOLEAN] */
+  print_shipping_fee: Generated<boolean>;
+  /** サンプル・社内移動は false。出荷依頼書は出て在庫も落ちるが、売上・請求には乗らない  [BOOLEAN] */
   is_billable: Generated<boolean>;
   /** [VARCHAR(30)] */
   channel: string | null;
@@ -1335,6 +1341,10 @@ export interface SalesOrderLinesTable {
   reservation_takes: unknown | null;
   /** 在庫の引当対象かどうか。「商品ではない行は引当対象から外す」を構造で表現する。 セット商品行は引当しない（内訳商品行から構成品の在庫を引き落とすため）。  [BOOLEAN] */
   is_stock_target: Computed<boolean>;
+  /** 出荷依頼書適用・納品書適用（明細ごとに入力。2026-10-13 受注処理編）  [VARCHAR(200)] */
+  shipping_note: string | null;
+  /** [VARCHAR(200)] */
+  delivery_slip_note: string | null;
   /** [TIMESTAMPTZ] */
   created_at: Generated<Date>;
   /** [-> users / BIGINT] */

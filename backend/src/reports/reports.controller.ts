@@ -6,8 +6,8 @@ import { AuthService, type AuthenticatedUser } from '../auth/auth.service';
 import { CurrentUser, RequirePermission } from '../auth/guards';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import {
-  DELIVERY_NOTE_FORMS,
-  PRINT_DOCUMENTS,
+  DELIVERY_NOTE_FORM_INPUTS,
+  PRINT_DOCUMENT_INPUTS,
   ReportsService,
   type PrintResult,
 } from './reports.service';
@@ -35,17 +35,18 @@ const idList = (label: string) =>
 const ShipmentIdsSchema = z.object({ shipment_ids: idList('出荷') });
 type ShipmentIdsQuery = z.infer<typeof ShipmentIdsSchema>;
 
+/** 様式は 単価あり2・上代あり・単価なし。「単価あり」は「単価あり2」として扱う（2026-10-13 受注処理編 O-31） */
 const DeliveryNoteSchema = z.object({
   shipment_ids: idList('出荷'),
-  form: z.enum(DELIVERY_NOTE_FORMS).optional(),
+  form: z.enum(DELIVERY_NOTE_FORM_INPUTS).optional(),
 });
 type DeliveryNoteQuery = z.infer<typeof DeliveryNoteSchema>;
 
 const ConfirmAndPrintSchema = z.object({
   shipment_ids: z.array(z.number().int().positive()).min(1, '出荷を選んでください'),
-  /** 一緒に出す帳票。既定は出荷指示書と納品書。 */
-  documents: z.array(z.enum(PRINT_DOCUMENTS)).min(1).default(['出荷指示書', '納品書']),
-  form: z.enum(DELIVERY_NOTE_FORMS).optional(),
+  /** 一緒に出す帳票。既定は出荷依頼書と納品書（古い呼び名「出荷指示書」も出荷依頼書として受け付ける）。 */
+  documents: z.array(z.enum(PRINT_DOCUMENT_INPUTS)).min(1).default(['出荷依頼書', '納品書']),
+  form: z.enum(DELIVERY_NOTE_FORM_INPUTS).optional(),
   ship_date: ymd.nullish(),
   include_attachments: z.boolean().default(true),
 });

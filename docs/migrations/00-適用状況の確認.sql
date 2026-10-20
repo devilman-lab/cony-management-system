@@ -1,7 +1,7 @@
 -- 移行SQLが当たっているかを一目で確かめる（2026-09-25）
 --
 -- このファイルは **何も変更しません**。読むだけなので、いつ何度流しても安全です。
--- 11本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
+-- 12本すべてに「済」が並べば、そのデータベースは docs/02-schema.sql からの
 -- 新規構築と同じ形になっています。
 --
 -- 使い方（本番の Render に対して、手元の PowerShell から）:
@@ -179,6 +179,23 @@ SELECT '⑪ マスター編_3・在庫編_2（取引先の追加項目・SKU旧�
          ELSE '一部'
        END,
        '2026-10-18_master3_stock2.sql'
+UNION ALL
+SELECT '⑫ 受注処理編（受注区分 社内移動・返品、納品時間、明細の適用、委託の入庫倉庫、登録だけの受注）',
+       CASE
+         WHEN (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND ((table_name = 'sales_orders' AND column_name IN ('delivery_time_code_id', 'print_shipping_fee', 'consignment_warehouse_id'))
+                   OR (table_name = 'sales_order_lines' AND column_name IN ('shipping_note', 'delivery_slip_note')))) = 5
+          AND (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND table_name = 'sales_orders' AND column_name = 'partner_id' AND is_nullable = 'YES') = 1
+          AND (SELECT count(*) FROM code_categories WHERE code = 'DELIVERY_TIME') = 1
+          AND (SELECT count(*) FROM system_settings WHERE setting_key = 'COMPANY_FAX') = 1
+         THEN '済'
+         WHEN (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'cony'
+                 AND table_name = 'sales_orders' AND column_name = 'delivery_time_code_id') = 0
+         THEN '未'
+         ELSE '一部'
+       END,
+       '2026-10-20_order_feedback.sql'
 ORDER BY 1;
 
 -- 念のため：④ を途中で止めてしまうと、一意の決まりが**ひとつも無い**状態になり得ます。

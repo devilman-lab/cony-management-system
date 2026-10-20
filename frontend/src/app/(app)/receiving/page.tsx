@@ -6,6 +6,7 @@ import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useFetch, useList } from '@/lib/hooks';
 import { qty as fmtQty, today, ymd } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import { Badge, Button, Card, DataTable, ErrorBox, FormRow, Input, Modal, Num, PageHead, Pager, Select, Toolbar, useConfirm } from '@/components/ui';
 import { PickedSkuText, fetchStockSkus } from '@/components/inventory/PickedSku';
 import { SearchSelect, type Option } from '@/components/ui/SearchSelect';
@@ -18,12 +19,17 @@ interface ReceiptLine {
   sku_code: string;
   jan: string | null;
   product_name: string;
+  /** 品名（商品名＋カラー＋サイズ。API が作る。2026-10-13 受注処理編 O-01） */
+  item_name?: string;
   color_name: string | null;
   size_name: string | null;
   qty: string;
   expiry_date: string | null;
   note: string | null;
 }
+
+/** 明細の品名。API の品名、無ければ同じ決まり（composeItemName）で組み立てる */
+const lineItemName = (l: ReceiptLine) => l.item_name || composeItemName(l.product_name, l.color_name, l.size_name);
 
 interface ReceiptRow {
   id: number;
@@ -67,7 +73,7 @@ const toDraft = (l: ReceiptLine): LineDraft => ({
   key: seq++,
   sku: {
     id: l.sku_id,
-    label: `${l.sku_code}　${l.product_name}${l.color_name ? ' ' + l.color_name : ''}${l.size_name ? ' ' + l.size_name : ''}`,
+    label: `${l.sku_code}　${lineItemName(l)}`,
     sub: l.jan ?? '',
   },
   qty: String(Number(l.qty)),
@@ -246,7 +252,8 @@ export default function ReceivingPage() {
             { key: 'warehouse_name', label: '倉庫', width: 68, render: (r) => head(r, r.receipt.warehouse_name) },
             { key: 'status', label: '状態', width: 64, render: (r) => head(r, <Badge status={r.receipt.status}>{r.receipt.status === '指示' ? '入荷予定' : r.receipt.status}</Badge>) },
             { key: 'sku_code', label: '商品コード', width: 120, render: (r) => <Num>{r.line?.sku_code ?? ''}</Num> },
-            { key: 'product_name', label: '商品名', width: 160, render: (r) => r.line?.product_name ?? '' },
+            // 商品名の欄は品名（カラー・サイズの列があっても同じ決まり。2026-10-13 受注処理編 O-01）
+            { key: 'product_name', label: '商品名', width: 160, render: (r) => (r.line ? lineItemName(r.line) : '') },
             { key: 'color_name', label: 'カラー', width: 72, render: (r) => r.line?.color_name ?? '' },
             { key: 'size_name', label: 'サイズ', width: 56, render: (r) => r.line?.size_name ?? '' },
             { key: 'qty', label: '数量', r: true, width: 58, render: (r) => fmtQty(r.line?.qty) },

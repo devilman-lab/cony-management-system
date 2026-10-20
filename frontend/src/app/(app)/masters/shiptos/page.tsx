@@ -72,7 +72,7 @@ export default function ShiptosPage() {
   return (
     <MasterPage<DestRow, Form>
       title="納品先"
-      sub="取引先ごとの届け先です。納品書に印字する文言や、伝票を「単価あり／上代あり／単価なし」のどれで出すかを決めます"
+      sub="取引先ごとの届け先です。納品書に印字する文言や、伝票を「単価あり2／上代あり／単価なし」のどれで出すかを決めます"
       functionId="M-05"
       csvSlug="delivery-destinations"
       listPath="/masters/delivery-destinations"

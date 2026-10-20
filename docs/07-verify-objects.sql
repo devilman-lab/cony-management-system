@@ -61,9 +61,9 @@ WITH expected(sort_key, category, item, actual, expect) AS (
 
   -- 3. 初期データ
   UNION ALL
-  SELECT 310, '初期データ', '区分カテゴリー',       (SELECT count(*) FROM code_categories), 27
+  SELECT 310, '初期データ', '区分カテゴリー',       (SELECT count(*) FROM code_categories), 28
   UNION ALL
-  SELECT 320, '初期データ', '区分値',               (SELECT count(*) FROM codes), 70
+  SELECT 320, '初期データ', '区分値',               (SELECT count(*) FROM codes), 76
   UNION ALL
   SELECT 330, '初期データ', '販売カテゴリー',       (SELECT count(*) FROM sales_categories), 3
   UNION ALL
@@ -76,7 +76,7 @@ WITH expected(sort_key, category, item, actual, expect) AS (
   UNION ALL
   SELECT 370, '初期データ', '採番ルール',           (SELECT count(*) FROM numbering_rules), 11
   UNION ALL
-  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 25
+  SELECT 380, '初期データ', 'システム設定',         (SELECT count(*) FROM system_settings), 29
   UNION ALL
   SELECT 390, '初期データ', '取込テンプレート（販社4社）',
                                                     (SELECT count(*) FROM import_templates), 4
@@ -120,7 +120,8 @@ WITH must_exist(sort_key, rule, conname) AS (
     (10, '有効在庫を超える引当はできない',           'ck_stocks_available'),
     (20, '実在庫はマイナスにならない',               'ck_stocks_on_hand'),
     (30, '卸受注は納品先が必須',                     'ck_so_dest'),
-    (40, 'サンプル出荷は売上計上にできない',         'ck_so_sample'),
+    (40, 'サンプル出荷・社内移動は売上計上にできない', 'ck_so_sample'),
+    (45, '取引先・販売カテゴリーを空にできるのはサンプル・社内移動だけ', 'ck_so_partner'),
     (50, '明細の種別は実CSVの値に限る',              'ck_sol_type'),
     (60, '商品行はSKUが必須',                        'ck_sol_sku'),
     (70, '取引条件は委託／買取のみ',                 'ck_partners_trade'),

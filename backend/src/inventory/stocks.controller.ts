@@ -30,12 +30,32 @@ const UpdateNoteSchema = z.object({ note: z.string().max(2000).nullable() });
 type UpdateNoteBody = z.infer<typeof UpdateNoteSchema>;
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD の形式で入力してください');
+/** 在庫移動の種別（stock_movements.movement_type。画面の「在庫調整」は記録の上では「棚卸調整」） */
+const MOVEMENT_TYPES = ['入荷', '出荷', '出荷取消', '引当', '引当解除', '返品入庫', '再生', '不良振替', '倉庫間移動', '棚卸調整', '廃棄'] as const;
 const MovementQuerySchema = z.object({
   sku_id: z.coerce.number().int().positive().optional(),
   warehouse_id: z.coerce.number().int().positive().optional(),
-  movement_type: z
-    .enum(['入荷', '出荷', '出荷取消', '引当', '引当解除', '返品入庫', '再生', '不良振替', '倉庫間移動', '棚卸調整', '廃棄'])
-    .optional(),
+  /** 1つだけで絞る（以前からの指定。movement_types と両方あれば両方に当てはまるもの） */
+  movement_type: z.enum(MOVEMENT_TYPES).optional(),
+  /**
+   * 種別を複数で絞る。「入荷,出荷」のようにカンマ区切り（2026-10-13 受注処理編 O-41「一つのみ指定でなく、複数指定したい」）。
+   * 空なら絞らない。決まっていない種別が入っていれば断る
+   */
+  movement_types: z
+    .string()
+    .max(400)
+    .optional()
+    .transform((v, ctx) => {
+      const list = [...new Set((v ?? '').split(',').map((s) => s.trim()).filter(Boolean))];
+      const bad = list.filter((s) => !(MOVEMENT_TYPES as readonly string[]).includes(s));
+      if (bad.length > 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `種別「${bad.join('・')}」はありません（${MOVEMENT_TYPES.join('・')}）` });
+        return z.NEVER;
+      }
+      return list.length > 0 ? (list as (typeof MOVEMENT_TYPES)[number][]) : undefined;
+    }),
+  /** キーワード。商品コード・品名・JAN・元伝票の番号・担当のどれかを含む記録（O-42） */
+  q: z.string().trim().max(100).optional(),
   from: ymd.optional(),
   to: ymd.optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),

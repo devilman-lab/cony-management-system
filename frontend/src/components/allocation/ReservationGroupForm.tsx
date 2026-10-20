@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { qty } from '@/lib/format';
+import { composeItemName } from '@/lib/item-name';
 import type { SalesCategory, SimpleRow } from '@/lib/hooks';
 import { Button, ErrorBox, Input, Modal, Select, Textarea } from '@/components/ui';
 import { SearchSelect, fetchCustomers, type Option } from '@/components/ui/SearchSelect';
@@ -56,10 +57,15 @@ interface SkuOptionRow {
   sku_id: number;
   sku_code: string;
   product_name: string;
+  /** 品名（商品名＋カラー＋サイズ。API が作る。2026-10-13 受注処理編 O-01） */
+  item_name?: string;
   color_name: string | null;
   size_name: string | null;
   is_set: boolean;
 }
+
+/** 候補の品名。API の品名、無ければ同じ決まり（composeItemName）で組み立てる（O-01） */
+const optionItemName = (s: SkuOptionRow) => s.item_name || composeItemName(s.product_name, s.color_name, s.size_name);
 
 /** 明細の候補を探す。商品分類を選んでいれば、その分類の商品だけにする（Z-26）。 */
 export const fetchReservationSkus =
@@ -72,7 +78,7 @@ export const fetchReservationSkus =
     });
     return rows.map((s) => ({
       id: s.sku_id,
-      label: `${s.sku_code}　${s.product_name}${s.color_name ? ' ' + s.color_name : ''}${s.size_name ? ' ' + s.size_name : ''}`,
+      label: `${s.sku_code}　${optionItemName(s)}`,
       sub: s.is_set ? 'セット' : undefined,
       raw: s,
     }));
@@ -184,7 +190,8 @@ export function ReservationGroupForm({
     setLine(key, {
       sku: o,
       sku_code: r?.sku_code ?? '',
-      item_name: r?.product_name ?? '',
+      // 明細の商品名の欄は品名（一覧・CSV と同じ。O-01）
+      item_name: r ? optionItemName(r) : '',
       color_name: r?.color_name ?? '',
       size_name: r?.size_name ?? '',
     });

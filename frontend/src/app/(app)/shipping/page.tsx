@@ -222,9 +222,9 @@ function ShippingList() {
             },
             // 取引先の無い受注（サンプル・社内移動）は、納品先名（お届け先のお名前）を出す
             { key: 'partner_name', label: '取引先', render: (r) => r.partner_name ?? r.destination_name ?? '' },
-            { key: 'delivery_code', label: '納品先No.', width: 64, render: (r) => r.delivery_code ?? '' },
+            { key: 'delivery_code', label: '納品先No.', width: 76, render: (r) => r.delivery_code ?? '' },
             { key: 'destination_name', label: '納品先名', render: (r) => r.destination_name ?? '' },
-            { key: 'order_type', label: '区分', width: 48, render: (r) => r.order_type ?? '' },
+            { key: 'order_type', label: '区分', width: 60, render: (r) => r.order_type ?? '' },
             { key: 'warehouse_name', label: '倉庫', width: 64 },
             { key: 'consolidated_to_shipment_id', label: '同梱', width: 40, render: (r) => (r.consolidated_to_shipment_id ? <span className="bdg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">同梱</span> : '') },
             { key: 'ship_date', label: '出荷日', width: 80, nowrap: true, render: (r) => <Num>{ymd(r.ship_date)}</Num> },

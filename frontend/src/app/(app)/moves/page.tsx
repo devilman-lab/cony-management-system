@@ -172,7 +172,9 @@ export default function MovesPage() {
             ...(showQty ? ([{ key: 'qty_before', label: '前', r: true, width: 58, render: (r) => qty(r.qty_before) }] as Column<MoveRow>[]) : []),
             { key: 'qty', label: '増減', r: true, width: 62, render: (r) => <span className={Number(r.qty) < 0 ? 'text-[var(--color-crit-500)]' : ''}>{Number(r.qty) > 0 ? '+' : ''}{qty(r.qty)}</span> },
             ...(showQty ? ([{ key: 'qty_after', label: '後', r: true, width: 58, render: (r) => qty(r.qty_after) }] as Column<MoveRow>[]) : []),
-            { key: 'ref_table', label: '元伝票', width: 112, render: (r) => (r.ref_no ? <>{REF[r.ref_table] ?? r.ref_table} <Num>{r.ref_no}</Num></> : `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}`) },
+            // 受注を修正すると明細を入れ替えるので、修正前の明細を指す引当の記録は受注番号を引けない。
+            // 「受注 #623」（明細の番号）と出すと受注番号と見分けがつかないため、修正前の明細だと書く（2026-10-20 受入テスト T3）
+            { key: 'ref_table', label: '元伝票', width: 112, render: (r) => (r.ref_no ? <>{REF[r.ref_table] ?? r.ref_table} <Num>{r.ref_no}</Num></> : r.ref_table === 'sales_order_lines' ? '受注（修正前の明細）' : `${REF[r.ref_table] ?? r.ref_table} #${r.ref_id}`) },
             { key: 'user_name', label: '担当', width: 72, render: (r) => r.user_name ?? '' },
           ]}
           rows={list.items}

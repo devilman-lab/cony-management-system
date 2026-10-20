@@ -88,8 +88,9 @@ export class MastersCsvController {
     return {
       label: def.label,
       key_labels: def.keyFields.map((f) => def.columns.find((c) => c.field === f)?.label ?? f),
+      // 取り込みだけで読む欄（SKU の入数区分）は説明に出さない（書き出しに無い列のため）
       columns: def.columns
-        .filter((c) => !c.sensitive || showSensitive)
+        .filter((c) => (!c.sensitive || showSensitive) && !c.importOnly)
         .map((c) => ({
           label: c.label,
           kind: c.kind ?? 'text',

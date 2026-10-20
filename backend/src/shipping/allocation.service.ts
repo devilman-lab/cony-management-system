@@ -5,6 +5,7 @@ import { NumberingService } from '../common/numbering.service';
 import { SettingsService } from '../common/settings.service';
 import { KYSELY, type ConyDatabase } from '../db/database.module';
 import type { DB } from '../db/schema';
+import { RECEIPT_WAREHOUSE_NAME } from '../inventory/receipts.service';
 
 /** 引き当てるべき SKU と数量。セット商品を展開したあとの形。 */
 interface Requirement {
@@ -345,7 +346,12 @@ export class AllocationService {
     return out;
   }
 
-  /** 出荷元の倉庫。受注で指定がなければ納品先の既定倉庫、それも無ければ先頭の倉庫。 */
+  /**
+   * 出荷元の倉庫。受注で指定がなければ納品先の既定倉庫、それも無ければ「コニー倉庫」（略称が一致する倉庫。
+   * 入荷・在庫調整の既定と同じ）。コニー倉庫が無いときだけ、表示順の先頭の倉庫。
+   * 以前は表示順の先頭の倉庫で、一覧の並びのための表示順を変えただけで、在庫を確かめ・引き当てる倉庫が
+   * 変わっていた（2026-10-19 受入 X1-1）。
+   */
   private async resolveWarehouse(
     trx: Transaction<DB>,
     orderWarehouseId: number | null,
@@ -361,6 +367,16 @@ export class AllocationService {
         .executeTakeFirst();
       if (dest?.default_warehouse_id) return dest.default_warehouse_id;
     }
+
+    const cony = await trx
+      .selectFrom('warehouses')
+      .select('id')
+      .where('short_name', '=', RECEIPT_WAREHOUSE_NAME)
+      .where('is_active', '=', true)
+      .orderBy('sort_order', sql`asc nulls last`)
+      .orderBy('id', 'asc')
+      .executeTakeFirst();
+    if (cony) return cony.id;
 
     const first = await trx
       .selectFrom('warehouses')

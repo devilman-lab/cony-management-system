@@ -108,9 +108,12 @@ export class MastersCsvService {
     throw new NotFoundException(`${slug} は CSV に対応していません`);
   }
 
-  /** 権限に応じて、出し入れしてよい欄だけに絞る。 */
-  private columnsFor(def: MasterCsvDef, showSensitive: boolean): CsvColumn[] {
-    return def.columns.filter((c) => !c.sensitive || showSensitive);
+  /**
+   * 権限に応じて、出し入れしてよい欄だけに絞る。
+   * forImport でないとき（書き出し・一覧で編集）は、取り込みだけで読む欄（importOnly）も外す。
+   */
+  private columnsFor(def: MasterCsvDef, showSensitive: boolean, forImport = false): CsvColumn[] {
+    return def.columns.filter((c) => (!c.sensitive || showSensitive) && (forImport || !c.importOnly));
   }
 
   /** 表の列の決まり（文字数の上限・空にできるか・数の型）。 */
@@ -511,7 +514,7 @@ export class MastersCsvService {
     perms: ImportPermissions,
   ): Promise<ImportResult> {
     const def = this.def(slug);
-    const cols = this.columnsFor(def, showSensitive);
+    const cols = this.columnsFor(def, showSensitive, true);
     const dbCols = await this.dbColumns(def.table);
 
     const bytes = Buffer.from(contentBase64, 'base64');

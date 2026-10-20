@@ -648,11 +648,21 @@ export class BillingService {
       .selectFrom('invoices as i')
       .innerJoin('partners as p', 'p.id', 'i.partner_id')
       .selectAll('i')
-      .select(['p.partner_code as partner_code', 'p.name1 as partner_name', 'p.invoice_registration_no as partner_invoice_no'])
+      .select([
+        'p.partner_code as partner_code',
+        'p.name1 as partner_name',
+        'p.invoice_registration_no as partner_invoice_no',
+        'p.is_overseas as partner_is_overseas',
+        'p.overseas_tax_treatment as partner_overseas_tax_treatment',
+      ])
       .where('i.id', '=', id)
       .executeTakeFirst();
 
     if (!invoice) throw new NotFoundException(`請求が見つかりません（ID: ${id}）`);
+    // 消費税免税区分のある取引先は、税率別の内訳を「免税（税抜扱い）」／「課税対象外」と書く（請求書 PDF と同じ表記。
+    // 0% と出すと国内の 0% と見分けがつかない。2026-10-19 受入 X3）。区分が空ならシステム設定
+    const { partner_is_overseas, partner_overseas_tax_treatment, ...head } = invoice;
+    const overseasTaxLabel = partner_is_overseas ? await this.settings.overseasTaxLabel(partner_overseas_tax_treatment) : null;
 
     const [lines, taxes] = await Promise.all([
       this.db
@@ -669,7 +679,7 @@ export class BillingService {
         .execute(),
     ]);
 
-    return { ...invoice, lines, tax_summaries: taxes };
+    return { ...head, overseas_tax_label: overseasTaxLabel, lines, tax_summaries: taxes };
   }
 
   /** 発行。請求書に発行日は印刷しないが、いつ出したかは残す。 */

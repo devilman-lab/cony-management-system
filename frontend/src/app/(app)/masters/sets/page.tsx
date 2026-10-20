@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -52,13 +52,41 @@ const skuLabel = (c: { sku_code: string | null; product_name: string | null; col
 const Wrap = ({ children }: { children: ReactNode }) => <span className="whitespace-normal break-words">{children}</span>;
 /**
  * 選んだ SKU の全文（SKU　商品名 カラー サイズ）を欄の下に折り返して出す（No.23・M-16）。
- * 選択欄は1行で、長い名前だと末尾のサイズが「…」で隠れていた。短い名前は欄の中で読めるので出さない。
+ * 選択欄は1行で、長い名前だと末尾のサイズが「…」で隠れていた。
+ * 出すのは欄の中で実際に切れているときだけ。以前は文字数（30字超）で決めていて、広い欄で全部読めていても
+ * 同じ名前が欄の下にもう一度出ていた（2026-10-19 受入 X2）。
  */
-const LONG_LABEL = 30;
-const FullLabel = ({ o }: { o: Option | null }) =>
-  o && o.label.length > LONG_LABEL ? (
-    <div className="mt-0.5 text-[11.5px] leading-[1.4] text-[var(--color-ink-2)] whitespace-normal break-all">{o.label}</div>
-  ) : null;
+function SkuPick({ value, onChange, fetchOptions, placeholder, disabled }: {
+  value: Option | null;
+  onChange: (o: Option | null) => void;
+  fetchOptions: (q: string) => Promise<Option[]>;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    // 選んだあとの欄（ボタン）の名前の部分が、欄の幅より長いか
+    const check = () => {
+      const t = el.querySelector<HTMLElement>('button .truncate');
+      setCut(!!t && t.scrollWidth > t.clientWidth + 1);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [value]);
+  return (
+    <div ref={box} className="w-full">
+      <SearchSelect value={value} onChange={onChange} fetchOptions={fetchOptions} placeholder={placeholder} width="100%" disabled={disabled} />
+      {value && cut ? (
+        <div className="mt-0.5 text-[11.5px] leading-[1.4] text-[var(--color-ink-2)] whitespace-normal break-all">{value.label}</div>
+      ) : null}
+    </div>
+  );
+}
 
 /** セット登録（M-10）。セット SKU と、その構成品（内訳）。出荷時は構成品の在庫から引く。 */
 export default function SetsPage() {
@@ -199,18 +227,23 @@ export default function SetsPage() {
             { key: 'size_name', label: 'サイズ', width: 80, render: (r) => <Wrap>{r.size_name ?? ''}</Wrap> },
             { key: 'component_count', label: '構成品', r: true, width: 70, render: (r) => `${r.component_count} 点` },
             { key: 'is_active', label: '', width: 50, render: (r) => (r.is_active ? '' : <Badge>無効</Badge>) },
-            {
-              key: '_act',
-              label: '',
-              width: 190,
-              render: (r) => (
-                <span className="flex gap-1 justify-end">
-                  {can('M-10', 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
-                  {can('M-10', 'create') && <Button size="sm" onClick={() => openCopy(r)}>コピー</Button>}
-                  {can('M-10', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
-                </span>
-              ),
-            },
+            // ボタンが1つも無い人（閲覧者）には操作の列を出さない（MasterPage と同じ。2026-10-19 受入 X2）
+            ...(can('M-10', 'update') || can('M-10', 'create') || can('M-10', 'delete')
+              ? [
+                  {
+                    key: '_act',
+                    label: '',
+                    width: 190,
+                    render: (r: SetRow) => (
+                      <span className="flex gap-1 justify-end">
+                        {can('M-10', 'update') && <Button size="sm" onClick={() => openEdit(r)}>編集</Button>}
+                        {can('M-10', 'create') && <Button size="sm" onClick={() => openCopy(r)}>コピー</Button>}
+                        {can('M-10', 'delete') && <Button size="sm" variant="danger" onClick={() => remove(r)}>削除</Button>}
+                      </span>
+                    ),
+                  },
+                ]
+              : []),
           ]}
           rows={list.items}
           rowKey={(r) => r.id}
@@ -236,10 +269,7 @@ export default function SetsPage() {
           required
           hint={editingId ? 'セットの商品コードは変えられません。構成品と数量を直して「更新する」' : '商品マスタで「セット商品」にした商品の商品コード（SKU）から選びます。セット登録済みのものは出ません（直すときは一覧の「編集」から）'}
         >
-          <div className="w-full">
-            <SearchSelect value={setSku} onChange={setSetSku} fetchOptions={fetchSetSkus} placeholder="セット商品の商品コードを検索" width="100%" disabled={!!editingId} />
-            <FullLabel o={setSku} />
-          </div>
+          <SkuPick value={setSku} onChange={setSetSku} fetchOptions={fetchSetSkus} placeholder="セット商品の商品コードを検索" disabled={!!editingId} />
         </L>
         <div className="mt-3"><Section title="構成品" /></div>
         <table className="tbl tbl-form mt-2">
@@ -248,8 +278,7 @@ export default function SetsPage() {
             {lines.map((l, i) => (
               <tr key={i}>
                 <td>
-                  <SearchSelect value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchComponentSkus} placeholder="商品コード・JAN・商品名" width="100%" />
-                  <FullLabel o={l.sku} />
+                  <SkuPick value={l.sku} onChange={(o) => setLines(lines.map((x, j) => (j === i ? { ...x, sku: o } : x)))} fetchOptions={fetchComponentSkus} placeholder="商品コード・JAN・商品名" />
                 </td>
                 <td><Input right value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} /></td>
                 <td className="c"><Button size="sm" variant="quiet" onClick={() => setLines(lines.filter((_, j) => j !== i))}>×</Button></td>

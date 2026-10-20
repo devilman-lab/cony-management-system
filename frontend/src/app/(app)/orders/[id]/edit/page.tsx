@@ -42,6 +42,8 @@ interface OrderDetail {
     line_type: OrderDraft['lines'][number]['line_type'] | '内訳商品';
     sku_id: number | null;
     sku_code: string | null;
+    /** SKU の品名（SKU の商品名か商品名＋カラー・サイズ）。商品の欄はこの名前で出す（受注入力と同じ） */
+    sku_item_name?: string | null;
     // 明細が使った得意先別商品の行（同じ SKU に複数あるときに選んだ行。2026-10-16 マスター編_3 M3-26）
     partner_product_id: number | null;
     partner_product_code: string | null;
@@ -93,8 +95,12 @@ export default function EditOrderPage() {
           lines: o.lines.map((l) => ({
             ...emptyLine(),
             line_type: l.line_type === '内訳商品' ? '商品' : l.line_type,
-            sku: l.sku_id ? { id: l.sku_id, label: `${l.sku_code ?? ''}　${l.item_name}`, raw: { sku_id: l.sku_id } } : null,
+            // 商品の欄は受注入力と同じ「商品コード　SKU の品名」。明細の品名（販売名）で出すと、得意先別商品の行を
+            // 選び直しても古い販売名のまま残っていた（2026-10-19 受入 X2）。販売名は品名の欄に出る
+            sku: l.sku_id ? { id: l.sku_id, label: `${l.sku_code ?? ''}　${l.sku_item_name || l.item_name}`, raw: { sku_id: l.sku_id } } : null,
             item_name: l.item_name,
+            // 販売名の無い得意先別商品の行に選び直したときの品名（受注入力で SKU を選んだときと同じ）
+            base_name: l.sku_item_name ?? undefined,
             qty: l.qty,
             unit_price: l.unit_price,
             tax_rate: Number(l.tax_rate).toFixed(2),

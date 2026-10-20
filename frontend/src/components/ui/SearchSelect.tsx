@@ -118,7 +118,7 @@ export function optionEditText(o: Option): string {
  *
  * 選んである欄を押すと、今のコード（optionEditText）が入った検索欄になり、続けて文字を直して
  * 候補から選び直せる（2026-10-16 在庫編_2 Z3-06。以前は押すと全部消えて、一から打ち直しだった）。
- * 選び直さずに欄を離れたら元の選択のまま。外すのは「×」。
+ * 選び直さずに欄を離れたら元の選択のまま（コードを最後まで打って離れたときだけ、そのコードの候補を選ぶ）。外すのは「×」。
  */
 export function SearchSelect({
   value,
@@ -196,24 +196,22 @@ export function SearchSelect({
   };
 
   /**
-   * 候補を選ばずに欄を離れたとき。打った文字に合う候補が1つに絞れていればそれを選ぶ
-   * （コードをそのまま打って Tab で抜ける使い方）。絞れなければ文字を消して、
-   * 「まだ選んでいない」ことが見た目で分かるようにする。
-   * 選んである値を直していたときは、入れたコードのまま離れたら何も変えない（元の選択のまま）。
-   * 別のコードに直して1つに絞れていれば、それを選んだことにする。同じ値なら呼び手に知らせない
-   * （受注入力などで、選び直しの扱いで単価・数量を入れ直さないため）。
+   * 候補を選ばずに欄を離れたとき。打った文字が候補のコード（editText。SKU コード・取引先コードなど、
+   * 選んである欄を押したときに入れるコード）と完全に一致する候補が1つあれば、それを選ぶ
+   * （コードをそのまま打って Tab で抜ける使い方）。英字の大文字・小文字は区別しない。
+   * それ以外は何も選ばない（選んである値を直していたときは元の選択のまま）。文字は消して、
+   * 「選んでいない」ことが見た目で分かるようにする。
+   * 以前は、コードの一部でも候補が1件に絞れていれば、離れたときにその商品に入れ替わっていた
+   * （2026-10-19 受入 X4-1。先頭を省いたコードを打って外を押すと、別の商品に替わった）。
+   * 同じ値なら呼び手に知らせない（受注入力などで、選び直しの扱いで単価・数量を入れ直さないため）。
    */
   const commitTyped = () => {
     if (!open && !q) return;
     const t = q.trim().toLowerCase();
     const untouched = startText.current !== null && t === startText.current.trim().toLowerCase();
     if (t && !untouched) {
-      const hit =
-        options.length === 1
-          ? options[0]
-          : options.find((o) => o.label.toLowerCase().startsWith(t) || (o.sub ?? '').toLowerCase() === t) ?? null;
-      const others = hit ? options.filter((o) => o !== hit && o.label.toLowerCase().startsWith(t)) : [];
-      if (hit && others.length === 0 && hit.id !== value?.id) onChange(hit);
+      const hits = options.filter((o) => editText(o).trim().toLowerCase() === t);
+      if (hits.length === 1 && hits[0].id !== value?.id) onChange(hits[0]);
     }
     setOpen(false);
     setQ('');

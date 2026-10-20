@@ -71,6 +71,24 @@ export const UNIQUE_MESSAGES: Record<string, string> = {
   delivery_destinations_delivery_code_key:
     'この納品先コードはすでに使われています（納品先コードは全社で1つに限ります）',
   set_headers_sku_id_key: 'この SKU のセットはすでに登録されています',
+  // 分類・区分・設定の各タブ（2026-10-19 受入 X1-2）。ほかのマスタと同じく「このコードは…」とコードの重なりと分かる言葉にする
+  // （以前は「すでに同じ内容が登録されています」で、何が重なったのか分からなかった）
+  brands_code_key: 'このブランドコードはすでに登録されています',
+  categories_code_key: 'このカテゴリーコードはすでに登録されています',
+  product_classes_code_key: 'この商品分類コードはすでに登録されています',
+  colors_code_key: 'このカラーコードはすでに登録されています',
+  sizes_code_key: 'このサイズコードはすでに登録されています',
+  sales_staff_code_key: 'この販売担当コードはすでに登録されています',
+  media_code_key: 'この媒体コードはすでに登録されています',
+  sales_categories_code_key: 'この販売カテゴリーコードはすでに登録されています',
+  partner_categories_code_key: 'この取引先カテゴリーコードはすでに登録されています',
+  delivery_rules_code_key: 'この納品ルールコードはすでに登録されています',
+  work_instructions_code_key: 'この作業指示コードはすでに登録されています',
+  // 区分値・通貨・経費科目のタブ。コードはカテゴリー（区分値の種類）ごとに1つ
+  codes_code_category_id_code_key: 'このコードはすでに登録されています（同じ種類の区分値の中でコードは1つに限ります）',
+  code_categories_code_key: 'この区分値カテゴリーのコードはすでに登録されています',
+  roles_code_key: 'この役割コードはすでに登録されています',
+  import_templates_template_code_key: 'このテンプレートコードはすでに登録されています',
 };
 
 /**

@@ -977,7 +977,8 @@ export class ReservationsService {
       const head = [
         esc(`${slash(g.period_from)}〜${slash(g.period_to)}`),
         esc(g.media_name ?? g.partner_media_name),
-        esc(g.partner_name),
+        // 取引先が空の確保（媒体だけ・どちらも空）は画面と同じ「（指定なし）」（2026-10-19 受入 X4）
+        esc(g.partner_name ?? '（指定なし）'),
         esc(g.sales_category_name ?? '（指定なし）'),
         esc(g.item_label),
         esc(g.note),

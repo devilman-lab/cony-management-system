@@ -381,11 +381,13 @@ export default function ProductsPage() {
  * ブランド・商品分類・税率と操作のボタンは rowSpan で SKU の行をまたぐ。列の並びはカテゴリー → ブランド。
  * 商品名の列は詰め、SKU の商品名（カラー・サイズ付き）に残りの幅を使う。
  */
-function ProductTable({ rows, loading, actions, actionWidth, isActive, showCost }: {
+function ProductTable({ rows, loading, actions, actionWidth, canAct, isActive, showCost }: {
   rows: ProductRow[];
   loading: boolean;
   actions: (r: ProductRow) => ReactNode;
   actionWidth?: number | string;
+  /** 操作のボタンが1つでもある人か。無い人（閲覧者）には操作の列を出さない（2026-10-19 受入 X2） */
+  canAct: boolean;
   isActive: (r: ProductRow) => boolean;
   showCost: boolean;
 }) {
@@ -403,10 +405,12 @@ function ProductTable({ rows, loading, actions, actionWidth, isActive, showCost 
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
-  const cols = 9 + (showCost ? 1 : 0) + (narrow ? 0 : 1);
+  // 操作の列を右端に出すか（広い画面で、ボタンのある人だけ）
+  const actCol = canAct && !narrow;
+  const cols = 9 + (showCost ? 1 : 0) + (actCol ? 1 : 0);
   // 幅を決めた列の合計（原価込み 848px）＋操作の列。残りは SKU の商品名（カラー・サイズ）が使い、最低 160px。
   // 1280 の枠（約 1025px）・1440 の枠（約 1185px）のどちらにも収まる
-  const fixed = 776 + (showCost ? 72 : 0) + (narrow ? 0 : Number(actionWidth ?? 122));
+  const fixed = 776 + (showCost ? 72 : 0) + (actCol ? Number(actionWidth ?? 122) : 0);
   return (
     <div className="tbl-wrap">
       <table className="tbl tbl-fit" style={{ minWidth: fixed + 160 }}>
@@ -422,7 +426,7 @@ function ProductTable({ rows, loading, actions, actionWidth, isActive, showCost 
             <th>商品名（カラー・サイズ）</th>
             <th className="nw" style={{ width: 112 }}>JAN</th>
             {showCost && <th className="r" style={{ width: 72 }}>原価</th>}
-            {!narrow && <th style={{ width: actionWidth ?? 122 }}></th>}
+            {actCol && <th style={{ width: actionWidth ?? 122 }}></th>}
           </tr>
         </thead>
         <tbody>
@@ -440,7 +444,7 @@ function ProductTable({ rows, loading, actions, actionWidth, isActive, showCost 
                       <>
                         <td rowSpan={span} style={firstRow} className="nw">
                           <Num className="font-semibold">{r.product_code}</Num>
-                          {narrow && <div className="mt-1.5 [&_.tbl-acts]:justify-start">{actions(r)}</div>}
+                          {narrow && canAct && <div className="mt-1.5 [&_.tbl-acts]:justify-start">{actions(r)}</div>}
                         </td>
                         <td rowSpan={span} style={firstRow}>
                           {r.product_name}
@@ -461,11 +465,15 @@ function ProductTable({ rows, loading, actions, actionWidth, isActive, showCost 
                     <td style={i === 0 ? firstRow : top} className="nw num">{k?.jan ?? ''}</td>
                     {showCost && (
                       <td style={i === 0 ? firstRow : top} className="r num">
-                        {/* SKU の原価が空なら、計算で使われる商品の原価を薄い字で */}
-                        {k && (k.cost_price != null ? money(k.cost_price) : k.product_cost_price != null ? <span className={muted} title="SKU の原価が空のため、商品の原価を使います">{money(k.product_cost_price)}</span> : '')}
+                        {/*
+                          SKU の原価が空なら、計算で使われる商品の原価を薄い字で。商品の原価も無い（0 のまま）ときは
+                          「未設定」を目立つ色で出す（入れ忘れに気づけるように。計算は今までどおり 0。2026-10-19 受入 X2）。
+                          セット商品は構成品の原価から計算する（販売実績）ので、空でも「未設定」とは出さない
+                        */}
+                        {k && (k.cost_price != null ? money(k.cost_price) : r.is_set ? <span className={muted} title="セット商品の原価は構成品の原価から計算します">（構成品）</span> : k.product_cost_price != null && Number(k.product_cost_price) !== 0 ? <span className={muted} title="SKU の原価が空のため、商品の原価を使います">{money(k.product_cost_price)}</span> : <span className="text-[var(--color-warn)] font-semibold" title="SKU の原価が入っていません（計算では 0 円として扱います）">未設定</span>)}
                       </td>
                     )}
-                    {i === 0 && !narrow && (
+                    {i === 0 && actCol && (
                       <td rowSpan={span} style={firstRow}>
                         {actions(r)}
                       </td>
@@ -620,7 +628,7 @@ function SkuEditor({ skus, colors, sizes, onChange, onSave, onError, error, show
                       right
                       value={k.cost_price}
                       onChange={(e) => upd(k._key, { cost_price: e.target.value })}
-                      placeholder={costHint}
+                      placeholder={costHint || '未設定'}
                       title={!k.cost_price && costHint ? `空欄のときは商品の原価 ${costHint} を使います` : undefined}
                     />
                   </td>

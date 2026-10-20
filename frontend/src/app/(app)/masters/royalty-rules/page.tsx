@@ -233,6 +233,9 @@ export default function RoyaltyRulesPage() {
         listPath="/masters/royalty-rules"
         writePath="/masters/royalty-rules"
         modalWidth={760}
+        // 規定にはコードの欄が無いので、コピーの説明は規定に合わせる（2026-10-19 受入 X1-3）。
+        // 同じ範囲・同じ適用開始日の規定は登録できないため、料率を変えるときは適用開始日も直してもらう
+        copyNote="選んだ規定の内容を写しました。適用開始日・料率・対象の商品などを直して「登録する」を押すと、新しい規定として登録します（元の規定はそのままです）。同じ範囲の規定は、適用開始日を変えないと登録できません。"
         noSearch
         columns={[
           { key: 'payee_name', label: '支払先', width: 120, render: (r) => <b>{r.payee_name}</b> },
